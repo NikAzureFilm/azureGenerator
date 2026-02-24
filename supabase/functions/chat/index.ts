@@ -784,7 +784,7 @@ Deno.serve(async (req) => {
               .select()
               .single()
               .overrideTypes<{ content: Content; role: 'assistant' }>();
-            finalMessageData = data as Message | null;
+            finalMessageData = data;
           } catch (dbError) {
             console.error('Failed to update message in DB:', dbError);
           }
@@ -793,7 +793,7 @@ Deno.serve(async (req) => {
           // if the DB update failed, so the client never gets an empty stream
           streamMessage(
             controller,
-            finalMessageData ?? ({ ...newMessageData, content } as Message),
+            finalMessageData ?? { ...newMessageData, content },
           );
           controller.close();
         }
