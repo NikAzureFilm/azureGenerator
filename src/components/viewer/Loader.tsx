@@ -9,12 +9,14 @@ type Props = {
 
 const INITIAL_MESSAGE_MS = 2000;
 const VERB_ROTATE_MS = 2800;
+// Must match `duration-200` on the <p> element in the JSX below.
 const FADE_MS = 200;
 
 const Loader = ({ message }: Props) => {
   const dot2 = useRef<HTMLSpanElement>(null);
   const dot3 = useRef<HTMLSpanElement>(null);
   const loadingMessage = useRef<HTMLParagraphElement>(null);
+  const fadeTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const [changingMessage, setChangingMessage] = useState(message);
 
@@ -25,10 +27,11 @@ const Loader = ({ message }: Props) => {
         return;
       }
       loadingMessage.current.classList.add('opacity-0');
-      setTimeout(() => {
+      const fadeId = setTimeout(() => {
         loadingMessage.current?.classList.remove('opacity-0');
         setChangingMessage(next);
       }, FADE_MS);
+      fadeTimeouts.current.push(fadeId);
     };
 
     // Kick off the whimsical verb rotation after the initial message.
@@ -75,6 +78,8 @@ const Loader = ({ message }: Props) => {
       if (rotateInterval) clearInterval(rotateInterval);
       clearInterval(titleInterval);
       clearInterval(interval);
+      fadeTimeouts.current.forEach(clearTimeout);
+      fadeTimeouts.current = [];
       document.title = 'Adam';
     };
   }, []);

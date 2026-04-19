@@ -44,7 +44,7 @@ export const SPINNER_VERBS = [
   'Noodling',
   'Orchestrating',
   'Percolating',
-  'Philosophising',
+  'Philosophizing',
   'Pondering',
   'Pontificating',
   'Prestidigitating',
