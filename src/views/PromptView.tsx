@@ -272,7 +272,7 @@ export function PromptView() {
                   </div>
                 )}
               </div>
-              {user && !limitReached && !lowPrompts && (
+              {!isLoading && user && !limitReached && !lowPrompts && (
                 <div className="flex justify-center">
                   <a
                     href="https://cad.onshape.com/appstore/apps/Design%20&%20Documentation/690a8dc864e816c112aa66a0"
