@@ -991,7 +991,8 @@ Deno.serve(async (req) => {
                 codeBuffer = codeLines.pop() || '';
 
                 for (const line of codeLines) {
-                  if (!line || line.startsWith(':')) continue;
+                  // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
+                  // and anything that isn't a `data:` event.
                   if (!line.startsWith('data: ')) continue;
                   const data = line.slice(6);
                   if (data === '[DONE]') continue;

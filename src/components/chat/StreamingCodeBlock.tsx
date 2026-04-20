@@ -47,10 +47,6 @@ export function StreamingCodeBlock({
     el.scrollTop = el.scrollHeight;
   }, [visibleCode]);
 
-  useEffect(() => {
-    if (!isStreaming) stickToBottomRef.current = true;
-  }, [isStreaming]);
-
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -63,13 +59,13 @@ export function StreamingCodeBlock({
 
   return (
     <div className="w-full overflow-hidden rounded-lg border border-white/[0.06] bg-adam-neutral-950/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-      <div className="flex h-7 items-center justify-between border-b border-white/[0.06] px-3">
-        <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-adam-neutral-400">
+      <div className="flex h-7 items-center justify-between gap-3 border-b border-white/[0.06] px-3">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-adam-neutral-400">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-adam-blue/80" />
           <span className="truncate">{filename}</span>
         </div>
         {showCaret && (
-          <div className="flex items-center gap-1.5 text-[10.5px] text-adam-neutral-500">
+          <div className="flex shrink-0 items-center gap-1.5 text-[10.5px] text-adam-neutral-500">
             <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-adam-blue/70" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-adam-blue" />
