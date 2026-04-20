@@ -172,12 +172,12 @@ export function ParameterSection({
                 >
                   <span className="flex items-center gap-2">
                     Dimensions
-                    <span className="text-[10px] text-adam-neutral-400">
+                    <span className="text-[10px] text-adam-neutral-400 transition-colors group-hover:text-adam-text-primary">
                       {mainParameters.length}
                     </span>
                   </span>
                   <ChevronDown
-                    className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                    className={`h-3.5 w-3.5 text-adam-neutral-400 transition-all duration-200 group-hover:text-adam-text-primary ${
                       dimensionsOpen ? 'rotate-180' : ''
                     }`}
                   />
@@ -207,12 +207,12 @@ export function ParameterSection({
                 >
                   <span className="flex items-center gap-2">
                     Colors
-                    <span className="text-[10px] text-adam-neutral-400">
+                    <span className="text-[10px] text-adam-neutral-400 transition-colors group-hover:text-adam-text-primary">
                       {colorParameters.length}
                     </span>
                   </span>
                   <ChevronDown
-                    className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                    className={`h-3.5 w-3.5 text-adam-neutral-400 transition-all duration-200 group-hover:text-adam-text-primary ${
                       colorsOpen ? 'rotate-180' : ''
                     }`}
                   />
