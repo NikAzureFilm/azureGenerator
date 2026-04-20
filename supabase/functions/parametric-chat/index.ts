@@ -366,17 +366,15 @@ cup_radius = 40;
 handle_radius = 30;
 handle_thickness = 10;
 wall_thickness = 3;
-body_color = "#00A6FF";
-handle_color = "Coral";
+mug_color = "#4682B4";
 
+color(mug_color)
 difference() {
     union() {
         // Main cup body
-        color(body_color)
         cylinder(h=cup_height, r=cup_radius);
 
         // Handle
-        color(handle_color)
         translate([cup_radius-5, 0, cup_height/2])
         rotate([90, 0, 0])
         difference() {
