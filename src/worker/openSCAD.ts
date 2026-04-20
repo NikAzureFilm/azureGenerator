@@ -167,12 +167,13 @@ class OpenSCADWrapper {
     // render OpenSCAD color() calls. --backend=manifold is required to get
     // the color-aware mesh; --enable=manifold was the old (now-default)
     // experimental flag and does not alone enable color propagation.
+    // --export-format is global in OpenSCAD and overrides the per-output
+    // extension inference, so we cannot force binstl here without
+    // corrupting the /out.off companion output. Preview STL falls back to
+    // ASCII (larger, slower to parse) — the on-demand download path in
+    // exportFile() still forces binstl because it only emits one file.
     const exportParams = [
       '--backend=manifold',
-      // Keep STL output binary — OpenSCAD defaults STL to ASCII otherwise,
-      // producing files 4-6× larger. The flag is applied via extension
-      // inference, so the /out.off companion output is unaffected.
-      '--export-format=binstl',
       '--enable=lazy-union',
       '--enable=roof',
     ];
