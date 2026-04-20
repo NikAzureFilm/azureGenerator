@@ -172,6 +172,13 @@ class OpenSCADWrapper {
     // corrupting the /out.off companion output. Preview STL falls back to
     // ASCII (larger, slower to parse) — the on-demand download path in
     // exportFile() still forces binstl because it only emits one file.
+    //
+    // Multi-output via two -o flags (/out.stl + /out.off) is supported by
+    // the 2025.03.25 playground WASM build vendored under
+    // src/vendor/openscad-wasm: the help text notes "May be used multiple
+    // times for different exports" and we exercise both outputs on every
+    // parametric compile. If an older wasm is ever vendored, this will
+    // need re-verification.
     const exportParams = [
       '--backend=manifold',
       '--enable=lazy-union',

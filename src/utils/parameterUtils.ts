@@ -157,22 +157,35 @@ export function isMeasurementParameter(param: Parameter): boolean {
  * Resolve any CSS color value (named or hex) to a #RRGGBB hex string, or
  * return '' when the input isn't a color. Used both to detect color-typed
  * string parameters and to normalize the value for the native/hex picker.
+ *
+ * Called once per ParameterInput render, so we memoize by input value and
+ * reuse a module-level canvas rather than allocating one each time.
  */
+const cssHexCache = new Map<string, string>();
+let cssHexCtx: CanvasRenderingContext2D | null = null;
+
 export function cssToHex(value: string): string {
   if (typeof value !== 'string' || !value) return '';
-  const canvas =
-    typeof document !== 'undefined' ? document.createElement('canvas') : null;
-  const ctx = canvas?.getContext('2d');
-  if (!ctx) return '';
-  const sentinel = '#010101';
-  ctx.fillStyle = sentinel;
-  ctx.fillStyle = value;
-  if (ctx.fillStyle === sentinel && value.toLowerCase() !== sentinel) {
-    return '';
+  const cached = cssHexCache.get(value);
+  if (cached !== undefined) return cached;
+
+  if (typeof document === 'undefined') return '';
+  if (!cssHexCtx) {
+    cssHexCtx = document.createElement('canvas').getContext('2d');
   }
-  return /^#[0-9a-f]{6}$/i.test(ctx.fillStyle)
-    ? ctx.fillStyle.toUpperCase()
-    : '';
+  if (!cssHexCtx) return '';
+
+  const sentinel = '#010101';
+  cssHexCtx.fillStyle = sentinel;
+  cssHexCtx.fillStyle = value;
+  let result = '';
+  if (cssHexCtx.fillStyle !== sentinel || value.toLowerCase() === sentinel) {
+    if (/^#[0-9a-f]{6}$/i.test(cssHexCtx.fillStyle)) {
+      result = cssHexCtx.fillStyle.toUpperCase();
+    }
+  }
+  cssHexCache.set(value, result);
+  return result;
 }
 
 /**

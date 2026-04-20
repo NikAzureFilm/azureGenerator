@@ -115,6 +115,19 @@ export function OpenSCADPreview({
 
   useEffect(() => {
     onOutputChange?.(output);
+
+    // Mirror the colored-group pattern: every path that clears geometry
+    // state must first release the previous vertex buffers, otherwise
+    // recompiles + no-output transitions leak VRAM the same way the group
+    // path used to.
+    const clearGeometry = () => {
+      if (mountedGeometryRef.current) {
+        mountedGeometryRef.current.dispose();
+        mountedGeometryRef.current = null;
+      }
+      setGeometry(null);
+    };
+
     if (output && output instanceof Blob) {
       let cancelled = false;
       output
@@ -125,23 +138,19 @@ export function OpenSCADPreview({
           const geom = loader.parse(buffer);
           geom.center();
           geom.computeVertexNormals();
-          // Release the previous geometry's vertex buffers before swapping
-          // it in. Without this, recompiles accumulate orphaned VRAM —
-          // especially when the OFF path wins the render gate and the STL
-          // geometry never even gets drawn.
           if (mountedGeometryRef.current) mountedGeometryRef.current.dispose();
           mountedGeometryRef.current = geom;
           setGeometry(geom);
         })
         .catch((err) => {
           console.error('[OpenSCAD] Failed to parse STL preview:', err);
-          if (!cancelled) setGeometry(null);
+          if (!cancelled) clearGeometry();
         });
       return () => {
         cancelled = true;
       };
     } else {
-      setGeometry(null);
+      clearGeometry();
     }
   }, [output, onOutputChange]);
 
