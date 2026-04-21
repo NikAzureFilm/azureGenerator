@@ -153,8 +153,10 @@ export const generateImageWithGptImage2 = async (
     });
   }
 
+  // gpt-4o is the lightweight orchestrator for the Responses API
+  // image_generation tool; gpt-image-2 is the actual image model invoked.
   const response = await openAI.responses.create({
-    model: 'gpt-5',
+    model: 'gpt-4o',
     input: [{ role: 'user', content }],
     tools: [{ type: 'image_generation', model: 'gpt-image-2' }],
   });
