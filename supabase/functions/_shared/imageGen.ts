@@ -177,8 +177,10 @@ export const generateImageWithGptImage2 = async (
         result: string | null;
         status: 'completed';
       }
-  > = [{ role: 'user', content }];
+  > = [];
 
+  // Prior assistant-side image_generation_call must precede the new user
+  // message so the model sees the image it produced before the edit request.
   if (priorImageCallId) {
     input.push({
       type: 'image_generation_call',
@@ -187,6 +189,8 @@ export const generateImageWithGptImage2 = async (
       status: 'completed',
     });
   }
+
+  input.push({ role: 'user', content });
 
   // gpt-5.4 is the canonical orchestrator for the Responses API
   // image_generation tool per OpenAI's docs; gpt-image-2 is the actual
