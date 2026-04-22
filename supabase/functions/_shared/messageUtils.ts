@@ -276,29 +276,35 @@ export async function formatCreativeUserMessage(
     });
   }
 
-  // Add images if they exist
+  // Add images if they exist (inline base64 — works locally without ngrok
+  // and avoids an extra HTTPS roundtrip from Anthropic to our storage in prod)
   if (message.content.images?.length) {
     const imageFiles = message.content.images.map(
       (imageId) => `${userId}/${conversationId}/${imageId}`,
     );
 
-    const imageInputs = await getSignedUrls(
+    const base64Images = await getBase64Images(
       supabaseClient,
       'images',
       imageFiles,
     );
 
-    if (imageInputs.length > 0) {
+    if (base64Images.length > 0) {
       parts.push({
         type: 'text',
         text: `Here are the image(s) with the following ID(s) respectively: ${message.content.images.join(', ')}`,
       });
       parts.push(
-        ...imageInputs.map((image) => ({
+        ...base64Images.map((image) => ({
           type: 'image' as const,
           source: {
-            type: 'url' as const,
-            url: image,
+            type: 'base64' as const,
+            media_type: image.mediaType as
+              | 'image/jpeg'
+              | 'image/png'
+              | 'image/gif'
+              | 'image/webp',
+            data: image.data.split(',')[1],
           },
         })),
       );
@@ -310,27 +316,31 @@ export async function formatCreativeUserMessage(
     }
   }
 
-  // Add mesh if it exists
+  // Add mesh preview if it exists (inline base64, same reasoning as above)
   if (message.content.mesh) {
-    // Try to add mesh preview if it exists
-    const previewSignedUrl = await getSignedUrl(
-      supabaseClient,
-      'images',
+    const base64Preview = await getBase64Images(supabaseClient, 'images', [
       `${userId}/${conversationId}/preview-${message.content.mesh.id}`,
-    );
+    ]);
 
-    if (previewSignedUrl) {
+    if (base64Preview.length > 0) {
       parts.push({
         type: 'text',
         text: `Here is a preview of the mesh with the ID ${message.content.mesh.id}`,
       });
-      parts.push({
-        type: 'image',
-        source: {
-          type: 'url' as const,
-          url: previewSignedUrl,
-        },
-      });
+      parts.push(
+        ...base64Preview.map((image) => ({
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: image.mediaType as
+              | 'image/jpeg'
+              | 'image/png'
+              | 'image/gif'
+              | 'image/webp',
+            data: image.data.split(',')[1],
+          },
+        })),
+      );
     } else {
       parts.push({
         type: 'text',
