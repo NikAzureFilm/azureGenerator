@@ -606,7 +606,7 @@ Deno.serve(async (req) => {
       ],
       tools,
       stream: true,
-      max_tokens: 4000,
+      max_tokens: 16000,
     };
 
     // Add reasoning/thinking parameter if requested and supported
@@ -934,7 +934,7 @@ Deno.serve(async (req) => {
                 { role: 'system', content: STRICT_CODE_PROMPT },
                 ...codeMessages,
               ],
-              max_tokens: 4000,
+              max_tokens: 16000,
               stream: true,
             };
 

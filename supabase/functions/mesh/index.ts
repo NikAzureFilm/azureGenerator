@@ -429,7 +429,7 @@ Deno.serve(async (req) => {
 
             // Stream the message generation using Claude
             const stream = await anthropic.messages.create({
-              model: 'claude-3-haiku-20240307',
+              model: 'claude-haiku-4-5-20251001',
               max_tokens: 100,
               system: upscaleSystemPrompt,
               messages: [

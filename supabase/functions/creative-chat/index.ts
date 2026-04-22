@@ -579,7 +579,7 @@ Deno.serve(async (req) => {
 
     const stream = await anthropic.messages.create(
       {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-4-6',
         system: [
           {
             type: 'text' as const,
@@ -587,7 +587,7 @@ Deno.serve(async (req) => {
             cache_control: { type: 'ephemeral' as const, ttl: '1h' },
           },
         ],
-        max_tokens: 4000,
+        max_tokens: 16000,
         messages: newMessages,
         tools: cachedTools,
         stream: true,
