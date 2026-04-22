@@ -253,15 +253,12 @@ async function generateMeshImage(
     }
   }
 
-  // One line per mesh generation — low noise, high signal. Grep for
-  // "provider=flux" or "quality=low" etc. in Supabase function logs to
-  // audit fallback + cost-tier distribution.
-  //
-  // `quality` is only logged when gpt-image-2 actually ran — it's a
-  // gpt-image-2 tool parameter, not a concept that applies to the
-  // Gemini/Flux fallbacks, so including it on fallback rows would be
-  // misleading.
-  console.log(
+  // Diagnostic log — gated on DEBUG_LOGS. In prod, ground truth comes from:
+  //   - images.image_generation_call_id (null = fallback ran, non-null = gpt-image-2)
+  //   - Sentry events tagged stage=gpt_image_2_fallback / nano_banana_pro_fallback
+  //     / flux_fallback with full meshModel + subStage context
+  // This line stays opt-in for live debugging without polluting prod logs.
+  debugLog(
     `[mesh] image_gen provider=${provider} meshModel=${sentryStage.meshModel}` +
       (sentryStage.subStage ? ` subStage=${sentryStage.subStage}` : '') +
       (provider === 'gpt-image-2'
