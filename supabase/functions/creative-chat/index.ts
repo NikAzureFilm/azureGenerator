@@ -291,7 +291,7 @@ Examples:
 
       const suggestionResponse = await anthropic.messages.create(
         {
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5-20251001',
           max_tokens: 200,
           messages: [
             {
@@ -571,13 +571,25 @@ Deno.serve(async (req) => {
       apiKey: Deno.env.get('ANTHROPIC_API_KEY') ?? '',
     });
 
+    const cachedTools: Anthropic.Messages.ToolUnion[] = tools.map((t, i) =>
+      i === tools.length - 1
+        ? { ...t, cache_control: { type: 'ephemeral' as const, ttl: '1h' } }
+        : t,
+    );
+
     const stream = await anthropic.messages.create(
       {
         model: 'claude-sonnet-4-5-20250929',
-        system: systemPrompt,
-        max_tokens: 16000,
+        system: [
+          {
+            type: 'text' as const,
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' as const, ttl: '1h' },
+          },
+        ],
+        max_tokens: 4000,
         messages: newMessages,
-        tools: tools,
+        tools: cachedTools,
         stream: true,
       },
       {

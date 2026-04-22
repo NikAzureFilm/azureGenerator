@@ -193,7 +193,7 @@ async function generateTitleFromMessages(
         'X-Title': 'Adam CAD',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-3.5-haiku',
+        model: 'anthropic/claude-haiku-4.5',
         max_tokens: 30,
         messages: [
           { role: 'system', content: titleSystemPrompt },
@@ -606,7 +606,7 @@ Deno.serve(async (req) => {
       ],
       tools,
       stream: true,
-      max_tokens: 16000,
+      max_tokens: 4000,
     };
 
     // Add reasoning/thinking parameter if requested and supported
@@ -934,7 +934,7 @@ Deno.serve(async (req) => {
                 { role: 'system', content: STRICT_CODE_PROMPT },
                 ...codeMessages,
               ],
-              max_tokens: 16000,
+              max_tokens: 4000,
               stream: true,
             };
 
