@@ -1,8 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 import { Database } from '@shared/database';
 
-const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const rawSupabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Trim to guard against copy-pasted env vars with a trailing newline,
+// which otherwise leaks into Realtime URLs as %0A and breaks the WS handshake.
+const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+const rawSupabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 
 // Flag used by the UI to show a helpful message instead of crashing
 export const isSupabaseConfigMissing = !rawSupabaseUrl || !rawSupabaseKey;

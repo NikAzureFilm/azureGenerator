@@ -124,20 +124,23 @@ async function getRecentMeshPreview(
   }
 }
 
+// Trim to guard against copy-pasted env vars with trailing newlines,
+// which make fetch() throw "Invalid header value" on any API call and
+// surface to the user as "3D Object failed to generate".
 fal.config({
-  credentials: Deno.env.get('FAL_KEY') ?? '',
+  credentials: Deno.env.get('FAL_KEY')?.trim() ?? '',
 });
 
 // Initialize Google GenAI client
 const googleGenAI = new GoogleGenAI({
-  apiKey: Deno.env.get('GOOGLE_API_KEY') ?? '',
+  apiKey: Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '',
 });
 
 const supabaseClient = getServiceRoleSupabaseClient();
 
 // Initialize Anthropic client for fun message generation
 const anthropic = new Anthropic({
-  apiKey: Deno.env.get('ANTHROPIC_API_KEY') ?? '',
+  apiKey: Deno.env.get('ANTHROPIC_API_KEY')?.trim() ?? '',
 });
 
 // Helper function to stream message data to the client
