@@ -17,5 +17,12 @@
       "destination": "/cadam/index.html"
     }
   ],
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/cadam/",
+      "permanent": false
+    }
+  ],
   "trailingSlash": false
 }
