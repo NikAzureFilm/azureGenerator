@@ -33,6 +33,12 @@ const DEBUG_LOGS =
 const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
+const trace = (label: string, data?: unknown) => {
+  console.log(
+    `CADAM_TRACE ${label}`,
+    data !== undefined ? JSON.stringify(data).slice(0, 500) : '',
+  );
+};
 async function formatAssistantMessage(
   message: CoreMessage,
   supabaseClient: SupabaseClient,
@@ -424,6 +430,14 @@ Deno.serve(async (req) => {
     newMessageId: string;
   } = await req.json();
 
+  trace('request_received', {
+    conversationId,
+    messageId,
+    model,
+    newMessageId,
+    userId: userData.user?.id,
+  });
+
   // Set up cancellation via realtime
   const abortController = new AbortController();
   const { signal: abortSignal } = abortController;
@@ -577,6 +591,11 @@ Deno.serve(async (req) => {
         : t,
     );
 
+    trace('before_anthropic_stream', {
+      messagesCount: newMessages.length,
+      toolsCount: cachedTools.length,
+      hasKey: !!Deno.env.get('ANTHROPIC_API_KEY'),
+    });
     const stream = await anthropic.messages.create(
       {
         model: 'claude-sonnet-4-6',
@@ -790,6 +809,16 @@ Deno.serve(async (req) => {
             }
           }
         } catch (error) {
+          console.error(
+            'CADAM_TRACE inner_catch',
+            error instanceof Error
+              ? {
+                  message: error.message,
+                  stack: error.stack?.slice(0, 800),
+                  name: error.name,
+                }
+              : String(error),
+          );
           if (!abortSignal.aborted) {
             logError(error, {
               functionName: 'creative-chat',
@@ -859,6 +888,16 @@ Deno.serve(async (req) => {
       },
     });
   } catch (error) {
+    console.error(
+      'CADAM_TRACE outer_catch',
+      error instanceof Error
+        ? {
+            message: error.message,
+            stack: error.stack?.slice(0, 800),
+            name: error.name,
+          }
+        : String(error),
+    );
     // Handle abort errors specifically
     if (abortSignal.aborted) {
       // Persist partial content if it has been modified beyond the default empty state
