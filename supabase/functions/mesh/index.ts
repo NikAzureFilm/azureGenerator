@@ -1488,9 +1488,26 @@ Output:`;
       requestData: { meshId, model, meshTopology, polygonCount },
     });
 
+    // Persist the error into prompt JSONB for diagnostic visibility (no logs pipeline)
+    const errorMessage =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+    const errorStack =
+      error instanceof Error && error.stack ? error.stack.slice(0, 1500) : null;
+    const { data: currentRow } = await supabaseClient
+      .from('meshes')
+      .select('prompt')
+      .eq('id', meshId)
+      .single();
+    const mergedPrompt = {
+      ...((currentRow?.prompt as Record<string, unknown>) ?? {}),
+      error: errorMessage.slice(0, 1000),
+      ...(errorStack ? { errorStack } : {}),
+    };
     await supabaseClient
       .from('meshes')
-      .update({ status: 'failure' })
+      .update({ status: 'failure', prompt: mergedPrompt })
       .eq('id', meshId);
 
     const channel = supabaseClient.channel(`mesh-updates-${userId}`);
