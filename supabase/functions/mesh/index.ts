@@ -1683,7 +1683,7 @@ async function submitPreviewJob(
     });
     console.error(error);
     if (previewId) {
-      supabaseClient
+      await supabaseClient
         .from('previews')
         .update({ status: 'failure' })
         .eq('id', previewId);
