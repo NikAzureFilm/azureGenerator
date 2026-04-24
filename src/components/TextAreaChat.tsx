@@ -507,6 +507,8 @@ function TextAreaChat({
 
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
+  const [openMultiviewReferencePicker, setOpenMultiviewReferencePicker] =
+    useState<(() => void) | null>(null);
   const isMultiview = type === 'creative' && model === 'multiview';
 
   // Quads vs Polys toggle state (only for ultra model)
@@ -574,6 +576,13 @@ function TextAreaChat({
       }
     },
     [model, meshTopology, type],
+  );
+
+  const handleMultiviewReferencePickerReady = useCallback(
+    (openPicker: (() => void) | null) => {
+      setOpenMultiviewReferencePicker(() => openPicker);
+    },
+    [],
   );
 
   // Persist meshTopology changes to localStorage
@@ -1347,6 +1356,7 @@ function TextAreaChat({
             onSlotsChange={setMultiviewSlots}
             prompt={input}
             disabled={disabled || isLoading}
+            onReferencePickerReady={handleMultiviewReferencePickerReady}
           />
         </div>
       ) : null}
@@ -1632,38 +1642,50 @@ function TextAreaChat({
         </div>
         <div className="flex items-center justify-between border-t border-[#2a2a2a] p-3">
           <div className="flex items-center gap-1">
-            {!isMultiview && (
-              <div
-                className={cn(
-                  'transition-all duration-300 ease-out',
-                  'pointer-events-auto scale-100 opacity-100',
-                )}
-              >
-                <Button
-                  variant="outline"
-                  className="flex h-8 w-8 items-center gap-2 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = `${VALID_IMAGE_FORMATS.join(', ')}, ${
-                      type === 'creative'
-                        ? SUPPORTED_MESH_EXTENSIONS.join(', ')
-                        : '.stl'
-                    }`;
-                    input.onchange = (event) => {
-                      handleItemsChange(
-                        event as unknown as ChangeEvent<HTMLInputElement>,
-                      );
-                    };
-                    input.click();
-                  }}
-                  disabled={disabled}
-                >
-                  <ImagePlus className="h-5 w-5" />
-                </Button>
-              </div>
-            )}
+            <div
+              className={cn(
+                'transition-all duration-300 ease-out',
+                'pointer-events-auto scale-100 opacity-100',
+              )}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="flex h-8 w-8 items-center gap-2 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isMultiview) {
+                        openMultiviewReferencePicker?.();
+                        return;
+                      }
+
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = `${VALID_IMAGE_FORMATS.join(', ')}, ${
+                        type === 'creative'
+                          ? SUPPORTED_MESH_EXTENSIONS.join(', ')
+                          : '.stl'
+                      }`;
+                      input.onchange = (event) => {
+                        handleItemsChange(
+                          event as unknown as ChangeEvent<HTMLInputElement>,
+                        );
+                      };
+                      input.click();
+                    }}
+                    disabled={
+                      disabled || (isMultiview && !openMultiviewReferencePicker)
+                    }
+                  >
+                    <ImagePlus className="h-5 w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isMultiview ? 'Upload input reference' : 'Upload image'}
+                </TooltipContent>
+              </Tooltip>
+            </div>
 
             {/* Creative mode toggle button */}
             {onTypeChange && (

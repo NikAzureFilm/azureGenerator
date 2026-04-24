@@ -2,6 +2,7 @@ import {
   type Dispatch,
   type SetStateAction,
   useCallback,
+  useEffect,
   useRef,
   useState,
 } from 'react';
@@ -57,6 +58,7 @@ interface MultiviewComposerProps {
   onSlotsChange: Dispatch<SetStateAction<MultiviewSlotMap>>;
   prompt: string;
   disabled?: boolean;
+  onReferencePickerReady?: (openPicker: (() => void) | null) => void;
 }
 
 export function MultiviewComposer({
@@ -66,6 +68,7 @@ export function MultiviewComposer({
   onSlotsChange,
   prompt,
   disabled = false,
+  onReferencePickerReady,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
   const sourceReferenceInputRef = useRef<HTMLInputElement | null>(null);
@@ -87,6 +90,16 @@ export function MultiviewComposer({
     sourceReferenceId,
   });
   const isSourceReferenceBusy = !!sourceReference?.isBusy;
+
+  const openSourceReferencePicker = useCallback(() => {
+    if (disabled || isSourceReferenceBusy) return;
+    sourceReferenceInputRef.current?.click();
+  }, [disabled, isSourceReferenceBusy]);
+
+  useEffect(() => {
+    onReferencePickerReady?.(openSourceReferencePicker);
+    return () => onReferencePickerReady?.(null);
+  }, [onReferencePickerReady, openSourceReferencePicker]);
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
@@ -326,7 +339,7 @@ export function MultiviewComposer({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => sourceReferenceInputRef.current?.click()}
+                  onClick={openSourceReferencePicker}
                   disabled={disabled || isSourceReferenceBusy}
                   className="flex h-7 w-7 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-white disabled:opacity-50"
                 >
