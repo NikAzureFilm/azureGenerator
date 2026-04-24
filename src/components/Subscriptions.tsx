@@ -220,7 +220,7 @@ function SubscriptionCard({
         'relative flex w-full flex-col border bg-adam-neutral-950 transition-all duration-200',
         totalCards === 2 ? 'md:max-w-[340px]' : 'md:max-w-[300px]',
         tier.popular
-          ? 'border-adam-blue/50 bg-adam-blue/[0.04] shadow-[0_0_40px_-8px_rgba(0,166,255,0.2)]'
+          ? 'border-adam-blue/50 bg-adam-blue/[0.04] shadow-[0_0_40px_-8px_rgba(15,95,244,0.2)]'
           : 'border-adam-neutral-800',
       )}
     >

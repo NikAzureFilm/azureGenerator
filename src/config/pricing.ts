@@ -35,7 +35,7 @@ export interface PricingPlan {
 export const PRICING_PLANS: Record<PlanName, PricingPlan> = {
   Free: {
     name: 'Free',
-    description: 'Get started with Adam',
+    description: 'Get started with AzureFilm Generator',
     monthlyPrice: '0',
     yearlyPrice: '0',
     creditsAmount: 50,

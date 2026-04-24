@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import posthog from 'posthog-js';
 import { AuthContext } from './AuthContext';
+import { brandAsset } from '@/config/brand';
 
 const ensurePermission = async () => {
   if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -152,7 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (await ensurePermission()) {
                 const notification = new Notification('3D model is ready', {
                   body: 'Your generated 3D model has finished. Click to open.',
-                  icon: `${import.meta.env.BASE_URL}/Adam-Logo.png`,
+                  icon: brandAsset('azurefilm-favicon.png'),
                 });
                 notification.onclick = () => {
                   window.focus();

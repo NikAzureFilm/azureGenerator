@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { TrialDialog } from './auth/TrialDialog';
 import { useState, useEffect } from 'react';
 
-const TRIAL_DIALOG_SHOWN_KEY = 'adam_trial_dialog_shown';
+const TRIAL_DIALOG_SHOWN_KEY = 'azurefilm_generator_trial_dialog_shown';
 
 export function LimitReachedMessage() {
   const { subscription, hasTrialed } = useAuth();

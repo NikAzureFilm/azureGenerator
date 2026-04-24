@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import {
   Content,
   CoreMessage,
@@ -6,32 +6,32 @@ import {
   Model,
   ParametricArtifact,
   ToolCall,
-} from "@shared/types.ts";
+} from '@shared/types.ts';
 import {
   getAnonSupabaseClient,
   getServiceRoleSupabaseClient,
-} from "../_shared/supabaseClient.ts";
-import Tree from "@shared/Tree.ts";
-import parseParameters from "../_shared/parseParameter.ts";
-import { formatUserMessage } from "../_shared/messageUtils.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+} from '../_shared/supabaseClient.ts';
+import Tree from '@shared/Tree.ts';
+import parseParameters from '../_shared/parseParameter.ts';
+import { formatUserMessage } from '../_shared/messageUtils.ts';
+import { corsHeaders } from '../_shared/cors.ts';
 
 // OpenRouter API configuration
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
-const OPENROUTER_GPT_5_5_FALLBACK_MODEL = "openai/gpt-5.4";
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'openai/gpt-5.4';
 
 // Helper to stream updated assistant message rows
 function streamMessage(
   controller: ReadableStreamDefaultController,
   message: Message,
 ) {
-  controller.enqueue(new TextEncoder().encode(JSON.stringify(message) + "\n"));
+  controller.enqueue(new TextEncoder().encode(JSON.stringify(message) + '\n'));
 }
 
 // Helper to escape regex special characters
 function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Helper to detect and extract OpenSCAD code from text response
@@ -112,52 +112,52 @@ function markToolAsError(content: Content, toolId: string): Content {
   return {
     ...content,
     toolCalls: (content.toolCalls || []).map((c: ToolCall) =>
-      c.id === toolId ? { ...c, status: "error" } : c
+      c.id === toolId ? { ...c, status: 'error' } : c,
     ),
   };
 }
 
 // Anthropic block types for type safety
 interface AnthropicTextBlock {
-  type: "text";
+  type: 'text';
   text: string;
 }
 
 interface AnthropicImageBlock {
-  type: "image";
+  type: 'image';
   source:
     | {
-      type: "base64";
-      media_type: string;
-      data: string;
-    }
+        type: 'base64';
+        media_type: string;
+        data: string;
+      }
     | {
-      type: "url";
-      url: string;
-    };
+        type: 'url';
+        url: string;
+      };
 }
 
 type AnthropicBlock = AnthropicTextBlock | AnthropicImageBlock;
 
 function isAnthropicBlock(block: unknown): block is AnthropicBlock {
-  if (typeof block !== "object" || block === null) return false;
+  if (typeof block !== 'object' || block === null) return false;
   const b = block as Record<string, unknown>;
   return (
-    (b.type === "text" && typeof b.text === "string") ||
-    (b.type === "image" && typeof b.source === "object" && b.source !== null)
+    (b.type === 'text' && typeof b.text === 'string') ||
+    (b.type === 'image' && typeof b.source === 'object' && b.source !== null)
   );
 }
 
 // Convert Anthropic-style message to OpenAI format
 interface OpenAIMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content:
     | string
     | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
-    type: "function";
+    type: 'function';
     function: { name: string; arguments: string };
   }>;
 }
@@ -171,7 +171,7 @@ interface OpenRouterRequest {
   max_completion_tokens?: number;
   reasoning?: {
     max_tokens?: number;
-    effort?: "high" | "medium" | "low";
+    effort?: 'high' | 'medium' | 'low';
   };
 }
 
@@ -180,7 +180,7 @@ function applyCompletionTokenLimit(
   model: string,
   tokenLimit: number,
 ) {
-  if (model.startsWith("openai/gpt-5")) {
+  if (model.startsWith('openai/gpt-5')) {
     delete requestBody.max_tokens;
     requestBody.max_completion_tokens = tokenLimit;
     return;
@@ -191,12 +191,12 @@ function applyCompletionTokenLimit(
 }
 
 function getOpenRouterFallbackModel(model: string): string | null {
-  return model === "openai/gpt-5.5" ? OPENROUTER_GPT_5_5_FALLBACK_MODEL : null;
+  return model === 'openai/gpt-5.5' ? OPENROUTER_GPT_5_5_FALLBACK_MODEL : null;
 }
 
 function isInvalidModelResponse(errorText: string, model: string): boolean {
   return (
-    errorText.toLowerCase().includes("not a valid model id") &&
+    errorText.toLowerCase().includes('not a valid model id') &&
     errorText.includes(model)
   );
 }
@@ -205,12 +205,12 @@ async function fetchOpenRouterChatCompletion(
   requestBody: OpenRouterRequest,
 ): Promise<Response> {
   let response = await fetch(OPENROUTER_API_URL, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://adam-cad.com",
-      "X-Title": "Adam CAD",
+      'HTTP-Referer': 'https://azurefilm.com',
+      'X-Title': 'AzureFilm Generator',
     },
     body: JSON.stringify(requestBody),
   });
@@ -235,12 +235,12 @@ async function fetchOpenRouterChatCompletion(
       requestBody.max_completion_tokens ?? requestBody.max_tokens ?? 16000,
     );
     response = await fetch(OPENROUTER_API_URL, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://adam-cad.com",
-        "X-Title": "Adam CAD",
+        'HTTP-Referer': 'https://azurefilm.com',
+        'X-Title': 'AzureFilm Generator',
       },
       body: JSON.stringify(fallbackRequestBody),
     });
@@ -266,22 +266,22 @@ async function generateTitleFromMessages(
 - Examples: "Coffee Mug", "Gear Assembly", "Phone Stand"`;
 
     const response = await fetch(OPENROUTER_API_URL, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://adam-cad.com",
-        "X-Title": "Adam CAD",
+        'HTTP-Referer': 'https://azurefilm.com',
+        'X-Title': 'AzureFilm Generator',
       },
       body: JSON.stringify({
-        model: "anthropic/claude-haiku-4.5",
+        model: 'anthropic/claude-haiku-4.5',
         max_tokens: 30,
         messages: [
-          { role: "system", content: titleSystemPrompt },
+          { role: 'system', content: titleSystemPrompt },
           ...messagesToSend,
           {
-            role: "user",
-            content: "Title:",
+            role: 'user',
+            content: 'Title:',
           },
         ],
       }),
@@ -297,53 +297,52 @@ async function generateTitleFromMessages(
 
       // Clean up common LLM artifacts
       // Remove quotes
-      title = title.replace(/^["']|["']$/g, "");
+      title = title.replace(/^["']|["']$/g, '');
       // Remove "Title:" prefix if model echoed it
-      title = title.replace(/^title:\s*/i, "");
+      title = title.replace(/^title:\s*/i, '');
       // Remove any trailing punctuation except necessary ones
-      title = title.replace(/[.!?:;,]+$/, "");
+      title = title.replace(/[.!?:;,]+$/, '');
       // Remove meta-commentary patterns
       title = title.replace(
         /\s*(note[s]?|here'?s?|based on|for the|this is).*$/i,
-        "",
+        '',
       );
       // Trim again after cleanup
       title = title.trim();
 
       // Enforce max length
-      if (title.length > 27) title = title.substring(0, 24) + "...";
+      if (title.length > 27) title = title.substring(0, 24) + '...';
 
       // If title is empty or too short after cleanup, return null to use fallback
-      if (title.length < 2) return "Adam Object";
+      if (title.length < 2) return 'Generated Object';
 
       return title;
     }
   } catch (error) {
-    console.error("Error generating object title:", error);
+    console.error('Error generating object title:', error);
   }
 
   // Fallbacks
   let lastUserMessage: OpenAIMessage | undefined;
   for (let i = messagesToSend.length - 1; i >= 0; i--) {
-    if (messagesToSend[i].role === "user") {
+    if (messagesToSend[i].role === 'user') {
       lastUserMessage = messagesToSend[i];
       break;
     }
   }
-  if (lastUserMessage && typeof lastUserMessage.content === "string") {
+  if (lastUserMessage && typeof lastUserMessage.content === 'string') {
     return (lastUserMessage.content as string)
       .split(/\s+/)
       .slice(0, 4)
-      .join(" ")
+      .join(' ')
       .trim();
   }
 
-  return "Adam Object";
+  return 'Generated Object';
 }
 
 // Outer agent system prompt (conversational + tool-using)
-const PARAMETRIC_AGENT_PROMPT =
-  `You are Adam, an AI CAD editor that creates and modifies OpenSCAD models.
+const PARAMETRIC_AGENT_PROMPT = `You are AzureFilm Generator, an AI CAD editor that creates and modifies OpenSCAD models.
 Speak back to the user briefly (one or two sentences), then use tools to make changes.
 Prefer using tools to update the model rather than returning full code directly.
 Do not rewrite or change the user's intent. Do not add unrelated constraints.
@@ -365,56 +364,55 @@ Guidelines:
 // Tool definitions in OpenAI format
 const tools = [
   {
-    type: "function",
+    type: 'function',
     function: {
-      name: "build_parametric_model",
+      name: 'build_parametric_model',
       description:
-        "Generate or update an OpenSCAD model from user intent and context. Include parameters and ensure the model is manifold and 3D-printable.",
+        'Generate or update an OpenSCAD model from user intent and context. Include parameters and ensure the model is manifold and 3D-printable.',
       parameters: {
-        type: "object",
+        type: 'object',
         properties: {
-          text: { type: "string", description: "User request for the model" },
+          text: { type: 'string', description: 'User request for the model' },
           imageIds: {
-            type: "array",
-            items: { type: "string" },
-            description: "Image IDs to reference",
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Image IDs to reference',
           },
-          baseCode: { type: "string", description: "Existing code to modify" },
-          error: { type: "string", description: "Error to fix" },
+          baseCode: { type: 'string', description: 'Existing code to modify' },
+          error: { type: 'string', description: 'Error to fix' },
         },
       },
     },
   },
   {
-    type: "function",
+    type: 'function',
     function: {
-      name: "apply_parameter_changes",
+      name: 'apply_parameter_changes',
       description:
-        "Apply simple parameter updates to the current artifact without re-generating the whole model.",
+        'Apply simple parameter updates to the current artifact without re-generating the whole model.',
       parameters: {
-        type: "object",
+        type: 'object',
         properties: {
           updates: {
-            type: "array",
+            type: 'array',
             items: {
-              type: "object",
+              type: 'object',
               properties: {
-                name: { type: "string" },
-                value: { type: "string" },
+                name: { type: 'string' },
+                value: { type: 'string' },
               },
-              required: ["name", "value"],
+              required: ['name', 'value'],
             },
           },
         },
-        required: ["updates"],
+        required: ['updates'],
       },
     },
   },
 ];
 
 // Strict prompt for producing only OpenSCAD (no suggestion requirement)
-const STRICT_CODE_PROMPT =
-  `You are Adam, an AI CAD editor that creates and modifies OpenSCAD models. You assist users by chatting with them and making changes to their CAD in real-time. You understand that users can see a live preview of the model in a viewport on the right side of the screen while you make changes.
+const STRICT_CODE_PROMPT = `You are AzureFilm Generator, an AI CAD editor that creates and modifies OpenSCAD models. You assist users by chatting with them and making changes to their CAD in real-time. You understand that users can see a live preview of the model in a viewport on the right side of the screen while you make changes.
 
 When a user sends a message, you will reply with a response that contains only the most expert code for OpenSCAD according to a given prompt. Make sure that the syntax of the code is correct and that all parts are connected as a 3D printable object. Always write code with changeable parameters. Use full descriptive snake_case variable names (e.g. \`wheel_radius\`, \`pelican_seat_offset\`) — never abbreviate to single letters or short tokens (\`w_r\`, \`p_seat\`). Names render directly in the parameter panel. When the model has distinct parts, wrap each in a color() call with a fitting named color so the preview reads expressively. Expose the colors as string parameters (e.g. \`body_color = "SteelBlue";\` then \`color(body_color) ...\`) so the user can tweak them from the parameter panel — name them \`*_color\` and use CSS named colors or hex values as defaults. Initialize and declare the variables at the start of the code. Do not write any other text or comments in the response. If I ask about anything other than code for the OpenSCAD platform, only return a text containing '404'. Always ensure your responses are consistent with previous responses. Never include extra text in the response. Use any provided OpenSCAD documentation or context in the conversation to inform your responses.
 
@@ -478,12 +476,12 @@ module torus(r1, r2) {
 }`;
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
   }
 
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", {
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', {
       status: 405,
       headers: corsHeaders,
     });
@@ -491,31 +489,31 @@ Deno.serve(async (req) => {
 
   const supabaseClient = getAnonSupabaseClient({
     global: {
-      headers: { Authorization: req.headers.get("Authorization") ?? "" },
+      headers: { Authorization: req.headers.get('Authorization') ?? '' },
     },
   });
 
-  const { data: userData, error: userError } = await supabaseClient.auth
-    .getUser();
+  const { data: userData, error: userError } =
+    await supabaseClient.auth.getUser();
   if (!userData.user) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
   if (userError) {
     return new Response(JSON.stringify({ error: userError.message }), {
       status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   // Deduct chat token (1) at request start
   const serviceClient = getServiceRoleSupabaseClient();
   const { data: rawChatTokenResult, error: chatTokenError } =
-    await serviceClient.rpc("deduct_tokens", {
+    await serviceClient.rpc('deduct_tokens', {
       p_user_id: userData.user.id,
-      p_operation: "chat",
+      p_operation: 'chat',
     });
 
   const chatTokenResult = rawChatTokenResult as {
@@ -530,9 +528,9 @@ Deno.serve(async (req) => {
       JSON.stringify({
         error: {
           message: insufficientTokens
-            ? "insufficient_tokens"
-            : chatTokenError?.message || "Token deduction failed",
-          code: "insufficient_tokens",
+            ? 'insufficient_tokens'
+            : chatTokenError?.message || 'Token deduction failed',
+          code: 'insufficient_tokens',
           ...(insufficientTokens && {
             tokensRequired: chatTokenResult.tokensRequired,
             tokensAvailable: chatTokenResult.tokensAvailable,
@@ -541,7 +539,7 @@ Deno.serve(async (req) => {
       }),
       {
         status: 402,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     );
   }
@@ -561,55 +559,57 @@ Deno.serve(async (req) => {
   } = await req.json();
 
   const { data: messages, error: messagesError } = await supabaseClient
-    .from("messages")
-    .select("*")
-    .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true })
-    .overrideTypes<Array<{ content: Content; role: "user" | "assistant" }>>();
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
   if (messagesError) {
     return new Response(
       JSON.stringify({
-        error: messagesError instanceof Error
-          ? messagesError.message
-          : "Unknown error",
+        error:
+          messagesError instanceof Error
+            ? messagesError.message
+            : 'Unknown error',
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       },
     );
   }
   if (!messages || messages.length === 0) {
-    return new Response(JSON.stringify({ error: "Messages not found" }), {
+    return new Response(JSON.stringify({ error: 'Messages not found' }), {
       status: 404,
-      headers: { "Content-Type": "application/json", ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }
 
   // Insert placeholder assistant message that we will stream updates into
   let content: Content = { model };
   const { data: newMessageData, error: newMessageError } = await supabaseClient
-    .from("messages")
+    .from('messages')
     .insert({
       id: newMessageId,
       conversation_id: conversationId,
-      role: "assistant",
+      role: 'assistant',
       content,
       parent_message_id: messageId,
     })
     .select()
     .single()
-    .overrideTypes<{ content: Content; role: "assistant" }>();
+    .overrideTypes<{ content: Content; role: 'assistant' }>();
   if (!newMessageData) {
     return new Response(
       JSON.stringify({
-        error: newMessageError instanceof Error
-          ? newMessageError.message
-          : "Unknown error",
+        error:
+          newMessageError instanceof Error
+            ? newMessageError.message
+            : 'Unknown error',
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       },
     );
   }
@@ -618,13 +618,13 @@ Deno.serve(async (req) => {
     const messageTree = new Tree<Message>(messages);
     const newMessage = messages.find((m) => m.id === messageId);
     if (!newMessage) {
-      throw new Error("Message not found");
+      throw new Error('Message not found');
     }
     const currentMessageBranch = messageTree.getPath(newMessage.id);
 
     const messagesToSend: OpenAIMessage[] = await Promise.all(
       currentMessageBranch.map(async (msg: CoreMessage) => {
-        if (msg.role === "user") {
+        if (msg.role === 'user') {
           const formatted = await formatUserMessage(
             msg,
             supabaseClient,
@@ -634,22 +634,21 @@ Deno.serve(async (req) => {
           // Convert Anthropic-style to OpenAI-style
           // formatUserMessage returns content as an array
           return {
-            role: "user" as const,
+            role: 'user' as const,
             content: formatted.content.map((block: unknown) => {
               if (isAnthropicBlock(block)) {
-                if (block.type === "text") {
-                  return { type: "text", text: block.text };
-                } else if (block.type === "image") {
+                if (block.type === 'text') {
+                  return { type: 'text', text: block.text };
+                } else if (block.type === 'image') {
                   // Handle both URL and base64 image formats
                   let imageUrl: string;
                   if (
-                    "type" in block.source &&
-                    block.source.type === "base64"
+                    'type' in block.source &&
+                    block.source.type === 'base64'
                   ) {
                     // Convert Anthropic base64 format to OpenAI data URL format
-                    imageUrl =
-                      `data:${block.source.media_type};base64,${block.source.data}`;
-                  } else if ("url" in block.source) {
+                    imageUrl = `data:${block.source.media_type};base64,${block.source.data}`;
+                  } else if ('url' in block.source) {
                     // Use URL directly
                     imageUrl = block.source.url;
                   } else {
@@ -657,10 +656,10 @@ Deno.serve(async (req) => {
                     return block;
                   }
                   return {
-                    type: "image_url",
+                    type: 'image_url',
                     image_url: {
                       url: imageUrl,
-                      detail: "auto", // Auto-detect appropriate detail level
+                      detail: 'auto', // Auto-detect appropriate detail level
                     },
                   };
                 }
@@ -671,10 +670,10 @@ Deno.serve(async (req) => {
         }
         // Assistant messages: send code or text from history as plain text
         return {
-          role: "assistant" as const,
+          role: 'assistant' as const,
           content: msg.content.artifact
-            ? msg.content.artifact.code || ""
-            : msg.content.text || "",
+            ? msg.content.artifact.code || ''
+            : msg.content.text || '',
         };
       }),
     );
@@ -683,7 +682,7 @@ Deno.serve(async (req) => {
     const requestBody: OpenRouterRequest = {
       model,
       messages: [
-        { role: "system", content: PARAMETRIC_AGENT_PROMPT },
+        { role: 'system', content: PARAMETRIC_AGENT_PROMPT },
         ...messagesToSend,
       ],
       tools,
@@ -726,7 +725,7 @@ Deno.serve(async (req) => {
               ...content,
               toolCalls: content.toolCalls.map((call) => ({
                 ...call,
-                status: "error",
+                status: 'error',
               })),
             };
           }
@@ -735,10 +734,10 @@ Deno.serve(async (req) => {
         try {
           const reader = response.body?.getReader();
           const decoder = new TextDecoder();
-          let buffer = "";
+          let buffer = '';
 
           if (!reader) {
-            throw new Error("No response body");
+            throw new Error('No response body');
           }
 
           while (true) {
@@ -746,13 +745,13 @@ Deno.serve(async (req) => {
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
 
             for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
+              if (!line.startsWith('data: ')) continue;
               const data = line.slice(6);
-              if (data === "[DONE]") continue;
+              if (data === '[DONE]') continue;
 
               let chunk: {
                 error?: { message?: string };
@@ -773,14 +772,14 @@ Deno.serve(async (req) => {
                 chunk = JSON.parse(data);
               } catch (e) {
                 // Malformed chunk — log and skip, don't abort the stream.
-                console.error("Error parsing SSE chunk:", e);
+                console.error('Error parsing SSE chunk:', e);
                 continue;
               }
 
               // Surface API errors so the outer catch can mark tools as errored
               // — never swallow them in the parse-tolerance block above.
               if (chunk.error) {
-                console.error("OpenRouter stream error:", chunk.error);
+                console.error('OpenRouter stream error:', chunk.error);
                 throw new Error(
                   chunk.error.message ||
                     `OpenRouter error: ${JSON.stringify(chunk.error)}`,
@@ -793,7 +792,7 @@ Deno.serve(async (req) => {
               if (delta.content) {
                 content = {
                   ...content,
-                  text: (content.text || "") + delta.content,
+                  text: (content.text || '') + delta.content,
                 };
                 streamMessage(controller, { ...newMessageData, content });
               }
@@ -806,8 +805,8 @@ Deno.serve(async (req) => {
                   if (toolCall.id) {
                     currentToolCall = {
                       id: toolCall.id,
-                      name: toolCall.function?.name || "",
-                      arguments: "",
+                      name: toolCall.function?.name || '',
+                      arguments: '',
                     };
                     content = {
                       ...content,
@@ -816,7 +815,7 @@ Deno.serve(async (req) => {
                         {
                           name: currentToolCall.name,
                           id: currentToolCall.id,
-                          status: "pending",
+                          status: 'pending',
                         },
                       ],
                     };
@@ -833,7 +832,7 @@ Deno.serve(async (req) => {
               }
 
               if (
-                chunk.choices?.[0]?.finish_reason === "tool_calls" &&
+                chunk.choices?.[0]?.finish_reason === 'tool_calls' &&
                 currentToolCall
               ) {
                 await handleToolCall(currentToolCall);
@@ -851,7 +850,7 @@ Deno.serve(async (req) => {
           if (!content.text && !content.artifact) {
             content = {
               ...content,
-              text: "An error occurred while processing your request.",
+              text: 'An error occurred while processing your request.',
             };
           }
           markAllToolsError();
@@ -863,7 +862,7 @@ Deno.serve(async (req) => {
             const extractedCode = extractOpenSCADCodeFromText(content.text);
             if (extractedCode) {
               console.log(
-                "Fallback: Extracted OpenSCAD code from text response",
+                'Fallback: Extracted OpenSCAD code from text response',
               );
 
               // Generate a title from the messages
@@ -873,11 +872,11 @@ Deno.serve(async (req) => {
               let cleanedText = content.text;
               // Remove markdown code blocks
               cleanedText = cleanedText
-                .replace(/```(?:openscad)?\s*\n?[\s\S]*?\n?```/g, "")
+                .replace(/```(?:openscad)?\s*\n?[\s\S]*?\n?```/g, '')
                 .trim();
               // If what remains is very short or empty, clear it
               if (cleanedText.length < 10) {
-                cleanedText = "";
+                cleanedText = '';
               }
 
               content = {
@@ -885,7 +884,7 @@ Deno.serve(async (req) => {
                 text: cleanedText || undefined,
                 artifact: {
                   title,
-                  version: "v1",
+                  version: 'v1',
                   code: extractedCode,
                   parameters: parseParameters(extractedCode),
                 },
@@ -897,11 +896,11 @@ Deno.serve(async (req) => {
           // tool call, or artifact, surface a retry hint instead of saving
           // an empty bubble (otherwise isLoading flips false and the UI
           // renders nothing visible).
-          const hasToolCalls = !!content.toolCalls &&
-            content.toolCalls.length > 0;
+          const hasToolCalls =
+            !!content.toolCalls && content.toolCalls.length > 0;
           if (!content.artifact && !content.text && !hasToolCalls) {
             console.error(
-              "[parametric-chat] empty response from model — no text, tool call, or artifact",
+              '[parametric-chat] empty response from model — no text, tool call, or artifact',
             );
             content = {
               ...content,
@@ -912,15 +911,15 @@ Deno.serve(async (req) => {
           let finalMessageData: Message | null = null;
           try {
             const { data } = await supabaseClient
-              .from("messages")
+              .from('messages')
               .update({ content })
-              .eq("id", newMessageData.id)
+              .eq('id', newMessageData.id)
               .select()
               .single()
-              .overrideTypes<{ content: Content; role: "assistant" }>();
+              .overrideTypes<{ content: Content; role: 'assistant' }>();
             finalMessageData = data;
           } catch (dbError) {
-            console.error("Failed to update message in DB:", dbError);
+            console.error('Failed to update message in DB:', dbError);
           }
 
           // Always stream a final message — fall back to in-memory content
@@ -937,13 +936,13 @@ Deno.serve(async (req) => {
           name: string;
           arguments: string;
         }) {
-          if (toolCall.name === "build_parametric_model") {
+          if (toolCall.name === 'build_parametric_model') {
             // Deduct parametric tokens (5) for model building
             const { data: rawParamTokenResult } = await serviceClient.rpc(
-              "deduct_tokens",
+              'deduct_tokens',
               {
                 p_user_id: userData.user!.id,
-                p_operation: "parametric",
+                p_operation: 'parametric',
                 p_reference_id: toolCall.id,
               },
             );
@@ -955,7 +954,7 @@ Deno.serve(async (req) => {
             if (!paramTokenResult?.success) {
               content = {
                 ...content,
-                error: "insufficient_tokens",
+                error: 'insufficient_tokens',
               };
               streamMessage(controller, { ...newMessageData, content });
               return;
@@ -969,7 +968,7 @@ Deno.serve(async (req) => {
             try {
               toolInput = JSON.parse(toolCall.arguments);
             } catch (e) {
-              console.error("Invalid tool input JSON", e);
+              console.error('Invalid tool input JSON', e);
               content = markToolAsError(content, toolCall.id);
               streamMessage(controller, { ...newMessageData, content });
               return;
@@ -977,21 +976,21 @@ Deno.serve(async (req) => {
 
             // Build code generation messages
             const baseContext: OpenAIMessage[] = toolInput.baseCode
-              ? [{ role: "assistant" as const, content: toolInput.baseCode }]
+              ? [{ role: 'assistant' as const, content: toolInput.baseCode }]
               : [];
 
             // If baseContext adds an assistant message, re-state user request so conversation ends with user
-            const userText = newMessage?.content.text || "";
+            const userText = newMessage?.content.text || '';
             const needsUserMessage = baseContext.length > 0 || toolInput.error;
             const finalUserMessage: OpenAIMessage[] = needsUserMessage
               ? [
-                {
-                  role: "user" as const,
-                  content: toolInput.error
-                    ? `${userText}\n\nFix this OpenSCAD error: ${toolInput.error}`
-                    : userText,
-                },
-              ]
+                  {
+                    role: 'user' as const,
+                    content: toolInput.error
+                      ? `${userText}\n\nFix this OpenSCAD error: ${toolInput.error}`
+                      : userText,
+                  },
+                ]
               : [];
 
             const codeMessages: OpenAIMessage[] = [
@@ -1004,7 +1003,7 @@ Deno.serve(async (req) => {
             const codeRequestBody: OpenRouterRequest = {
               model,
               messages: [
-                { role: "system", content: STRICT_CODE_PROMPT },
+                { role: 'system', content: STRICT_CODE_PROMPT },
                 ...codeMessages,
               ],
               stream: true,
@@ -1022,20 +1021,19 @@ Deno.serve(async (req) => {
             // Kick off title generation alongside the streamed code.
             const titlePromise = generateTitleFromMessages(messagesToSend);
 
-            let rawCode = "";
+            let rawCode = '';
             let codeGenFailed = false;
 
             const stripCodeFences = (s: string): string => {
               let out = s;
-              out = out.replace(/^```(?:openscad)?\s*\n?/, "");
-              out = out.replace(/\n?```\s*$/, "");
+              out = out.replace(/^```(?:openscad)?\s*\n?/, '');
+              out = out.replace(/\n?```\s*$/, '');
               return out;
             };
 
             try {
-              const codeResponse = await fetchOpenRouterChatCompletion(
-                codeRequestBody,
-              );
+              const codeResponse =
+                await fetchOpenRouterChatCompletion(codeRequestBody);
 
               if (!codeResponse.ok) {
                 const t = await codeResponse.text();
@@ -1045,25 +1043,25 @@ Deno.serve(async (req) => {
               }
 
               const codeReader = codeResponse.body?.getReader();
-              if (!codeReader) throw new Error("No code response body");
+              if (!codeReader) throw new Error('No code response body');
 
               const codeDecoder = new TextDecoder();
-              let codeBuffer = "";
+              let codeBuffer = '';
 
               while (true) {
                 const { done, value } = await codeReader.read();
                 if (done) break;
 
                 codeBuffer += codeDecoder.decode(value, { stream: true });
-                const codeLines = codeBuffer.split("\n");
-                codeBuffer = codeLines.pop() || "";
+                const codeLines = codeBuffer.split('\n');
+                codeBuffer = codeLines.pop() || '';
 
                 for (const line of codeLines) {
                   // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
                   // and anything that isn't a `data:` event.
-                  if (!line.startsWith("data: ")) continue;
+                  if (!line.startsWith('data: ')) continue;
                   const data = line.slice(6);
-                  if (data === "[DONE]") continue;
+                  if (data === '[DONE]') continue;
 
                   let chunk: {
                     error?: { message?: string };
@@ -1075,7 +1073,7 @@ Deno.serve(async (req) => {
                     chunk = JSON.parse(data);
                   } catch (e) {
                     // Malformed chunk — log and skip, don't abort the stream.
-                    console.error("Error parsing code SSE chunk:", e);
+                    console.error('Error parsing code SSE chunk:', e);
                     continue;
                   }
 
@@ -1089,14 +1087,14 @@ Deno.serve(async (req) => {
                   }
 
                   const deltaContent = chunk.choices?.[0]?.delta?.content;
-                  if (typeof deltaContent === "string" && deltaContent) {
+                  if (typeof deltaContent === 'string' && deltaContent) {
                     rawCode += deltaContent;
                     const streamed = stripCodeFences(rawCode);
                     content = {
                       ...content,
                       artifact: {
-                        title: "Adam Object",
-                        version: "v1",
+                        title: 'Generated Object',
+                        version: 'v1',
                         code: streamed,
                         parameters: [],
                       },
@@ -1109,16 +1107,16 @@ Deno.serve(async (req) => {
                 }
               }
             } catch (e) {
-              console.error("Code generation failed:", e);
+              console.error('Code generation failed:', e);
               codeGenFailed = true;
             }
 
             const code = stripCodeFences(rawCode.trim()).trim();
 
-            let title = await titlePromise.catch(() => "Adam Object");
+            let title = await titlePromise.catch(() => 'Generated Object');
             const lower = title.toLowerCase();
-            if (lower.includes("sorry") || lower.includes("apologize")) {
-              title = "Adam Object";
+            if (lower.includes('sorry') || lower.includes('apologize')) {
+              title = 'Generated Object';
             }
 
             if (codeGenFailed || !code) {
@@ -1126,13 +1124,13 @@ Deno.serve(async (req) => {
                 ...content,
                 artifact: undefined,
                 toolCalls: (content.toolCalls || []).map((c) =>
-                  c.id === toolCall.id ? { ...c, status: "error" } : c
+                  c.id === toolCall.id ? { ...c, status: 'error' } : c,
                 ),
               };
             } else {
               const artifact: ParametricArtifact = {
                 title,
-                version: "v1",
+                version: 'v1',
                 code,
                 parameters: parseParameters(code),
               };
@@ -1145,14 +1143,14 @@ Deno.serve(async (req) => {
               };
             }
             streamMessage(controller, { ...newMessageData, content });
-          } else if (toolCall.name === "apply_parameter_changes") {
+          } else if (toolCall.name === 'apply_parameter_changes') {
             let toolInput: {
               updates?: Array<{ name: string; value: string }>;
             } = {};
             try {
               toolInput = JSON.parse(toolCall.arguments);
             } catch (e) {
-              console.error("Invalid tool input JSON", e);
+              console.error('Invalid tool input JSON', e);
               content = markToolAsError(content, toolCall.id);
               streamMessage(controller, { ...newMessageData, content });
               return;
@@ -1164,7 +1162,7 @@ Deno.serve(async (req) => {
               const lastArtifactMsg = [...messages]
                 .reverse()
                 .find(
-                  (m) => m.role === "assistant" && m.content.artifact?.code,
+                  (m) => m.role === 'assistant' && m.content.artifact?.code,
                 );
               baseCode = lastArtifactMsg?.content.artifact?.code;
             }
@@ -1188,10 +1186,10 @@ Deno.serve(async (req) => {
               // Coerce value based on existing type
               let coerced: string | number | boolean = upd.value;
               try {
-                if (target.type === "number") coerced = Number(upd.value);
-                else if (target.type === "boolean") {
-                  coerced = String(upd.value) === "true";
-                } else if (target.type === "string") {
+                if (target.type === 'number') coerced = Number(upd.value);
+                else if (target.type === 'boolean') {
+                  coerced = String(upd.value) === 'true';
+                } else if (target.type === 'string') {
                   coerced = String(upd.value);
                 } else coerced = upd.value;
               } catch (_) {
@@ -1199,27 +1197,25 @@ Deno.serve(async (req) => {
               }
               patchedCode = patchedCode.replace(
                 new RegExp(
-                  `^\\s*(${
-                    escapeRegExp(
-                      target.name,
-                    )
-                  }\\s*=\\s*)[^;]+;([\\t\\f\\cK ]*\\/\\/[^\\n]*)?`,
-                  "m",
+                  `^\\s*(${escapeRegExp(
+                    target.name,
+                  )}\\s*=\\s*)[^;]+;([\\t\\f\\cK ]*\\/\\/[^\\n]*)?`,
+                  'm',
                 ),
                 (_, g1: string, g2: string) => {
-                  if (target.type === "string") {
+                  if (target.type === 'string') {
                     return `${g1}"${String(coerced).replace(/"/g, '\\"')}";${
-                      g2 || ""
+                      g2 || ''
                     }`;
                   }
-                  return `${g1}${coerced};${g2 || ""}`;
+                  return `${g1}${coerced};${g2 || ''}`;
                 },
               );
             }
 
             const artifact: ParametricArtifact = {
-              title: content.artifact?.title || "Adam Object",
-              version: content.artifact?.version || "v1",
+              title: content.artifact?.title || 'Generated Object',
+              version: content.artifact?.version || 'v1',
               code: patchedCode,
               parameters: parseParameters(patchedCode),
             };
@@ -1238,9 +1234,9 @@ Deno.serve(async (req) => {
 
     return new Response(responseStream, {
       headers: {
-        "Content-Type": "text/plain",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
+        'Content-Type': 'text/plain',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
         ...corsHeaders,
       },
     });
@@ -1250,32 +1246,32 @@ Deno.serve(async (req) => {
     if (!content.text && !content.artifact) {
       content = {
         ...content,
-        text: "An error occurred while processing your request.",
+        text: 'An error occurred while processing your request.',
       };
     }
 
     const { data: updatedMessageData } = await supabaseClient
-      .from("messages")
+      .from('messages')
       .update({ content })
-      .eq("id", newMessageData.id)
+      .eq('id', newMessageData.id)
       .select()
       .single()
-      .overrideTypes<{ content: Content; role: "assistant" }>();
+      .overrideTypes<{ content: Content; role: 'assistant' }>();
 
     if (updatedMessageData) {
       return new Response(JSON.stringify({ message: updatedMessageData }), {
         status: 200,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
     return new Response(
       JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error instanceof Error ? error.message : 'Unknown error',
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       },
     );
   }

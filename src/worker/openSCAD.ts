@@ -377,9 +377,9 @@ class OpenSCADWrapper {
       exitCode = instance.callMain(args);
     } catch (error) {
       if (error instanceof Error) {
-        throw new Error('Adam exited with an error: ' + error.message);
+        throw new Error('AzureFilm exited with an error: ' + error.message);
       } else {
-        throw new Error('Adam exited with an error');
+        throw new Error('AzureFilm exited with an error');
       }
     }
 
@@ -388,9 +388,11 @@ class OpenSCADWrapper {
         output = instance.FS.readFile(outputFile, { encoding: 'binary' });
       } catch (error) {
         if (error instanceof Error) {
-          throw new Error('Adam cannot read created file: ' + error.message);
+          throw new Error(
+            'AzureFilm cannot read created file: ' + error.message,
+          );
         } else {
-          throw new Error('Adam cannot read created file');
+          throw new Error('AzureFilm cannot read created file');
         }
       }
 
@@ -403,7 +405,7 @@ class OpenSCADWrapper {
       }
     } else {
       throw new OpenSCADError(
-        'Adam did not exit correctly',
+        'AzureFilm did not exit correctly',
         code,
         this.log.stdErr,
       );

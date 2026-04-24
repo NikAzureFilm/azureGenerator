@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { Link } from 'react-router-dom';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export function ResetPasswordView() {
   const [email, setEmail] = useState('');
@@ -42,11 +43,7 @@ export function ResetPasswordView() {
       <div className="w-full max-w-md">
         <div className="rounded-lg bg-adam-bg-secondary-dark p-8 shadow-md">
           <div className="mb-4 flex flex-col items-center justify-center gap-2">
-            <img
-              src={`${import.meta.env.BASE_URL}/adam-logo.svg`}
-              alt="Adam Logo"
-              className="mr-2 h-8 w-8"
-            />
+            <BrandLogo variant="wordmark" className="h-9 w-40" />
             <h1 className="text-2xl font-semibold text-white">
               Reset Password
             </h1>

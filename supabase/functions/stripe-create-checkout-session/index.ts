@@ -12,6 +12,11 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2024-12-18.acacia',
   httpClient: Stripe.createFetchHttpClient(),
 });
+const APP_URL =
+  Deno.env.get('AZUREFILM_GENERATOR_URL') ??
+  Deno.env.get('AZUREFILM_URL') ??
+  Deno.env.get('ADAM_URL') ??
+  'https://azurefilm.com/';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -117,7 +122,7 @@ Deno.serve(async (req) => {
     subscriptionData.stripe_customer_id
   ) {
     const session = await stripe.billingPortal.sessions.create({
-      return_url: Deno.env.get('ADAM_URL') ?? 'https://adam.new/app',
+      return_url: APP_URL,
       customer: subscriptionData.stripe_customer_id,
     });
 
@@ -180,8 +185,8 @@ Deno.serve(async (req) => {
     const tokenPackSession = await stripe.checkout.sessions.create({
       line_items: [{ price: price.data[0].id, quantity: 1 }],
       mode: 'payment',
-      success_url: Deno.env.get('ADAM_URL') ?? 'https://adam.new/app',
-      cancel_url: Deno.env.get('ADAM_URL') ?? 'https://adam.new/app',
+      success_url: APP_URL,
+      cancel_url: APP_URL,
       customer: customerId,
       client_reference_id: userData.user.id,
     });
@@ -224,8 +229,8 @@ Deno.serve(async (req) => {
     line_items: [{ price: price.data[0].id, quantity: 1 }],
     mode: 'subscription',
     allow_promotion_codes: true,
-    success_url: Deno.env.get('ADAM_URL') ?? 'https://adam.new/app',
-    cancel_url: Deno.env.get('ADAM_URL') ?? 'https://adam.new/app',
+    success_url: APP_URL,
+    cancel_url: APP_URL,
     customer: customerId,
     client_reference_id: userData.user.id,
     metadata: { level },

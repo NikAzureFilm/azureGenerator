@@ -50,7 +50,8 @@ export function TrialDialog({
       >
         <DialogHeader className="w-full">
           <DialogTitle className="text-center text-xl text-adam-text-primary md:text-2xl">
-            Here's 7 days of <span className="text-adam-blue">Adam Pro</span>
+            Here's 7 days of{' '}
+            <span className="text-adam-blue">AzureFilm Generator Pro</span>
           </DialogTitle>
         </DialogHeader>
         <DialogDescription className="w-full text-sm text-adam-neutral-100">

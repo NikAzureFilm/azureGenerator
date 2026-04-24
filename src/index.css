@@ -199,7 +199,7 @@ input::placeholder {
   }
 
   .loader path {
-    stroke: #00a6ff;
+    stroke: #0f5ff4;
     stroke-width: 0.6px;
     animation:
       dashArray 6s ease-in-out infinite,

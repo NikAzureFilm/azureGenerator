@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Menu, Plus, LogOut, Crown, Settings, LayoutGrid } from 'lucide-react';
+import {
+  Menu,
+  Plus,
+  LogOut,
+  Crown,
+  Settings,
+  LayoutGrid,
+  ArrowUpRight,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -28,7 +36,9 @@ import {
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuery } from '@tanstack/react-query';
 import { ConditionalWrapper } from './ConditionalWrapper';
-import { DiscordIcon, GitHubIcon } from './icons/CompanyIcons';
+import { DiscordIcon } from './icons/CompanyIcons';
+import { BrandLogo } from '@/components/BrandLogo';
+import { BRAND_NAME } from '@/config/brand';
 import { cn } from '@/lib/utils';
 import { Conversation, ConversationSettings } from '@shared/types';
 import { UserAvatar } from '@/components/chat/UserAvatar';
@@ -130,19 +140,14 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
               onClick={() => sidebarNavigate('/')}
             >
               {isSidebarOpen ? (
-                <div className="flex w-full">
-                  <img
-                    className="mx-auto h-8 w-full"
-                    src={`${import.meta.env.BASE_URL}/adam-logo-full.svg`}
-                    alt="Logo"
+                <div className="flex w-full items-center">
+                  <BrandLogo
+                    variant="wordmark"
+                    className="mx-auto h-8 w-[214px]"
                   />
                 </div>
               ) : (
-                <img
-                  src={`${import.meta.env.BASE_URL}/adam-logo.svg`}
-                  alt="Logo"
-                  className="h-8 w-8 min-w-8"
-                />
+                <BrandLogo variant="mark" className="h-8 w-8 min-w-8" />
               )}
             </div>
           </Link>
@@ -173,7 +178,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                 className={` ${
                   isSidebarOpen
                     ? 'flex w-[216px] items-center justify-start gap-2 rounded-[100px] border border-adam-blue bg-adam-background-1 px-4 py-3 text-[#D7D7D7] hover:bg-adam-blue/40 hover:text-adam-text-primary'
-                    : 'flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border-2 border-adam-blue bg-[#191A1A] p-[2px] text-[#D7D7D7] shadow-[0px_4px_10px_0px_rgba(0,166,255,0.24)] hover:bg-adam-blue/40 hover:text-adam-text-primary'
+                    : 'flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border-2 border-adam-blue bg-[#191A1A] p-[2px] text-[#D7D7D7] shadow-[0px_4px_10px_0px_rgba(15,95,244,0.24)] hover:bg-adam-blue/40 hover:text-adam-text-primary'
                 } mb-4`}
                 onClick={() => sidebarNavigate('/')}
               >
@@ -267,12 +272,12 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
           className={`${isSidebarOpen ? 'px-4' : 'px-2'} py-4 transition-all duration-300 ease-in-out dark:border-gray-800`}
         >
           <div className={cn('flex flex-col gap-2', isSidebarOpen && 'gap-3')}>
-            {/* GitHub Button - Collapsed state */}
+            {/* AzureFilm site button - Collapsed state */}
             {!isSidebarOpen && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <a
-                    href="https://github.com/Adam-CAD/CADAM"
+                    href="https://azurefilm.com/"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -280,23 +285,23 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                       variant="adam_dark_collapsed"
                       className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
                     >
-                      <GitHubIcon className="h-[22px] w-[22px]" />
+                      <ArrowUpRight className="h-[22px] w-[22px]" />
                     </Button>
                   </a>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="flex flex-col">
-                  <span className="font-semibold">GitHub</span>
+                  <span className="font-semibold">AzureFilm</span>
                   <span className="text-xs text-muted-foreground">
-                    View source code
+                    Visit azurefilm.com
                   </span>
                 </TooltipContent>
               </Tooltip>
             )}
 
-            {/* GitHub Button - Expanded state */}
+            {/* AzureFilm site button - Expanded state */}
             {isSidebarOpen && (
               <a
-                href="https://github.com/Adam-CAD/CADAM"
+                href="https://azurefilm.com/"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -304,8 +309,8 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                   variant="adam_dark"
                   className="flex h-10 w-full items-center justify-start gap-2"
                 >
-                  <GitHubIcon className="h-[22px] w-[22px] min-w-[22px]" />
-                  GitHub
+                  <ArrowUpRight className="h-[22px] w-[22px] min-w-[22px]" />
+                  AzureFilm
                 </Button>
               </a>
             )}
@@ -428,9 +433,11 @@ function MobileSidebar({
       >
         {/* For aria stuff */}
         <SheetHeader className="hidden">
-          <SheetTitle className="text-adam-text-primary">AdamCAD</SheetTitle>
+          <SheetTitle className="text-adam-text-primary">
+            {BRAND_NAME}
+          </SheetTitle>
           <SheetDescription>
-            AI-powered CAD software for everyone
+            AI-powered 3D model generator by AzureFilm
           </SheetDescription>
         </SheetHeader>
         <DesktopSidebar isSidebarOpen={true} setIsSidebarOpen={setOpen} />

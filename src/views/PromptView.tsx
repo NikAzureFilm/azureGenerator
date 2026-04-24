@@ -18,6 +18,7 @@ import posthog from 'posthog-js';
 import * as Sentry from '@sentry/react';
 import { useSendContentMutation } from '@/services/messageService';
 import { useProfile } from '@/services/profileService';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export function PromptView() {
   const navigate = useNavigate();
@@ -217,6 +218,14 @@ export function PromptView() {
 
         <main className="flex h-full w-full flex-col items-center justify-center px-4 md:px-8">
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center">
+            <BrandLogo
+              variant="wordmark"
+              className={cn(
+                'mb-6 h-10 w-64 md:h-12 md:w-72',
+                'motion-safe:transition-opacity motion-safe:duration-1000 motion-safe:ease-out',
+                isLoaded ? 'opacity-100' : 'opacity-0',
+              )}
+            />
             <h1
               className={cn(
                 'mb-8 text-center text-2xl font-medium text-adam-text-primary md:text-3xl lg:text-4xl',
@@ -245,7 +254,7 @@ export function PromptView() {
                       return;
                     }
                   }}
-                  placeholder="Start building with Adam..."
+                  placeholder="Start building with AzureFilm Generator..."
                   type={type}
                   disabled={limitReached}
                   model={model}
@@ -275,7 +284,7 @@ export function PromptView() {
               {!isLoading && user && !limitReached && !lowPrompts && (
                 <div className="flex justify-center">
                   <a
-                    href="https://cad.onshape.com/appstore/apps/Design%20&%20Documentation/690a8dc864e816c112aa66a0"
+                    href="https://azurefilm.com/"
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={() => {
@@ -291,9 +300,9 @@ export function PromptView() {
                     className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-adam-text-secondary transition-colors hover:border-adam-blue/40 hover:bg-adam-blue/10 hover:text-adam-text-primary"
                   >
                     <span>
-                      Try our{' '}
+                      Need filament for your print?{' '}
                       <span className="font-medium text-adam-blue">
-                        Onshape extension
+                        Shop AzureFilm
                       </span>
                     </span>
                     <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />

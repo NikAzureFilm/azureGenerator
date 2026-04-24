@@ -18,6 +18,7 @@ import * as omggif from 'omggif';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { getSafeFilename } from '@/utils/file-utils';
 import quantizeFragmentShader from '@/utils/quantize.frag?raw';
+import { brandAsset, BRAND_NAME } from '@/config/brand';
 
 const vertexShader = `
   out vec2 vUv;
@@ -47,7 +48,7 @@ export function MeshGifPreview({
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const logoImage = useMemo(() => {
     const img = new Image();
-    img.src = `${import.meta.env.BASE_URL}/adam-logo-full.svg`; // served from public folder root
+    img.src = brandAsset('azurefilm-logo.png');
     return img;
   }, []);
   const isGeneratingRef = useRef(false);
@@ -667,8 +668,8 @@ export function MeshGifPreview({
           ref={canvasRefCallback}
         />
         <img
-          src={`${import.meta.env.BASE_URL}/adam-logo-full.svg`}
-          alt="ADAM logo"
+          src={brandAsset('azurefilm-logo.png')}
+          alt={`${BRAND_NAME} logo`}
           className="pointer-events-none absolute bottom-3 right-3 w-[15%] select-none"
         />
       </div>

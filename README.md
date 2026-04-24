@@ -2,11 +2,11 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./public/Github-Banner-Dark.png">
     <source media="(prefers-color-scheme: light)" srcset="./public/Github-Banner-Light.png">
-    <img src="./public/Github-Banner-Light.png" alt="CADAM Banner" width="100%"/>
+    <img src="./public/Github-Banner-Light.png" alt="AzureFilm Generator Banner" width="100%"/>
   </picture>
 </div>
 
-<h1 align="center"> ⛮ The Open Source Text to CAD Web App ⛮ </h1>
+<h1 align="center">AzureFilm Generator</h1>
 
 <div align="center">
 
@@ -17,7 +17,7 @@
 [![React](https://img.shields.io/badge/React-19.1-61DAFB.svg?style=flat&logo=react&logoColor=black)](https://reactjs.org/)
 [![Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E.svg?style=flat&logo=supabase&logoColor=white)](https://supabase.com/)
 [![OpenSCAD](https://img.shields.io/badge/OpenSCAD-WASM-F9D64F.svg?style=flat)](https://openscad.org/)
-[![Website](https://img.shields.io/badge/website-adam.new-blue?style=flat)](https://adam.new)
+[![Website](https://img.shields.io/badge/website-azurefilm.com-blue?style=flat)](https://azurefilm.com/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/HKdXDqAHCs)
 [![Follow Zach Dive](https://img.shields.io/badge/Follow-Zach%20Dive-1DA1F2?style=flat&logo=x&logoColor=white)](https://x.com/zachdive)
 [![Follow Aaron Li](https://img.shields.io/badge/Follow-Aaron%20Li-1DA1F2?style=flat&logo=x&logoColor=white)](https://x.com/aaronhetengli)
@@ -50,25 +50,25 @@
 
 <!-- Add demo GIFs or screenshots here -->
 <!-- Example format:
-![CADAM Demo](./demo/demo.gif)
+![AzureFilm Generator Demo](./demo/demo.gif)
 
 ### Example: Creating a parametric gear
 ![Gear Example](./demo/gear-example.png)
 -->
 
-> 🎬 **Try it live:** https://adam.new/cadam
+> Try it live: https://azurefilm.com/
 
 ## 📺 Screenshots
 
-<img src="./public/screenshot-2.jpeg" alt="CADAM Screenshot 2" />
+<img src="./public/screenshot-2.jpeg" alt="AzureFilm Generator Screenshot 2" />
 
 <details>
   <summary>More screenshots</summary>
 
   <br/>
-  <img src="./public/screenshot-1.jpeg" alt="CADAM Screenshot 1" />
+  <img src="./public/screenshot-1.jpeg" alt="AzureFilm Generator Screenshot 1" />
   <br/>
-  <img src="./public/screenshot-3.jpeg" alt="CADAM Screenshot 3" />
+  <img src="./public/screenshot-3.jpeg" alt="AzureFilm Generator Screenshot 3" />
 
 </details>
 
@@ -119,7 +119,7 @@ npm run dev
 
 ## 🌐 Setting Up ngrok for Local Development
 
-CADAM uses ngrok to send image URLs to Anthropic:
+AzureFilm Generator uses ngrok to send image URLs to Anthropic:
 
 1. Install ngrok if you haven't already:
 
@@ -199,7 +199,7 @@ Components and attributions:
 
 <div align="center">
   
-**⭐ If you find CADAM useful, please consider giving it a star!**
+**If you find AzureFilm Generator useful, please consider giving it a star!**
 
 [![Stars](https://img.shields.io/github/stars/Adam-CAD/cadam?style=social&logo=github)](https://github.com/Adam-CAD/cadam/stargazers)
 

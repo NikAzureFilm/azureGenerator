@@ -3,22 +3,22 @@
 // This enables autocomplete, go to definition, etc.
 
 // Setup type definitions for built-in Supabase Runtime APIs
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { corsHeaders } from "../_shared/cors.ts";
-import "jsr:@std/dotenv/load";
-import { getAnonSupabaseClient } from "../_shared/supabaseClient.ts";
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { corsHeaders } from '../_shared/cors.ts';
+import 'jsr:@std/dotenv/load';
+import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
-const PROMPT_GENERATOR_MODEL = "openai/gpt-5.5";
-const PROMPT_GENERATOR_FALLBACK_MODEL = "openai/gpt-5.4";
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const PROMPT_GENERATOR_MODEL = 'openai/gpt-5.5';
+const PROMPT_GENERATOR_FALLBACK_MODEL = 'openai/gpt-5.4';
 
 type OpenRouterMessageContent =
   | string
   | Array<{
-    type?: string;
-    text?: string;
-  }>;
+      type?: string;
+      text?: string;
+    }>;
 
 interface OpenRouterChatCompletion {
   choices?: Array<{
@@ -34,30 +34,29 @@ interface OpenRouterChatCompletion {
 function extractGeneratedText(response: OpenRouterChatCompletion): string {
   const content = response.choices?.[0]?.message?.content;
 
-  if (typeof content === "string") {
+  if (typeof content === 'string') {
     return content.trim();
   }
 
   if (Array.isArray(content)) {
     return content
-      .map((part) => (part.type === "text" || !part.type ? part.text : ""))
+      .map((part) => (part.type === 'text' || !part.type ? part.text : ''))
       .filter(Boolean)
-      .join("\n")
+      .join('\n')
       .trim();
   }
 
-  return "";
+  return '';
 }
 
 function isInvalidModelResponse(errorText: string, model: string): boolean {
   return (
-    errorText.toLowerCase().includes("not a valid model id") &&
+    errorText.toLowerCase().includes('not a valid model id') &&
     errorText.includes(model)
   );
 }
 
-const PROMPT_SYSTEM_PROMPT =
-  `You are a helpful assistant that generates creative prompts for organic 3D forms and artistic objects. Your prompts should be:
+const PROMPT_SYSTEM_PROMPT = `You are a helpful assistant that generates creative prompts for organic 3D forms and artistic objects. Your prompts should be:
 1. Focus on organic shapes, characters, figurines, and artistic forms
 2. Be short and creative
 3. Avoid technical dimensions - focus on form and aesthetics
@@ -80,8 +79,7 @@ User: "Generate a creative prompt for a 3D form."
 Assistant: "a miniature castle with towers"
 `;
 
-const PARAMETRIC_SYSTEM_PROMPT =
-  `You are a helpful assistant that generates prompts for dimensional household objects and functional parts. Your prompts should be:
+const PARAMETRIC_SYSTEM_PROMPT = `You are a helpful assistant that generates prompts for dimensional household objects and functional parts. Your prompts should be:
 1. Focus on practical household items and functional parts
 2. Include specific dimensions when relevant
 3. Be concise and practical
@@ -107,30 +105,30 @@ Assistant: "a cable management clip for 8mm cables"
 // Main server function handling incoming requests
 Deno.serve(async (req) => {
   // Handle CORS preflight requests
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
   }
 
   // Ensure only POST requests are accepted
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
   }
 
   const supabaseClient = getAnonSupabaseClient({
     global: {
-      headers: { Authorization: req.headers.get("Authorization") ?? "" },
+      headers: { Authorization: req.headers.get('Authorization') ?? '' },
     },
   });
 
-  const { data: userData, error: userError } = await supabaseClient.auth
-    .getUser();
+  const { data: userData, error: userError } =
+    await supabaseClient.auth.getUser();
 
   if (!userData.user) {
     return new Response(
-      JSON.stringify({ error: { message: "Unauthorized" } }),
+      JSON.stringify({ error: { message: 'Unauthorized' } }),
       {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     );
   }
@@ -140,7 +138,7 @@ Deno.serve(async (req) => {
       JSON.stringify({ error: { message: userError.message } }),
       {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     );
   }
@@ -149,13 +147,13 @@ Deno.serve(async (req) => {
   const {
     existingText,
     type,
-  }: { existingText?: string; type?: "parametric" | "creative" } = await req
+  }: { existingText?: string; type?: 'parametric' | 'creative' } = await req
     .json()
     .catch(() => ({}));
 
   try {
     if (!OPENROUTER_API_KEY.trim()) {
-      throw new Error("OPENROUTER_API_KEY is not configured");
+      throw new Error('OPENROUTER_API_KEY is not configured');
     }
 
     let systemPrompt: string;
@@ -163,9 +161,8 @@ Deno.serve(async (req) => {
 
     if (existingText && existingText.length > 0) {
       // Augment existing text
-      if (type === "parametric") {
-        systemPrompt =
-          `You are a technical writing assistant specialized in enhancing prompts for dimensional household objects and functional parts. When given an existing prompt, you should:
+      if (type === 'parametric') {
+        systemPrompt = `You are a technical writing assistant specialized in enhancing prompts for dimensional household objects and functional parts. When given an existing prompt, you should:
 
 1. Add specific dimensions (in mm) where practical and missing
 2. Include functional details like holes, slots, angles, or compartments
@@ -177,16 +174,14 @@ Deno.serve(async (req) => {
 
 The enhanced prompt should be more functional and dimensional while staying true to the user's vision.`;
 
-        userPrompt =
-          `Please enhance and expand this household object prompt to make it more functional, dimensional, and practical for everyday use:
+        userPrompt = `Please enhance and expand this household object prompt to make it more functional, dimensional, and practical for everyday use:
 
 ${JSON.stringify(existingText)}
 
 Return only the enhanced prompt text, no introductory phrases.`;
       } else {
         // Creative mode augmentation
-        systemPrompt =
-          `You are a creative writing assistant specialized in enhancing prompts for 3D game assets and 3D printable characters. When given an existing prompt, you should:
+        systemPrompt = `You are a creative writing assistant specialized in enhancing prompts for 3D game assets and 3D printable characters. When given an existing prompt, you should:
 
 1. Expand with more vivid artistic and organic details
 2. Add character traits, poses, or artistic styling
@@ -198,8 +193,7 @@ Return only the enhanced prompt text, no introductory phrases.`;
 
 The enhanced prompt should be more artistic and visually compelling while staying true to the user's vision.`;
 
-        userPrompt =
-          `Please enhance and expand this artistic 3D form prompt to make it more detailed, creative, and visually compelling:
+        userPrompt = `Please enhance and expand this artistic 3D form prompt to make it more detailed, creative, and visually compelling:
 
 ${JSON.stringify(existingText)}
 
@@ -207,12 +201,12 @@ Return only the enhanced prompt text, no introductory phrases.`;
       }
     } else {
       // Generate new prompt
-      if (type === "parametric") {
+      if (type === 'parametric') {
         systemPrompt = PARAMETRIC_SYSTEM_PROMPT;
-        userPrompt = "Generate a parametric modeling prompt.";
+        userPrompt = 'Generate a parametric modeling prompt.';
       } else {
         systemPrompt = PROMPT_SYSTEM_PROMPT;
-        userPrompt = "Generate a creative prompt for a 3D form.";
+        userPrompt = 'Generate a creative prompt for a 3D form.';
       }
     }
 
@@ -220,19 +214,19 @@ Return only the enhanced prompt text, no introductory phrases.`;
       model: PROMPT_GENERATOR_MODEL,
       max_completion_tokens: 200,
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ],
     };
 
     const requestPrompt = (body: typeof requestBody) =>
       fetch(OPENROUTER_API_URL, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://adam-cad.com",
-          "X-Title": "Adam CAD",
+          'HTTP-Referer': 'https://azurefilm.com',
+          'X-Title': 'AzureFilm Generator',
         },
         body: JSON.stringify(body),
       });
@@ -268,23 +262,23 @@ Return only the enhanced prompt text, no introductory phrases.`;
     const prompt = extractGeneratedText(completion);
 
     if (!prompt) {
-      throw new Error("No prompt generated");
+      throw new Error('No prompt generated');
     }
 
     return new Response(JSON.stringify({ prompt }), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error("Error generating prompt:", error);
+    console.error('Error generating prompt:', error);
 
     return new Response(
       JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error instanceof Error ? error.message : 'Unknown error',
       }),
       {
         status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     );
   }

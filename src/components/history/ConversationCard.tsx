@@ -109,7 +109,7 @@ export function ConversationCard({
                   Parametric
                 </div>
               ) : (
-                <div className="rounded-full bg-[#00A6FF29] px-2 py-1 text-xs font-normal text-[#38B6FF]">
+                <div className="rounded-full bg-[#0F5FF429] px-2 py-1 text-xs font-normal text-[#7AA7FF]">
                   Creative
                 </div>
               )}

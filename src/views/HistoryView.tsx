@@ -341,7 +341,7 @@ export function HistoryView() {
               placeholder="Search generations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="border-0 bg-adam-background-2 pl-6 text-base shadow-[inset_0_0_10px_0_rgba(0,0,0,0.32),0_0_0_2px_rgba(0,0,0,0)] ring-0 transition-shadow duration-300 ease-in-out hover:shadow-[inset_0_0_4px_0_rgba(0,0,0,0.16),0_0_0_2px_rgba(60,60,60,1)] focus:shadow-[inset_0_0_4px_0_rgba(0,0,0,0.16),0_0_0_2px_#00A6FF] focus:outline-none sm:text-sm"
+              className="border-0 bg-adam-background-2 pl-6 text-base shadow-[inset_0_0_10px_0_rgba(0,0,0,0.32),0_0_0_2px_rgba(0,0,0,0)] ring-0 transition-shadow duration-300 ease-in-out hover:shadow-[inset_0_0_4px_0_rgba(0,0,0,0.16),0_0_0_2px_rgba(60,60,60,1)] focus:shadow-[inset_0_0_4px_0_rgba(0,0,0,0.16),0_0_0_2px_#0F5FF4] focus:outline-none sm:text-sm"
             />
           </div>
         </div>
@@ -376,7 +376,7 @@ export function HistoryView() {
                       No conversations yet
                     </p>
                     <p className="mb-4 text-sm">
-                      Start a new chat to begin building CAD
+                      Start a new chat to begin generating 3D models
                     </p>
                     <Button onClick={() => navigate('/')}>
                       Start New Chat

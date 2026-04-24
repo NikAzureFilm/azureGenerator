@@ -281,7 +281,7 @@ export function ChatSection({
           <TextAreaChat
             stopGenerating={stopGenerating}
             onSubmit={onSendMessage}
-            placeholder="Keep iterating with Adam..."
+            placeholder="Keep iterating with AzureFilm Generator..."
             isLoading={isLoading}
             disabled={limitReached}
             type={conversation.type}

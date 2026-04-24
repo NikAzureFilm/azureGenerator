@@ -17,6 +17,7 @@ import { supabase } from '@/lib/supabase';
 import { useMutation } from '@tanstack/react-query';
 import { GoogleIcon } from '@/components/icons/CompanyIcons';
 import { validateRedirectUrl } from '@/lib/utils';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export function SignInView() {
   const [email, setEmail] = useState('');
@@ -264,13 +265,7 @@ export function SignInView() {
       <div className="w-full max-w-md">
         <div className="flex flex-col gap-4 rounded-lg bg-adam-bg-secondary-dark p-8 shadow-md">
           <div className="mb-4 flex flex-col items-center justify-center">
-            <div>
-              <img
-                src={`${import.meta.env.BASE_URL}/adam-logo-full.svg`}
-                alt="Adam Logo"
-                className="w-32"
-              />
-            </div>
+            <BrandLogo variant="wordmark" className="h-10 w-44" />
           </div>
           <div className="w-full">
             <Button

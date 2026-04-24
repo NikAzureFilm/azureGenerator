@@ -1,4 +1,6 @@
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { BrandLogo } from '@/components/BrandLogo';
+import { BRAND_CONTACT_EMAIL, BRAND_NAME } from '@/config/brand';
 
 export function TermsOfServiceView() {
   return (
@@ -6,11 +8,7 @@ export function TermsOfServiceView() {
       <div className="w-full max-w-4xl">
         <div className="rounded-lg bg-adam-bg-secondary-dark p-8 shadow-md">
           <div className="mb-8 flex flex-col items-center justify-center">
-            <img
-              src={`${import.meta.env.BASE_URL}/adam-logo.svg`}
-              alt="Adam Logo"
-              className="mb-4 h-8 w-8"
-            />
+            <BrandLogo variant="wordmark" className="mb-4 h-10 w-44" />
             <h1 className="text-center text-3xl font-semibold text-white">
               Terms of Service
             </h1>
@@ -26,8 +24,8 @@ export function TermsOfServiceView() {
                   1. Acceptance of Terms
                 </h2>
                 <p className="text-gray-400">
-                  By accessing and using AdamCAD ("the Service"), you agree to
-                  be bound by these Terms of Service. If you do not agree to
+                  By accessing and using {BRAND_NAME} ("the Service"), you agree
+                  to be bound by these Terms of Service. If you do not agree to
                   these terms, please do not use the Service.
                 </p>
               </section>
@@ -37,8 +35,8 @@ export function TermsOfServiceView() {
                   2. Description of Service
                 </h2>
                 <p className="text-gray-400">
-                  AdamCAD is a web-based 3D modeling platform that allows users
-                  to create, modify, and generate 3D models. The Service
+                  {BRAND_NAME} is a web-based 3D modeling platform that allows
+                  users to create, modify, and generate 3D models. The Service
                   includes all features, updates, and new releases as they
                   become available.
                 </p>
@@ -78,8 +76,8 @@ export function TermsOfServiceView() {
                     rights in content you create using the Service.
                   </p>
                   <p>
-                    4.2. By using the Service, you grant AdamCAD a worldwide
-                    license to host and display your content.
+                    4.2. By using the Service, you grant {BRAND_NAME} a
+                    worldwide license to host and display your content.
                   </p>
                   <p>
                     4.3. You are responsible for ensuring you have the necessary
@@ -156,9 +154,10 @@ export function TermsOfServiceView() {
                   9. Limitation of Liability
                 </h2>
                 <p className="text-gray-400">
-                  To the maximum extent permitted by law, AdamCAD shall not be
-                  liable for any indirect, incidental, special, consequential,
-                  or punitive damages resulting from your use of the Service.
+                  To the maximum extent permitted by law, {BRAND_NAME} shall not
+                  be liable for any indirect, incidental, special,
+                  consequential, or punitive damages resulting from your use of
+                  the Service.
                 </p>
               </section>
 
@@ -182,8 +181,8 @@ export function TermsOfServiceView() {
                   at:
                 </p>
                 <div className="mt-2 text-gray-400">
-                  <p>AdamCAD</p>
-                  <p>Email: hello@adamcad.com</p>
+                  <p>{BRAND_NAME}</p>
+                  <p>Email: {BRAND_CONTACT_EMAIL}</p>
                 </div>
               </section>
             </div>

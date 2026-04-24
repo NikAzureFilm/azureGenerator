@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { useMutation } from '@tanstack/react-query';
 import { GoogleIcon } from '@/components/icons/CompanyIcons';
 import { validateRedirectUrl } from '@/lib/utils';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export function SignUpEmailView() {
   const [name, setName] = useState('');
@@ -109,11 +110,7 @@ export function SignUpEmailView() {
       <div className="w-full max-w-md">
         <div className="rounded-lg bg-adam-bg-secondary-dark p-8 shadow-md">
           <div className="mb-4 flex flex-col items-center justify-center gap-2">
-            <img
-              src={`${import.meta.env.BASE_URL}/adam-logo.svg`}
-              alt="Adam Logo"
-              className="mr-2 h-8 w-8"
-            />
+            <BrandLogo variant="wordmark" className="h-9 w-40" />
             <h1 className="text-2xl font-semibold text-white">
               Create Account
             </h1>

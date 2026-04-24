@@ -29,7 +29,7 @@ export function ParametricEditorView() {
   const [currentOutput, setCurrentOutput] = useState<Blob | undefined>();
   // Brand fallback color used when OFF parsing fails and we drop back to
   // the single-color STL mesh.
-  const color = '#00A6FF';
+  const color = '#0F5FF4';
   const { cancelRequest } = useRequestCancellation();
   const isTabletOrMobile = useMediaQuery('(max-width: 1024px)');
 

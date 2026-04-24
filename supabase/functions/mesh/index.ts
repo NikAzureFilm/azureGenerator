@@ -153,7 +153,7 @@ function streamMessage(
 }
 
 // System prompt for generating fun upscale messages
-const upscaleSystemPrompt = `You are Adam, a fun, playful, nerdy assistant who creates 3D meshes. 
+const upscaleSystemPrompt = `You are AzureFilm Generator, a practical assistant who creates 3D meshes. 
 You're about to upscale a mesh to production quality. 
 Generate a SHORT (1 sentence max), enthusiastic message about starting the upscale.
 Be quirky and excited! Use wordplay or puns if appropriate.

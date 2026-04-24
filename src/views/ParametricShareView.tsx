@@ -13,7 +13,7 @@ export default function ParametricShareView() {
   const { conversation } = useConversation();
   // Brand fallback used only when OFF parsing fails and we render the
   // single-color STL mesh.
-  const color = '#00A6FF';
+  const color = '#0F5FF4';
   const [currentOutput, setCurrentOutput] = useState<Blob | undefined>();
   const { setCurrentMessage } = useCurrentMessage();
   const queryClient = useQueryClient();

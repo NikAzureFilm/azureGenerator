@@ -14,9 +14,11 @@ import {
 } from 'lucide-react';
 import { Streamdown } from 'streamdown';
 import { StreamingCodeBlock } from '@/components/chat/StreamingCodeBlock';
+import { BrandLogo } from '@/components/BrandLogo';
+import { BRAND_WEBSITE } from '@/config/brand';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
-import { Avatar, AvatarImage } from '@/components/ui/avatar';
+import { Avatar } from '@/components/ui/avatar';
 import {
   cn,
   CREATIVE_MODELS,
@@ -50,7 +52,7 @@ import { TreeNode } from '@shared/Tree';
 const linkParametricMode = (text: string) =>
   text.replace(
     /(```[\s\S]*?```|`[^`\n]*`)|parametric mode/gi,
-    (match, codeSpan) => codeSpan ?? `[${match}](https://adam.new/cadam)`,
+    (match, codeSpan) => codeSpan ?? `[${match}](${BRAND_WEBSITE})`,
   );
 
 interface AssistantMessageProps {
@@ -172,10 +174,7 @@ export function AssistantMessage({
         <div className="mr-2 mt-1">
           <Avatar className="h-9 w-9 border border-adam-neutral-700 bg-adam-neutral-950">
             <div style={{ padding: '0.6rem 0.5rem 0.5rem 0.55rem' }}>
-              <AvatarImage
-                src={`${import.meta.env.BASE_URL}/adam-logo.svg`}
-                alt="Adam"
-              />
+              <BrandLogo variant="mark" className="h-full w-full" />
             </div>
           </Avatar>
         </div>
@@ -217,7 +216,7 @@ export function AssistantMessage({
                   <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
                     <div className="flex h-full items-center justify-center gap-2">
                       <Box className="h-4 w-4 text-white" />
-                      <span>Building CAD...</span>
+                      <span>Generating model...</span>
                     </div>
                     <Loader2 className="h-4 w-4 animate-spin text-white" />
                   </div>
@@ -237,7 +236,7 @@ export function AssistantMessage({
                       // For a pending parametric build, once code starts
                       // streaming swap the generic status row for the live
                       // code. Before the first chunk we keep the original
-                      // "Building CAD..." row so the thinking state is clear.
+                      // status row so the thinking state is clear.
                       const streamingCode =
                         message.content.artifact?.code ?? '';
                       if (
@@ -280,7 +279,7 @@ export function AssistantMessage({
                                           'build_parametric_model' ||
                                         toolCall.name ===
                                           'apply_parameter_changes'
-                                      ? 'Building CAD...'
+                                      ? 'Generating model...'
                                       : `${toolCall.name}...`}
                               </span>
                             )}
@@ -294,7 +293,7 @@ export function AssistantMessage({
                                           'build_parametric_model' ||
                                         toolCall.name ===
                                           'apply_parameter_changes'
-                                      ? 'Failed to generate CAD'
+                                      ? 'Failed to generate model'
                                       : `${toolCall.name}...`}
                               </span>
                             )}
@@ -521,7 +520,7 @@ function ObjectButton({
   currentVersion: number;
 }) {
   const [isHovered, setIsHovered] = useState(false);
-  let title = 'Adam Object';
+  let title = 'Generated Object';
   if (message.content.artifact) {
     title = message.content.artifact.title;
   }
@@ -575,7 +574,8 @@ function FreeUserMessage() {
       <Link to="/subscription" className="text-adam-blue hover:underline">
         Upgrade
       </Link>{' '}
-      to a paid plan to experience all the features Adam has to offer.
+      to a paid plan to experience all the features AzureFilm Generator has to
+      offer.
     </span>
   );
 }

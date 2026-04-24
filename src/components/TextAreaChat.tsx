@@ -68,6 +68,7 @@ import {
 } from '@/utils/meshUtils';
 import { useMeshFiles } from '@/contexts/MeshFilesContext';
 import { AnimatePresence, motion } from 'framer-motion';
+import { BrandLogo } from '@/components/BrandLogo';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -197,12 +198,12 @@ const QuadsButton = ({
         showFullLabels && 'pr-[8px]',
       )}
     >
-      <QuadsPolysSvg color={isQuadsEnabled ? '#00A6FF' : '#D7D7D7'} />
+      <QuadsPolysSvg color={isQuadsEnabled ? '#0F5FF4' : '#D7D7D7'} />
       {showFullLabels && (
         <span
           className={cn(
             'hidden text-xs text-adam-text-primary lg:inline',
-            isQuadsEnabled && 'text-[#00A6FF]',
+            isQuadsEnabled && 'text-[#0F5FF4]',
           )}
         >
           Quads
@@ -320,12 +321,12 @@ const PolygonButton = ({
         isCustom && 'pr-[10px]',
       )}
     >
-      <PolygonCountSvg color={isCustom ? '#00A6FF' : '#D7D7D7'} />
+      <PolygonCountSvg color={isCustom ? '#0F5FF4' : '#D7D7D7'} />
       {showFullLabels && (
         <span
           className={cn(
             'hidden text-xs lg:inline',
-            isCustom ? 'text-[#00A6FF]' : 'text-adam-text-primary',
+            isCustom ? 'text-[#0F5FF4]' : 'text-adam-text-primary',
           )}
         >
           {isCustom ? formatPolygonCount(polygonCount) : 'Polygons'}
@@ -337,7 +338,7 @@ const PolygonButton = ({
           title={`Reset to default (${formatPolygonCount(defaultPolygonCount)})`}
         >
           <X
-            className="h-3.5 w-3.5 cursor-pointer text-[#00A6FF] transition-opacity hover:opacity-70"
+            className="h-3.5 w-3.5 cursor-pointer text-[#0F5FF4] transition-opacity hover:opacity-70"
             onClick={(e) => {
               e.stopPropagation();
               onReset();
@@ -471,7 +472,7 @@ function TextAreaChat({
   onSubmit,
   onFocus,
   isLoading = false,
-  placeholder = 'What can Adam help you build today?',
+  placeholder = 'What can AzureFilm Generator help you build today?',
   type,
   stopGenerating,
   disabled = false,
@@ -1373,8 +1374,8 @@ function TextAreaChat({
                 ? 'h-0 border-transparent bg-transparent opacity-0'
                 : isDragging
                   ? isDragHover
-                    ? 'h-20 border-[#00A6FF] bg-[rgba(0,166,255,0.24)] opacity-100' // Blue, full height
-                    : 'h-20 border-[#0077B7] bg-[rgba(0,166,255,0.12)] opacity-100' // Intermediate blue, full height
+                    ? 'h-20 border-[#0F5FF4] bg-[rgba(15,95,244,0.24)] opacity-100' // Blue, full height
+                    : 'h-20 border-[#0B4FD0] bg-[rgba(15,95,244,0.12)] opacity-100' // Intermediate blue, full height
                   : images.length > 0 || mesh !== null
                     ? 'h-20 border-adam-neutral-700 bg-adam-neutral-950 opacity-100'
                     : 'h-0 border-transparent bg-transparent opacity-0',
@@ -1413,13 +1414,13 @@ function TextAreaChat({
                 <Images
                   className="h-5 w-5"
                   style={{
-                    color: isDragHover ? '#00A6FF' : 'rgba(0, 166, 255, 0.85)',
+                    color: isDragHover ? '#0F5FF4' : 'rgba(15, 95, 244, 0.85)',
                   }}
                 />
                 <p
                   className="text-sm font-normal"
                   style={{
-                    color: isDragHover ? '#00A6FF' : 'rgba(0, 166, 255, 0.85)',
+                    color: isDragHover ? '#0F5FF4' : 'rgba(15, 95, 244, 0.85)',
                   }}
                 >
                   Add more images here
@@ -1437,13 +1438,13 @@ function TextAreaChat({
                 <Images
                   className="h-5 w-5"
                   style={{
-                    color: isDragHover ? '#00A6FF' : 'rgba(0, 166, 255, 0.85)',
+                    color: isDragHover ? '#0F5FF4' : 'rgba(15, 95, 244, 0.85)',
                   }}
                 />
                 <p
                   className="text-sm font-normal"
                   style={{
-                    color: isDragHover ? '#00A6FF' : 'rgba(0, 166, 255, 0.85)',
+                    color: isDragHover ? '#0F5FF4' : 'rgba(15, 95, 244, 0.85)',
                   }}
                 >
                   Drop images and 3D models here
@@ -1576,11 +1577,7 @@ function TextAreaChat({
         <div className="flex select-none items-center justify-between p-2">
           <Avatar className="h-8 w-8">
             <div className="h-full w-full p-1.5">
-              <img
-                src={`${import.meta.env.BASE_URL}/Adam-Logo.png`}
-                alt="Adam Logo"
-                className="h-full w-full object-contain"
-              />
+              <BrandLogo variant="mark" className="h-full w-full" />
             </div>
           </Avatar>
           <div className="relative grid w-full">

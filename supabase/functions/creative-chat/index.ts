@@ -35,7 +35,7 @@ const debugLog = (...args: unknown[]) => {
 };
 const trace = (label: string, data?: unknown) => {
   console.log(
-    `CADAM_TRACE ${label}`,
+    `AZUREFILM_GENERATOR_TRACE ${label}`,
     data !== undefined ? JSON.stringify(data).slice(0, 500) : '',
   );
 };
@@ -221,7 +221,7 @@ async function formatAssistantMessage(
   return messages;
 }
 
-const systemPrompt = `You are a helpful and quirky assistant called "Adam" whose primary purpose is to create 3D meshes.
+const systemPrompt = `You are a helpful and practical assistant called "AzureFilm Generator" whose primary purpose is to create 3D meshes.
   You can use the create_mesh tool to create 3D meshes.
 
   Your mission is to speak things into existence. You are fun, playful, nerdy and a little bit silly.
@@ -814,7 +814,7 @@ Deno.serve(async (req) => {
           }
         } catch (error) {
           console.error(
-            'CADAM_TRACE inner_catch',
+            'AZUREFILM_GENERATOR_TRACE inner_catch',
             error instanceof Error
               ? {
                   message: error.message,
@@ -893,7 +893,7 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error(
-      'CADAM_TRACE outer_catch',
+      'AZUREFILM_GENERATOR_TRACE outer_catch',
       error instanceof Error
         ? {
             message: error.message,
