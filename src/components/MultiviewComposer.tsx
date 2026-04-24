@@ -1,4 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useRef,
+  useState,
+} from 'react';
 import { ImagePlus, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
@@ -41,7 +47,7 @@ interface MultiviewComposerProps {
   conversationId: string;
   userId: string;
   slots: MultiviewSlotMap;
-  onSlotsChange: (next: MultiviewSlotMap) => void;
+  onSlotsChange: Dispatch<SetStateAction<MultiviewSlotMap>>;
   prompt: string;
   disabled?: boolean;
 }
@@ -62,15 +68,17 @@ export function MultiviewComposer({
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
-      const copy: MultiviewSlotMap = { ...slots };
-      if (next === undefined) {
-        delete copy[slot];
-      } else {
-        copy[slot] = next;
-      }
-      onSlotsChange(copy);
+      onSlotsChange((currentSlots) => {
+        const copy: MultiviewSlotMap = { ...currentSlots };
+        if (next === undefined) {
+          delete copy[slot];
+        } else {
+          copy[slot] = next;
+        }
+        return copy;
+      });
     },
-    [slots, onSlotsChange],
+    [onSlotsChange],
   );
 
   const handleUpload = useCallback(
