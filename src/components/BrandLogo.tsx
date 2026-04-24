@@ -13,7 +13,7 @@ export function BrandLogo({
   imgClassName,
 }: BrandLogoProps) {
   const src = brandAsset(
-    variant === 'mark' ? 'azurefilm-mark.png' : 'azurefilm-logo.png',
+    variant === 'mark' ? 'azurefilm-a-mark.png' : 'azurefilm-logo.png',
   );
 
   if (variant === 'mark') {
