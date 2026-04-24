@@ -3,6 +3,7 @@ import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.9';
 import { GoogleGenAI, Modality } from 'npm:@google/genai';
 import { fal } from 'npm:@fal-ai/client';
 import { reformatSignedUrl } from './messageUtils.ts';
+import { detectImageMediaType } from './imageMime.ts';
 
 const DEBUG_LOGS =
   Deno.env.get('ENVIRONMENT') === 'local' ||
@@ -137,10 +138,11 @@ export const generateImageWithGeminiMultiTurn = async (
     const imageArrayBuffer = await imageData.arrayBuffer();
     const buffer = Buffer.from(imageArrayBuffer);
     const base64Image = buffer.toString('base64');
+    const mimeType = detectImageMediaType(buffer, imageData.type);
 
     imagePart = {
       inlineData: {
-        mimeType: 'image/png',
+        mimeType,
         data: base64Image,
       },
     };
@@ -381,7 +383,12 @@ export const generateImageWithGeminiFlashEdit = async (
     }
 
     const imageArrayBuffer = await imageResponse.arrayBuffer();
-    const base64Image = Buffer.from(imageArrayBuffer).toString('base64');
+    const imageBuffer = Buffer.from(imageArrayBuffer);
+    const base64Image = imageBuffer.toString('base64');
+    const mimeType = detectImageMediaType(
+      imageBuffer,
+      imageResponse.headers.get('Content-Type'),
+    );
 
     const result = await googleGenAI.models.generateContent({
       model: 'gemini-3.1-flash-image-preview',
@@ -389,7 +396,7 @@ export const generateImageWithGeminiFlashEdit = async (
         { text: prompt },
         {
           inlineData: {
-            mimeType: 'image/png',
+            mimeType,
             data: base64Image,
           },
         },

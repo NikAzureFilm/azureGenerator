@@ -15,6 +15,7 @@ import {
   SupabaseClient,
 } from '../_shared/supabaseClient.ts';
 import { reformatSignedUrl } from '../_shared/messageUtils.ts';
+import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError, logApiError } from '../_shared/sentry.ts';
 import { Buffer } from 'node:buffer';
 
@@ -371,8 +372,12 @@ Deno.serve(async (req) => {
       }
 
       // Upload to FAL storage
+      const seedImageContentType = detectImageMediaType(
+        await imageBlob.arrayBuffer(),
+        imageBlob.type,
+      );
       const imageFile = new File([imageBlob], 'seed-image.png', {
-        type: 'image/png',
+        type: seedImageContentType,
       });
       const imageUrl = await fal.storage.upload(imageFile);
       debugLog('Uploaded seed image to FAL:', imageUrl);
@@ -899,7 +904,7 @@ async function submitMeshJob(
         const { error: imageUploadError } = await supabaseClient.storage
           .from('images')
           .upload(`${userId}/${conversationId}/${imageData.id}`, imageBytes, {
-            contentType: 'image/png',
+            contentType: detectImageMediaType(imageBytes),
           });
 
         if (imageUploadError) {
@@ -973,7 +978,7 @@ async function submitMeshJob(
         const { error: imageUploadError } = await supabaseClient.storage
           .from('images')
           .upload(`${userId}/${conversationId}/${imageData.id}`, imageBytes, {
-            contentType: 'image/png',
+            contentType: detectImageMediaType(imageBytes),
           });
 
         if (imageUploadError) {
@@ -1168,7 +1173,7 @@ async function submitMeshJob(
       const { error: imageUploadError } = await supabaseClient.storage
         .from('images')
         .upload(`${userId}/${conversationId}/${imageData.id}`, imageBytes, {
-          contentType: 'image/png',
+          contentType: detectImageMediaType(imageBytes),
         });
 
       if (imageUploadError) {
@@ -1739,7 +1744,7 @@ async function submitPreviewJob(
       const { error: imageUploadError } = await supabaseClient.storage
         .from('images')
         .upload(`${userId}/${conversationId}/${imageId}`, imageBytes, {
-          contentType: 'image/png',
+          contentType: detectImageMediaType(imageBytes),
         });
 
       if (imageUploadError) {

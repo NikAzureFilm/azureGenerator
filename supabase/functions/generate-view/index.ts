@@ -10,6 +10,7 @@ import {
   getAnonSupabaseClient,
 } from '../_shared/supabaseClient.ts';
 import { reformatSignedUrl } from '../_shared/messageUtils.ts';
+import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { Buffer } from 'node:buffer';
 
@@ -207,9 +208,10 @@ Deno.serve(async (req) => {
 
     const imageId = crypto.randomUUID();
     const path = `${userId}/${conversationId}/${imageId}`;
+    const contentType = detectImageMediaType(imageBytes);
     const { error: uploadError } = await serviceClient.storage
       .from('images')
-      .upload(path, imageBytes, { contentType: 'image/png' });
+      .upload(path, imageBytes, { contentType });
 
     if (uploadError) {
       throw new Error(`Upload failed: ${uploadError.message}`);

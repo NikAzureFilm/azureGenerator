@@ -1,6 +1,7 @@
 import { CoreMessage } from '@shared/types.ts';
 import { SupabaseClient } from './supabaseClient.ts';
 import { ContentBlockParam } from 'npm:@anthropic-ai/sdk/resources/messages';
+import { detectImageMediaType } from './imageMime.ts';
 
 /**
  * Reformats a Supabase signed URL to use the correct host (local ngrok or production)
@@ -86,8 +87,7 @@ export async function getBase64Images(
         }
         const base64 = btoa(binary);
 
-        // Determine media type from blob type or default to jpeg
-        const mediaType = data.type || 'image/jpeg';
+        const mediaType = detectImageMediaType(uint8Array, data.type);
 
         return {
           data: `data:${mediaType};base64,${base64}`,
