@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import vertexShader from '@/utils/points.vert?raw';
 import fragmentShader from '@/utils/points.frag?raw';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { adamLogoVertices } from '@/utils/adamLogoVertices';
+import { azurefilmMarkVertices } from '@/utils/azurefilmMarkVertices';
 import { CreativeModel } from '@shared/types';
 import { useLoadingProgress } from '@/hooks/useLoadingProgress';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -53,7 +53,7 @@ export function GlbPreview({
   const diffusionStartTimeRef = useRef<number | null>(null); // when mesh diffusion starts
   const mouseRef = useRef(new THREE.Vector2(0, 0)); // Track normalized mouse position
 
-  // Track Adam logo dissolve timing
+  // Track AzureFilm mark dissolve timing
   const logoDissolveStartTimeRef = useRef<number | null>(null);
   const logoDissolveCompletedRef = useRef<boolean>(false);
 
@@ -233,21 +233,21 @@ export function GlbPreview({
     meshLoadedRef.current = false;
     pendingMeshVerticesRef.current = null;
 
-    const createAdamLogoPoints = () => {
+    const createBrandMarkPoints = () => {
       const scene = sceneRef.current;
       if (!scene) {
         return;
       }
 
-      const vertices: number[] = adamLogoVertices;
+      const vertices: number[] = azurefilmMarkVertices;
 
       createPoints(vertices, scene, 1);
     };
 
-    // Create Adam-logo points immediately (scene is ready now)
-    createAdamLogoPoints();
+    // Create AzureFilm mark points immediately (scene is ready now)
+    createBrandMarkPoints();
 
-    // If no glbBlob, just keep the Adam logo indefinitely
+    // If no glbBlob, just keep the AzureFilm mark indefinitely
     if (!glbBlob) {
       return () => {
         if (pointsRef.current) {
@@ -336,7 +336,7 @@ export function GlbPreview({
 
         let progress: number;
 
-        // 1. Run the Adam-logo dissolve (triggered only when glbBlob exists)
+        // 1. Run the AzureFilm mark dissolve (triggered only when glbBlob exists)
         if (
           !logoDissolveCompletedRef.current &&
           logoDissolveStartTimeRef.current
@@ -348,7 +348,7 @@ export function GlbPreview({
           );
           progress = 1 - dissolveProgress; // Reverse: 1 → 0
 
-          // Before dissolve starts, show adam logo
+          // Before dissolve starts, show the brand mark
           if (!pendingMeshVerticesRef.current) {
             progress = 1;
           }
