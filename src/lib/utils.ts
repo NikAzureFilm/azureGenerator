@@ -255,8 +255,8 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsVision: true,
   },
   {
-    id: 'openai/gpt-5.4',
-    name: 'GPT-5.4',
+    id: 'openai/gpt-5.5',
+    name: 'GPT-5.5',
     description: 'Most powerful OpenAI model with adaptive reasoning',
     provider: 'OpenAI',
     supportsTools: true,

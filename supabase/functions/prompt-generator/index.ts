@@ -4,10 +4,49 @@
 
 // Setup type definitions for built-in Supabase Runtime APIs
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { Anthropic } from 'npm:@anthropic-ai/sdk';
 import { corsHeaders } from '../_shared/cors.ts';
 import 'jsr:@std/dotenv/load';
 import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
+
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const PROMPT_GENERATOR_MODEL = 'openai/gpt-5.5';
+
+type OpenRouterMessageContent =
+  | string
+  | Array<{
+      type?: string;
+      text?: string;
+    }>;
+
+interface OpenRouterChatCompletion {
+  choices?: Array<{
+    message?: {
+      content?: OpenRouterMessageContent;
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
+function extractGeneratedText(response: OpenRouterChatCompletion): string {
+  const content = response.choices?.[0]?.message?.content;
+
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (part.type === 'text' || !part.type ? part.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  return '';
+}
 
 const PROMPT_SYSTEM_PROMPT = `You are a helpful assistant that generates creative prompts for organic 3D forms and artistic objects. Your prompts should be:
 1. Focus on organic shapes, characters, figurines, and artistic forms
@@ -104,12 +143,11 @@ Deno.serve(async (req) => {
     .json()
     .catch(() => ({}));
 
-  // Initialize Anthropic client for AI interactions
-  const anthropic = new Anthropic({
-    apiKey: Deno.env.get('ANTHROPIC_API_KEY') ?? '',
-  });
-
   try {
+    if (!OPENROUTER_API_KEY.trim()) {
+      throw new Error('OPENROUTER_API_KEY is not configured');
+    }
+
     let systemPrompt: string;
     let userPrompt: string;
 
@@ -164,26 +202,41 @@ Return only the enhanced prompt text, no introductory phrases.`;
       }
     }
 
-    // Configure Claude API call
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 200,
-      system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: userPrompt,
-        },
-      ],
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://adam-cad.com',
+        'X-Title': 'Adam CAD',
+      },
+      body: JSON.stringify({
+        model: PROMPT_GENERATOR_MODEL,
+        max_tokens: 200,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
     });
 
-    // Extract prompt from response
-    let prompt = '';
-    if (Array.isArray(response.content) && response.content.length > 0) {
-      const lastContent = response.content[response.content.length - 1];
-      if (lastContent.type === 'text') {
-        prompt = lastContent.text.trim();
-      }
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `OpenRouter API error: ${response.statusText} (${response.status}) - ${errorText}`,
+      );
+    }
+
+    const completion = (await response.json()) as OpenRouterChatCompletion;
+
+    if (completion.error?.message) {
+      throw new Error(completion.error.message);
+    }
+
+    const prompt = extractGeneratedText(completion);
+
+    if (!prompt) {
+      throw new Error('No prompt generated');
     }
 
     return new Response(JSON.stringify({ prompt }), {
@@ -191,7 +244,7 @@ Return only the enhanced prompt text, no introductory phrases.`;
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('Error calling Claude:', error);
+    console.error('Error generating prompt:', error);
 
     return new Response(
       JSON.stringify({

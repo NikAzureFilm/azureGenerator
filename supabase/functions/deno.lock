@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/dotenv@*": "0.225.6",
     "jsr:@supabase/functions-js@*": "2.5.0",
     "npm:@anthropic-ai/sdk@*": "0.71.2",
     "npm:@sentry/deno@*": "10.41.0",
@@ -8,6 +9,9 @@
     "npm:stripe@17.5.0": "17.5.0"
   },
   "jsr": {
+    "@std/dotenv@0.225.6": {
+      "integrity": "1d6f9db72f565bd26790fa034c26e45ecb260b5245417be76c2279e5734c421b"
+    },
     "@supabase/functions-js@2.5.0": {
       "integrity": "c48e3fc5da1510ce6dab34af3fc49cd637ea7b721d92faffd0545cbdcc548430",
       "dependencies": [
