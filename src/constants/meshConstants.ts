@@ -82,6 +82,18 @@ export const MODEL_CONFIGS: Record<CreativeModel, ModelConfig> = {
     showNormalIntensity: true,
     maxPolygonCount: POLYGON_COUNTS.ULTRA_MAX, // Meshy v6 limit is 300k
   },
+  multiview: {
+    brightness: MATERIAL_DEFAULTS.BRIGHTNESS,
+    roughness: MATERIAL_DEFAULTS.ROUGHNESS,
+    normalIntensity: MATERIAL_DEFAULTS.NORMAL_INTENSITY,
+    polygonCount: {
+      quads: POLYGON_COUNTS.STANDARD_DEFAULT,
+      polys: POLYGON_COUNTS.STANDARD_DEFAULT,
+    },
+    showPolygonControls: false,
+    showNormalIntensity: true,
+    maxPolygonCount: POLYGON_COUNTS.STANDARD_MAX,
+  },
 };
 
 // Helper functions for model configuration

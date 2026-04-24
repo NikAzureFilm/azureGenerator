@@ -293,6 +293,13 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     description: 'Faster, with simpler, textureless output.',
     timeEstimate: '60-90 seconds',
   },
+  {
+    id: 'multiview',
+    name: 'Multiview',
+    description:
+      'Four labeled views (front/left/back/right) for precise geometry.',
+    timeEstimate: '~60 seconds',
+  },
 ];
 
 export function getBackupModel({

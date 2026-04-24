@@ -239,7 +239,9 @@ const systemPrompt = `You are a helpful and quirky assistant called "Adam" whose
   but you should not change the users intent.
 
   You may ask follow up questions to clarify the users intent,
-  but you should not ask more than 2 follow up questions.`;
+  but you should not ask more than 2 follow up questions.
+
+  If the user's message includes multiview slot images (front/left/back/right), call create_mesh immediately — the mesh function will read the labeled views from the message itself. Do not ask follow-up questions in that case.`;
 
 const tools: Anthropic.Messages.ToolUnion[] = [
   {
@@ -709,6 +711,7 @@ Deno.serve(async (req) => {
 
                   const meshTopology = newMessage?.content?.meshTopology;
                   const polygonCount = newMessage?.content?.polygonCount;
+                  const multiviewImages = newMessage?.content?.multiviewImages;
 
                   const fallbackText =
                     toolInput.text ?? newMessage?.content?.text;
@@ -723,6 +726,7 @@ Deno.serve(async (req) => {
                     model: model,
                     ...(meshTopology && { meshTopology }),
                     ...(polygonCount && { polygonCount }),
+                    ...(multiviewImages && { multiviewImages }),
                   };
 
                   debugLog('=== CREATIVE-CHAT: CALLING MESH ENDPOINT ===');

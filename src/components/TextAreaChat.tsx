@@ -21,6 +21,14 @@ import {
 import { cn, CREATIVE_MODELS, PARAMETRIC_MODELS } from '@/lib/utils';
 import { Content, CreativeModel, MeshFileType, Model } from '@shared/types';
 import {
+  MultiviewComposer,
+  MultiviewSlotMap,
+  slotsToMultiviewImages,
+  hasFrontMultiviewSlot,
+  hasAnyMultiviewSlot,
+  anyMultiviewBusy,
+} from '@/components/MultiviewComposer';
+import {
   shouldShowPolygonControls,
   getModelDefaultPolygonCount,
   getMaxPolygonCount,
@@ -497,6 +505,10 @@ function TextAreaChat({
   );
   const [meshFilename, setMeshFilename] = useState<string | null>(null);
 
+  // Multiview 4-slot state (only used when model === 'multiview')
+  const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
+  const isMultiview = type === 'creative' && model === 'multiview';
+
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {
     // Default to 'polys' (quads disabled by default)
@@ -665,6 +677,11 @@ function TextAreaChat({
   // Helper to decide which placeholder we're targeting right now
   const computeTargetPlaceholder = useCallback(() => {
     if (type === 'creative') {
+      if (isMultiview) {
+        return hasAnyMultiviewSlot(multiviewSlots)
+          ? 'Describe tweaks or leave blank to build...'
+          : 'Describe the object, then fill the 4 views...';
+      }
       if (images.length > 0) return 'Edit uploaded image...';
       // Model-specific placeholders
       if (model === 'quality') return 'Make a rough 3D asset...';
@@ -673,7 +690,7 @@ function TextAreaChat({
       return 'Speak anything into existence...';
     }
     return placeholder;
-  }, [type, images.length, placeholder, model]);
+  }, [type, images.length, placeholder, model, isMultiview, multiviewSlots]);
 
   // The text currently shown in the placeholder (animates)
   const [placeholderAnim, setPlaceholderAnim] = useState('');
@@ -717,14 +734,37 @@ function TextAreaChat({
   ]);
 
   useEffect(() => {
-    if (type === 'creative' && images.length > 1) {
+    // Multiview manages its own 4-slot state, don't force-switch models on it.
+    if (type === 'creative' && !isMultiview && images.length > 1) {
       if (model !== 'quality') {
         setModel('quality');
       }
     }
-  }, [images, setModel, model, type]);
+  }, [images, setModel, model, type, isMultiview]);
 
   const handleSubmit = async () => {
+    if (isMultiview) {
+      // Multiview submit requires at least the front view (Tripo requirement)
+      // and no slot still uploading/generating.
+      if (
+        isLoading ||
+        !hasFrontMultiviewSlot(multiviewSlots) ||
+        anyMultiviewBusy(multiviewSlots)
+      ) {
+        return;
+      }
+      const multiviewImages = slotsToMultiviewImages(multiviewSlots);
+      const content: Content = {
+        ...(input.trim() !== '' && { text: input.trim() }),
+        model,
+        multiviewImages,
+      };
+      onSubmit(content);
+      setInput('');
+      setMultiviewSlots({});
+      return;
+    }
+
     // Debug the early return conditions
     const hasNoContent = images.length === 0 && !input?.trim() && !mesh;
     const hasUploadingImages = images.some((img) => img.isUploading);
@@ -1084,6 +1124,12 @@ function TextAreaChat({
       shouldAddItems = true;
     }
 
+    // In multiview mode the flat image list is unused — each view has its own
+    // slot. Ignore general-area drops so users don't accumulate orphaned files.
+    if (isMultiview) {
+      shouldAddItems = false;
+    }
+
     if (shouldAddItems && droppedFiles && droppedFiles.length > 0) {
       await addItems(droppedFiles);
     }
@@ -1286,22 +1332,42 @@ function TextAreaChat({
         textareaRef.current?.focus();
       }}
     >
+      {isMultiview ? (
+        <div
+          className={cn(
+            'mx-auto w-[95%] min-w-52 overflow-hidden rounded-t-xl border-x-2 border-t-2',
+            'border-adam-neutral-700 bg-adam-neutral-950',
+            disabled && 'pointer-events-none opacity-50',
+          )}
+        >
+          <MultiviewComposer
+            conversationId={conversation.id}
+            userId={conversation.user_id}
+            slots={multiviewSlots}
+            onSlotsChange={setMultiviewSlots}
+            prompt={input}
+            disabled={disabled || isLoading}
+          />
+        </div>
+      ) : null}
       <div
         ref={topDropZoneRef}
         className={cn(
           'mx-auto flex w-[95%] min-w-52 overflow-hidden rounded-t-xl border-x-2 border-t-2',
           'transition-[height,opacity,border-color,background-color] duration-200 ease-in-out',
-          disabled
+          isMultiview
             ? 'h-0 border-transparent bg-transparent opacity-0'
-            : !isDragging && images.length === 0 && mesh === null
+            : disabled
               ? 'h-0 border-transparent bg-transparent opacity-0'
-              : isDragging
-                ? isDragHover
-                  ? 'h-20 border-[#00A6FF] bg-[rgba(0,166,255,0.24)] opacity-100' // Blue, full height
-                  : 'h-20 border-[#0077B7] bg-[rgba(0,166,255,0.12)] opacity-100' // Intermediate blue, full height
-                : images.length > 0 || mesh !== null
-                  ? 'h-20 border-adam-neutral-700 bg-adam-neutral-950 opacity-100'
-                  : 'h-0 border-transparent bg-transparent opacity-0',
+              : !isDragging && images.length === 0 && mesh === null
+                ? 'h-0 border-transparent bg-transparent opacity-0'
+                : isDragging
+                  ? isDragHover
+                    ? 'h-20 border-[#00A6FF] bg-[rgba(0,166,255,0.24)] opacity-100' // Blue, full height
+                    : 'h-20 border-[#0077B7] bg-[rgba(0,166,255,0.12)] opacity-100' // Intermediate blue, full height
+                  : images.length > 0 || mesh !== null
+                    ? 'h-20 border-adam-neutral-700 bg-adam-neutral-950 opacity-100'
+                    : 'h-0 border-transparent bg-transparent opacity-0',
         )}
         onDragEnter={(event) => {
           if (isDragging) {
@@ -1566,36 +1632,38 @@ function TextAreaChat({
         </div>
         <div className="flex items-center justify-between border-t border-[#2a2a2a] p-3">
           <div className="flex items-center gap-1">
-            <div
-              className={cn(
-                'transition-all duration-300 ease-out',
-                'pointer-events-auto scale-100 opacity-100',
-              )}
-            >
-              <Button
-                variant="outline"
-                className="flex h-8 w-8 items-center gap-2 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = `${VALID_IMAGE_FORMATS.join(', ')}, ${
-                    type === 'creative'
-                      ? SUPPORTED_MESH_EXTENSIONS.join(', ')
-                      : '.stl'
-                  }`;
-                  input.onchange = (event) => {
-                    handleItemsChange(
-                      event as unknown as ChangeEvent<HTMLInputElement>,
-                    );
-                  };
-                  input.click();
-                }}
-                disabled={disabled}
+            {!isMultiview && (
+              <div
+                className={cn(
+                  'transition-all duration-300 ease-out',
+                  'pointer-events-auto scale-100 opacity-100',
+                )}
               >
-                <ImagePlus className="h-5 w-5" />
-              </Button>
-            </div>
+                <Button
+                  variant="outline"
+                  className="flex h-8 w-8 items-center gap-2 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = `${VALID_IMAGE_FORMATS.join(', ')}, ${
+                      type === 'creative'
+                        ? SUPPORTED_MESH_EXTENSIONS.join(', ')
+                        : '.stl'
+                    }`;
+                    input.onchange = (event) => {
+                      handleItemsChange(
+                        event as unknown as ChangeEvent<HTMLInputElement>,
+                      );
+                    };
+                    input.click();
+                  }}
+                  disabled={disabled}
+                >
+                  <ImagePlus className="h-5 w-5" />
+                </Button>
+              </div>
+            )}
 
             {/* Creative mode toggle button */}
             {onTypeChange && (
@@ -1687,13 +1755,18 @@ function TextAreaChat({
                 }}
                 className={cn(
                   'flex h-8 w-8 transform items-center justify-center rounded-lg bg-adam-neutral-700 p-1 text-white transition-all duration-300 hover:scale-105 hover:bg-adam-blue/90 disabled:opacity-50 disabled:hover:scale-100 disabled:hover:bg-adam-blue',
-                  images.some((img) => img.isUploading) && 'opacity-50',
+                  (images.some((img) => img.isUploading) ||
+                    anyMultiviewBusy(multiviewSlots)) &&
+                    'opacity-50',
                 )}
                 disabled={
-                  (images.length === 0 && !input?.trim()) ||
                   isLoading ||
-                  images.some((img) => img.isUploading) ||
-                  disabled
+                  disabled ||
+                  (isMultiview
+                    ? !hasFrontMultiviewSlot(multiviewSlots) ||
+                      anyMultiviewBusy(multiviewSlots)
+                    : (images.length === 0 && !input?.trim()) ||
+                      images.some((img) => img.isUploading))
                 }
               >
                 <ArrowUp className="h-5 w-5" />

@@ -9,7 +9,7 @@ import {
   generateImageWithGeminiFlash,
   generateImageWithGeminiFlashEdit,
 } from '../_shared/imageGen.ts';
-import { Model, MeshFileType } from '@shared/types.ts';
+import { Model, MeshFileType, MultiviewImages } from '@shared/types.ts';
 import {
   getServiceRoleSupabaseClient,
   SupabaseClient,
@@ -297,6 +297,7 @@ Deno.serve(async (req) => {
       action,
       meshId: upscaleMeshId,
       parentMessageId,
+      multiviewImages,
     }: {
       images?: string[];
       mesh?: string;
@@ -309,6 +310,7 @@ Deno.serve(async (req) => {
       action?: 'upscale';
       meshId?: string;
       parentMessageId?: string;
+      multiviewImages?: MultiviewImages;
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
@@ -573,10 +575,16 @@ Deno.serve(async (req) => {
       );
     }
 
+    const hasMultiviewSlots =
+      model === 'multiview' &&
+      multiviewImages &&
+      Object.values(multiviewImages).some((v) => typeof v === 'string' && v);
+
     if (
       (!images || !Array.isArray(images) || images.length === 0) &&
       !text &&
-      !mesh
+      !mesh &&
+      !hasMultiviewSlots
     ) {
       logError(new Error('Images or text not found'), {
         functionName: 'mesh',
@@ -588,6 +596,7 @@ Deno.serve(async (req) => {
           imagesLength: images?.length,
           hasText: !!text,
           hasMesh: !!mesh,
+          hasMultiviewSlots,
         },
       });
       return new Response(
@@ -624,6 +633,7 @@ Deno.serve(async (req) => {
           ...(images && images.length > 0 && { images: images }),
           ...(mesh && { mesh: mesh }),
           ...(model && { model: model }),
+          ...(multiviewImages && { multiviewImages }),
         },
       })
       .select()
@@ -650,8 +660,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Skip Flux-based preview for quality model - use Gemini image instead (via createHunyuanPreview)
-    if (model !== 'quality') {
+    // Skip Flux-based preview for quality and multiview models — they produce
+    // their own Hunyuan preview from an already-prepared seed image.
+    if (model !== 'quality' && model !== 'multiview') {
       EdgeRuntime.waitUntil(
         submitPreviewJob(
           supabaseClient,
@@ -683,6 +694,7 @@ Deno.serve(async (req) => {
         model ?? 'quality',
         meshTopology,
         polygonCount,
+        multiviewImages,
       ),
     );
 
@@ -728,6 +740,7 @@ async function submitMeshJob(
   model: Model,
   meshTopology: 'quads' | 'polys' | undefined,
   polygonCount: number | undefined,
+  multiviewImages: MultiviewImages | undefined,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
@@ -813,6 +826,9 @@ async function submitMeshJob(
     if (model === 'ultra') {
       // Ultra model handles image generation differently, skip to model-specific logic
       debugLog('Skipping initial image generation for ultra model');
+    } else if (model === 'multiview') {
+      // Multiview uses pre-labeled slot images supplied by the user
+      debugLog('Skipping initial image generation for multiview model');
     } else if (text && text.trim() !== '') {
       // Generate images for standard and textureless models
       if (model === 'quality') {
@@ -1011,9 +1027,13 @@ async function submitMeshJob(
       }
     }
 
-    // Only validate imageInputs for non-ultra models
-    // Ultra generates its own images in its specific block
-    if (imageInputs.length === 0 && model !== 'ultra') {
+    // Only validate imageInputs for models that rely on the shared image pipeline.
+    // Ultra generates its own image; multiview reads pre-labeled slots directly.
+    if (
+      imageInputs.length === 0 &&
+      model !== 'ultra' &&
+      model !== 'multiview'
+    ) {
       throw new Error('No valid images for 3D generation');
     }
 
@@ -1210,6 +1230,91 @@ async function submitMeshJob(
       await createHunyuanPreview(
         baseImageUrl,
         'ultra meshy v6 preview',
+        userId,
+        conversationId,
+        meshId,
+        supabaseHost,
+      );
+    } else if (model === 'multiview') {
+      debugLog('=== ENTERING MULTIVIEW MODEL PATH (TRIPO H3.1 MULTIVIEW) ===');
+
+      // Resolve each populated slot to a signed URL, preserving
+      // [front, left, back, right] order as required by the Tripo API.
+      const slotOrder = ['front', 'left', 'back', 'right'] as const;
+      const slotUrls: string[] = [];
+      for (const slot of slotOrder) {
+        const imageId = multiviewImages?.[slot];
+        if (!imageId) continue;
+        const signed = await getSignedImageUrl(
+          supabaseClient,
+          userId,
+          conversationId,
+          imageId,
+        );
+        slotUrls.push(signed);
+      }
+
+      if (slotUrls.length === 0) {
+        throw new Error('No multiview slots provided');
+      }
+
+      const frontUrl = multiviewImages?.front
+        ? await getSignedImageUrl(
+            supabaseClient,
+            userId,
+            conversationId,
+            multiviewImages.front,
+          )
+        : slotUrls[0];
+
+      const tripoMultiviewInput: {
+        image_urls: string[];
+        pbr: boolean;
+        texture: boolean;
+        quad?: boolean;
+        face_limit?: number;
+      } = {
+        image_urls: slotUrls,
+        pbr: true,
+        texture: true,
+      };
+
+      if (meshTopology === 'quads') {
+        tripoMultiviewInput.quad = true;
+      }
+      if (polygonCount !== undefined) {
+        tripoMultiviewInput.face_limit = polygonCount;
+      }
+
+      debugLog('Submitting to Tripo H3.1 multiview', {
+        views: slotUrls.length,
+        quad: tripoMultiviewInput.quad,
+        face_limit: tripoMultiviewInput.face_limit,
+      });
+
+      try {
+        await fal.queue.submit('tripo3d/h3.1/multiview-to-3d', {
+          input: tripoMultiviewInput,
+          webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
+        });
+        debugLog('Successfully submitted to Tripo H3.1 multiview');
+      } catch (submitError) {
+        const errObj = submitError as { body?: unknown; status?: number };
+        console.error('Tripo H3.1 multiview submit failed:', {
+          message:
+            submitError instanceof Error
+              ? submitError.message
+              : String(submitError),
+          status: errObj?.status,
+          body: errObj?.body,
+          input: tripoMultiviewInput,
+        });
+        throw submitError;
+      }
+
+      await createHunyuanPreview(
+        frontUrl,
+        'multiview tripo h3.1 front preview',
         userId,
         conversationId,
         meshId,

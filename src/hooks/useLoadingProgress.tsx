@@ -7,11 +7,13 @@ export const TIMING_CONFIG = {
     fast: { expected: 35000, min: 15000, max: 45000 }, // ~35s for textureless image
     quality: { expected: 120000, min: 60000, max: 150000 }, // ~2 min for standard image
     ultra: { expected: 150000, min: 90000, max: 200000 }, // ~2.5 min for ultra image (multiview)
+    multiview: { expected: 60000, min: 40000, max: 90000 }, // Per-slot NB2 generation
   },
   mesh: {
     fast: { expected: 75000, min: 60000, max: 90000 }, // Total: 60-90s matches UI
     quality: { expected: 45000, min: 30000, max: 60000 }, // Total: ~45s for SAM 3D
     ultra: { expected: 270000, min: 240000, max: 300000 }, // Total: 4-5 min matches UI
+    multiview: { expected: 75000, min: 45000, max: 120000 }, // Tripo H3.1 multiview
   },
 };
 

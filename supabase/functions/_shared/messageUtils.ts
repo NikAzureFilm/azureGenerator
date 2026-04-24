@@ -316,6 +316,58 @@ export async function formatCreativeUserMessage(
     }
   }
 
+  // Add multiview slot images inline so the model sees each labeled view
+  // (front/left/back/right) and knows to invoke create_mesh with them.
+  const multiviewImages = message.content.multiviewImages;
+  if (multiviewImages && Object.values(multiviewImages).some((v) => !!v)) {
+    const slotOrder: Array<'front' | 'left' | 'back' | 'right'> = [
+      'front',
+      'left',
+      'back',
+      'right',
+    ];
+    const populatedSlots = slotOrder.filter((slot) => !!multiviewImages[slot]);
+    const slotIds = populatedSlots.map(
+      (slot) => multiviewImages[slot] as string,
+    );
+    const slotPaths = slotIds.map(
+      (imageId) => `${userId}/${conversationId}/${imageId}`,
+    );
+
+    const base64SlotImages = await getBase64Images(
+      supabaseClient,
+      'images',
+      slotPaths,
+    );
+
+    parts.push({
+      type: 'text',
+      text: `The user provided a multiview set. Call create_mesh with model=multiview using these labeled views (${populatedSlots.join(', ')}). Image IDs in order: ${slotIds.join(', ')}.`,
+    });
+
+    if (base64SlotImages.length === populatedSlots.length) {
+      populatedSlots.forEach((slot, idx) => {
+        const img = base64SlotImages[idx];
+        parts.push({
+          type: 'text',
+          text: `${slot} view (id ${slotIds[idx]}):`,
+        });
+        parts.push({
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: img.mediaType as
+              | 'image/jpeg'
+              | 'image/png'
+              | 'image/gif'
+              | 'image/webp',
+            data: img.data.split(',')[1],
+          },
+        });
+      });
+    }
+  }
+
   // Add mesh preview if it exists (inline base64, same reasoning as above)
   if (message.content.mesh) {
     const base64Preview = await getBase64Images(supabaseClient, 'images', [
