@@ -25,8 +25,8 @@ function optimizeVertexCount(originalCount: number): number {
 }
 
 // Constants
-const POINT_SIZE = 0.2;
-const POINT_SIZE_MOBILE = 0.1;
+const POINT_SIZE = 0.15;
+const POINT_SIZE_MOBILE = 0.085;
 const LOGO_DISSOLVE_DURATION = 2000;
 const DIFFUSION_DURATION = 3000;
 
