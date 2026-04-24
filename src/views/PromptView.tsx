@@ -221,7 +221,7 @@ export function PromptView() {
             <BrandLogo
               variant="wordmark"
               className={cn(
-                'mb-6 h-10 w-64 md:h-12 md:w-72',
+                'mb-6 h-10 w-44 md:h-12 md:w-52',
                 'motion-safe:transition-opacity motion-safe:duration-1000 motion-safe:ease-out',
                 isLoaded ? 'opacity-100' : 'opacity-0',
               )}

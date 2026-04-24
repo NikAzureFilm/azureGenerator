@@ -143,7 +143,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                 <div className="flex w-full items-center">
                   <BrandLogo
                     variant="wordmark"
-                    className="mx-auto h-8 w-[214px]"
+                    className="mx-auto h-8 w-[168px]"
                   />
                 </div>
               ) : (
