@@ -1,7 +1,28 @@
 {
   "name": "azurefilm-generator",
-  "private": true,
   "version": "0.0.0",
+  "description": "AzureFilm Generator is a text-to-CAD web application. Generate parametric 3D models from natural language and images, export STL/SCAD, and run OpenSCAD WebAssembly in your browser.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NikAzureFilm/azureGenerator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NikAzureFilm/azureGenerator/issues"
+  },
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "cad",
+    "text-to-cad",
+    "openscad",
+    "wasm",
+    "3d",
+    "parametric",
+    "ai",
+    "llm",
+    "three-js",
+    "react"
+  ],
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
