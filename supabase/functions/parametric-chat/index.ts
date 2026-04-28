@@ -24,6 +24,11 @@ initSentry();
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'openai/gpt-5.4';
+const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'openai/gpt-5.4';
+const CODE_GENERATION_FALLBACK_MODELS = [
+  'openai/gpt-5.4',
+  'anthropic/claude-haiku-4.5',
+];
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -262,13 +267,49 @@ function openRouterHeaders(): Record<string, string> {
 }
 
 function getOpenRouterFallbackModel(model: string): string | null {
-  return model === 'openai/gpt-5.5' ? OPENROUTER_GPT_5_5_FALLBACK_MODEL : null;
+  if (model === 'openai/gpt-5.5') {
+    return OPENROUTER_GPT_5_5_FALLBACK_MODEL;
+  }
+
+  if (model === 'deepseek/deepseek-v4-pro') {
+    return OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL;
+  }
+
+  return null;
+}
+
+function getCodeGenerationModelCandidates(model: string): string[] {
+  const candidates = model.startsWith('google/gemini-3.1-pro')
+    ? [...CODE_GENERATION_FALLBACK_MODELS]
+    : [model, ...CODE_GENERATION_FALLBACK_MODELS];
+
+  return [...new Set(candidates)];
 }
 
 function isInvalidModelResponse(errorText: string, model: string): boolean {
   return (
     errorText.toLowerCase().includes('not a valid model id') &&
     errorText.includes(model)
+  );
+}
+
+function isFallbackEligibleResponse(
+  response: Response,
+  errorText: string,
+  model: string,
+): boolean {
+  if (isInvalidModelResponse(errorText, model)) return true;
+
+  if (model !== 'deepseek/deepseek-v4-pro') return false;
+
+  const normalized = errorText.toLowerCase();
+  return (
+    response.status === 429 ||
+    (response.status === 404 &&
+      (normalized.includes('no endpoints available') ||
+        normalized.includes('no allowed providers'))) ||
+    normalized.includes('provider returned error') ||
+    normalized.includes('temporarily rate-limited upstream')
   );
 }
 
@@ -287,9 +328,12 @@ async function fetchOpenRouterChatCompletion(
 
   const errorText = await response.text();
   const fallbackModel = getOpenRouterFallbackModel(requestBody.model);
-  if (fallbackModel && isInvalidModelResponse(errorText, requestBody.model)) {
+  if (
+    fallbackModel &&
+    isFallbackEligibleResponse(response, errorText, requestBody.model)
+  ) {
     console.warn(
-      `${requestBody.model} is not available on OpenRouter; retrying with ${fallbackModel}`,
+      `${requestBody.model} failed on OpenRouter (${response.status}); retrying with ${fallbackModel}`,
     );
     const fallbackRequestBody = {
       ...requestBody,
@@ -1141,25 +1185,27 @@ Deno.serve(async (req) => {
                 ...finalUserMessage,
               ];
 
+              const codeModel = getCodeGenerationModelCandidates(model)[0];
+
               // Code generation request logic (SSE streaming)
               // Note: no `provider.require_parameters` here — code-gen doesn't
               // send tools, so all providers in the pool are eligible.
               const codeRequestBody: OpenRouterRequest = {
-                model,
+                model: codeModel,
                 messages: [
                   { role: 'system', content: STRICT_CODE_PROMPT },
                   ...codeMessages,
                 ],
                 stream: true,
               };
-              applyCompletionTokenLimit(codeRequestBody, model, 48000);
+              applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
 
               // Also apply thinking to code generation if enabled
               if (thinking) {
                 codeRequestBody.reasoning = {
                   max_tokens: 12000,
                 };
-                applyCompletionTokenLimit(codeRequestBody, model, 60000);
+                applyCompletionTokenLimit(codeRequestBody, codeModel, 60000);
               }
 
               // Kick off title generation alongside the streamed code.
@@ -1194,7 +1240,7 @@ Deno.serve(async (req) => {
                 if (!codeResponse.ok) {
                   const t = await codeResponse.text();
                   throw new Error(
-                    `Code gen error: ${codeResponse.status} - ${t}`,
+                    `Code gen error for ${codeModel}: ${codeResponse.status} - ${t}`,
                   );
                 }
 
