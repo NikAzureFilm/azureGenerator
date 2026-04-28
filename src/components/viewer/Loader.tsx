@@ -1,7 +1,6 @@
-import Lottie from 'lottie-react';
 import { useEffect, useRef, useState } from 'react';
-import adamLoading from '@/assets/adam-loading.json';
 import { pickSpinnerVerb } from '@/constants/spinnerVerbs';
+import { AzureFilm3DMark } from '@/components/viewer/AzureFilm3DMark';
 
 type Props = {
   message?: string;
@@ -87,11 +86,7 @@ const Loader = ({ message }: Props) => {
   return (
     <div className="flex flex-col items-center justify-center">
       <div className="relative h-32 w-32">
-        <Lottie
-          animationData={adamLoading}
-          loop={true}
-          style={{ width: '100%', height: '100%' }}
-        />
+        <AzureFilm3DMark />
       </div>
       {message && (
         <p
