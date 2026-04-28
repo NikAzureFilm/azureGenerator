@@ -267,16 +267,6 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsVision: true,
     tokenCost: FEATURE_COSTS.parametric.tokens,
   },
-  {
-    id: 'deepseek/deepseek-v4-pro',
-    name: 'DeepSeek V4 Pro',
-    description: 'Long-context MoE model for complex reasoning and code',
-    provider: 'DeepSeek',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: false,
-    tokenCost: FEATURE_COSTS.parametric.tokens,
-  },
 ];
 
 export const CREATIVE_MODELS: ModelConfig[] = [
