@@ -1,32 +1,64 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import {
-  Content,
-  CoreMessage,
   Message,
   Model,
+  Content,
+  CoreMessage,
   ParametricArtifact,
   ToolCall,
 } from '@shared/types.ts';
-import {
-  getAnonSupabaseClient,
-  getServiceRoleSupabaseClient,
-} from '../_shared/supabaseClient.ts';
+import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 import Tree from '@shared/Tree.ts';
 import parseParameters from '../_shared/parseParameter.ts';
 import { formatUserMessage } from '../_shared/messageUtils.ts';
 import { corsHeaders } from '../_shared/cors.ts';
+import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import { initSentry, logError } from '../_shared/sentry.ts';
+
+const CHAT_TOKEN_COST = 1;
+const PARAMETRIC_TOKEN_COST = 5;
+
+initSentry();
 
 // OpenRouter API configuration
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'openai/gpt-5.4';
 
-// Helper to stream updated assistant message rows
+// Models whose OpenRouter listing serves at least one provider that does NOT
+// support tool calling. For these we set `provider: { require_parameters: true }`
+// on the agent (tools-bearing) call so OpenRouter excludes the tool-incompatible
+// providers from the routing pool. The code-gen call sends no tools and so
+// doesn't need this constraint. Keep this list scoped — adding a model that
+// doesn't actually have mixed-provider tool support just narrows routing for
+// no reason.
+const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([
+  'deepseek/deepseek-v4-pro',
+]);
+
+// Models whose OpenRouter input modality is text-only. We strip image blocks
+// from these requests because OpenRouter rejects image content for text-only
+// models and the whole turn fails. Authoritative server-side — must mirror
+// `supportsVision: false` entries in PARAMETRIC_MODELS (src/lib/utils.ts) but
+// is not derived from the client to avoid stale-client/direct-API bypass.
+const TEXT_ONLY_MODELS = new Set<string>(['deepseek/deepseek-v4-pro']);
+
+// Helper to stream updated assistant message rows.
+// Silently noop if the controller is already closed (e.g. the client
+// disconnected mid-stream). Without this guard the enqueue throws
+// `The stream controller cannot close or enqueue`, which bubbles up
+// and gets logged as a generation failure even though the generation
+// may have completed successfully.
 function streamMessage(
   controller: ReadableStreamDefaultController,
   message: Message,
 ) {
-  controller.enqueue(new TextEncoder().encode(JSON.stringify(message) + '\n'));
+  const encoded = new TextEncoder().encode(JSON.stringify(message) + '\n');
+  try {
+    controller.enqueue(encoded);
+  } catch {
+    // Controller closed — client has gone away. Nothing more to do.
+  }
 }
 
 // Helper to escape regex special characters
@@ -117,6 +149,29 @@ function markToolAsError(content: Content, toolId: string): Content {
   };
 }
 
+// Helper to flip every still-`pending` tool call to `error`. Used at terminal
+// checkpoints so an aborted request never persists a forever-streaming bubble.
+function markPendingToolsAsError(content: Content): Content {
+  if (!content.toolCalls || content.toolCalls.length === 0) return content;
+  const hasPending = content.toolCalls.some((c) => c.status === 'pending');
+  if (!hasPending) return content;
+  return {
+    ...content,
+    toolCalls: content.toolCalls.map((c: ToolCall) =>
+      c.status === 'pending' ? { ...c, status: 'error' } : c,
+    ),
+  };
+}
+
+// Single request-scoped budget. Supabase edge functions have a ~400s
+// wall-clock on Pro, so we anchor one deadline to the start of the
+// request and share it across every upstream fetch. Independent per-fetch
+// timers would compound (agent 4 min + code-gen 4 min = 8 min), blowing
+// past the edge budget and getting SIGKILLed — exactly the failure mode
+// this file is meant to prevent.
+const REQUEST_BUDGET_MS = 350 * 1000;
+const MIN_ABORT_MS = 1000;
+
 // Anthropic block types for type safety
 interface AnthropicTextBlock {
   type: 'text';
@@ -173,6 +228,13 @@ interface OpenRouterRequest {
     max_tokens?: number;
     effort?: 'high' | 'medium' | 'low';
   };
+  // OpenRouter provider routing controls. `require_parameters: true` filters
+  // out providers that don't support every parameter we send (e.g. `tools`).
+  // Without this, V4 Pro requests get load-balanced to GMICloud / SiliconFlow,
+  // which don't support tool calling, and the whole turn fails.
+  provider?: {
+    require_parameters?: boolean;
+  };
 }
 
 function applyCompletionTokenLimit(
@@ -190,6 +252,15 @@ function applyCompletionTokenLimit(
   requestBody.max_tokens = tokenLimit;
 }
 
+function openRouterHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+    'HTTP-Referer': 'https://azurefilm.com',
+    'X-Title': 'AzureFilm Generator',
+  };
+}
+
 function getOpenRouterFallbackModel(model: string): string | null {
   return model === 'openai/gpt-5.5' ? OPENROUTER_GPT_5_5_FALLBACK_MODEL : null;
 }
@@ -203,21 +274,16 @@ function isInvalidModelResponse(errorText: string, model: string): boolean {
 
 async function fetchOpenRouterChatCompletion(
   requestBody: OpenRouterRequest,
+  signal?: AbortSignal,
 ): Promise<Response> {
   let response = await fetch(OPENROUTER_API_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://azurefilm.com',
-      'X-Title': 'AzureFilm Generator',
-    },
+    headers: openRouterHeaders(),
     body: JSON.stringify(requestBody),
+    signal,
   });
 
-  if (response.ok) {
-    return response;
-  }
+  if (response.ok) return response;
 
   const errorText = await response.text();
   const fallbackModel = getOpenRouterFallbackModel(requestBody.model);
@@ -236,13 +302,9 @@ async function fetchOpenRouterChatCompletion(
     );
     response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://azurefilm.com',
-        'X-Title': 'AzureFilm Generator',
-      },
+      headers: openRouterHeaders(),
       body: JSON.stringify(fallbackRequestBody),
+      signal,
     });
     return response;
   }
@@ -267,12 +329,7 @@ async function generateTitleFromMessages(
 
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://azurefilm.com',
-        'X-Title': 'AzureFilm Generator',
-      },
+      headers: openRouterHeaders(),
       body: JSON.stringify({
         model: 'anthropic/claude-haiku-4.5',
         max_tokens: 30,
@@ -487,6 +544,13 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Shared deadline: every upstream fetch in this request gets at most
+  // `requestDeadline - now` ms before aborting, so the agent + code-gen
+  // fetches together can never outlive the Supabase edge wall-clock.
+  const requestDeadline = Date.now() + REQUEST_BUDGET_MS;
+  const remainingBudgetMs = () =>
+    Math.max(MIN_ABORT_MS, requestDeadline - Date.now());
+
   const supabaseClient = getAnonSupabaseClient({
     global: {
       headers: { Authorization: req.headers.get('Authorization') ?? '' },
@@ -508,40 +572,47 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Deduct chat token (1) at request start
-  const serviceClient = getServiceRoleSupabaseClient();
-  const { data: rawChatTokenResult, error: chatTokenError } =
-    await serviceClient.rpc('deduct_tokens', {
-      p_user_id: userData.user.id,
-      p_operation: 'chat',
+  // Deduct chat token (1) via adam-billing
+  if (!userData.user.email) {
+    return new Response(JSON.stringify({ error: 'User email missing' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+  }
 
-  const chatTokenResult = rawChatTokenResult as {
-    success: boolean;
-    tokensRequired?: number;
-    tokensAvailable?: number;
-  } | null;
-
-  if (chatTokenError || !chatTokenResult?.success) {
-    const insufficientTokens = chatTokenResult && !chatTokenResult.success;
-    return new Response(
-      JSON.stringify({
-        error: {
-          message: insufficientTokens
-            ? 'insufficient_tokens'
-            : chatTokenError?.message || 'Token deduction failed',
-          code: 'insufficient_tokens',
-          ...(insufficientTokens && {
-            tokensRequired: chatTokenResult.tokensRequired,
-            tokensAvailable: chatTokenResult.tokensAvailable,
-          }),
+  try {
+    const result = await billing.consume(userData.user.email, {
+      tokens: CHAT_TOKEN_COST,
+      operation: 'chat',
+      referenceId: crypto.randomUUID(),
+    });
+    if (!result.ok) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'insufficient_tokens',
+            code: 'insufficient_tokens',
+            tokensRequired: result.tokensRequired,
+            tokensAvailable: result.tokensAvailable,
+          },
+        }),
+        {
+          status: 402,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
-      }),
-      {
-        status: 402,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
-    );
+      );
+    }
+  } catch (err) {
+    const status = err instanceof BillingClientError ? err.status : 502;
+    logError(err, {
+      functionName: 'parametric-chat',
+      statusCode: status,
+      userId: userData.user.id,
+    });
+    return new Response(JSON.stringify({ error: 'billing_unavailable' }), {
+      status: 502,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   const {
@@ -557,6 +628,9 @@ Deno.serve(async (req) => {
     newMessageId: string;
     thinking?: boolean;
   } = await req.json();
+
+  // Authoritative server-side capability: don't trust the client to self-report.
+  const supportsVision = !TEXT_ONLY_MODELS.has(model);
 
   const { data: messages, error: messagesError } = await supabaseClient
     .from('messages')
@@ -635,11 +709,21 @@ Deno.serve(async (req) => {
           // formatUserMessage returns content as an array
           return {
             role: 'user' as const,
-            content: formatted.content.map((block: unknown) => {
+            content: formatted.content.flatMap((block: unknown) => {
               if (isAnthropicBlock(block)) {
                 if (block.type === 'text') {
-                  return { type: 'text', text: block.text };
+                  return [{ type: 'text', text: block.text }];
                 } else if (block.type === 'image') {
+                  // Text-only models reject image blocks. Drop them and leave
+                  // a placeholder so the model still knows an image existed.
+                  if (!supportsVision) {
+                    return [
+                      {
+                        type: 'text',
+                        text: '[image omitted: selected model does not accept images]',
+                      },
+                    ];
+                  }
                   // Handle both URL and base64 image formats
                   let imageUrl: string;
                   if (
@@ -653,18 +737,20 @@ Deno.serve(async (req) => {
                     imageUrl = block.source.url;
                   } else {
                     // Fallback or error case
-                    return block;
+                    return [block];
                   }
-                  return {
-                    type: 'image_url',
-                    image_url: {
-                      url: imageUrl,
-                      detail: 'auto', // Auto-detect appropriate detail level
+                  return [
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: imageUrl,
+                        detail: 'auto', // Auto-detect appropriate detail level
+                      },
                     },
-                  };
+                  ];
                 }
               }
-              return block;
+              return [block];
             }),
           };
         }
@@ -690,6 +776,12 @@ Deno.serve(async (req) => {
     };
     applyCompletionTokenLimit(requestBody, model, 16000);
 
+    // Constrain provider routing only when the model has providers that don't
+    // support tool calling — otherwise we'd needlessly narrow the pool.
+    if (REQUIRES_TOOL_CAPABLE_PROVIDER.has(model)) {
+      requestBody.provider = { require_parameters: true };
+    }
+
     // Add reasoning/thinking parameter if requested and supported
     // OpenRouter uses a unified 'reasoning' parameter
     if (thinking) {
@@ -700,9 +792,21 @@ Deno.serve(async (req) => {
       applyCompletionTokenLimit(requestBody, model, 20000);
     }
 
-    const response = await fetchOpenRouterChatCompletion(requestBody);
+    // Shares the request-scoped deadline with code-gen below so the two
+    // fetches together can never outlive the Supabase wall-clock budget.
+    const agentAbort = new AbortController();
+    const agentTimeout = setTimeout(
+      () => agentAbort.abort(new Error('agent upstream timeout')),
+      remainingBudgetMs(),
+    );
+
+    const response = await fetchOpenRouterChatCompletion(
+      requestBody,
+      agentAbort.signal,
+    );
 
     if (!response.ok) {
+      clearTimeout(agentTimeout);
       const errorText = await response.text();
       console.error(`OpenRouter API Error: ${response.status} - ${errorText}`);
       throw new Error(
@@ -855,6 +959,11 @@ Deno.serve(async (req) => {
           }
           markAllToolsError();
         } finally {
+          clearTimeout(agentTimeout);
+          // Last-line defense: even if markAllToolsError was skipped (e.g.
+          // the outer try completed without throwing but a tool call was
+          // left pending by an unreachable path), never persist pending.
+          content = markPendingToolsAsError(content);
           // Fallback: If no artifact was created but text contains OpenSCAD code,
           // extract it and create an artifact. This handles cases where the LLM
           // outputs code directly instead of using tools (common in long conversations).
@@ -928,7 +1037,11 @@ Deno.serve(async (req) => {
             controller,
             finalMessageData ?? { ...newMessageData, content },
           );
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Already closed (client disconnected) — safe to ignore.
+          }
         }
 
         async function handleToolCall(toolCall: {
@@ -937,212 +1050,291 @@ Deno.serve(async (req) => {
           arguments: string;
         }) {
           if (toolCall.name === 'build_parametric_model') {
-            // Deduct parametric tokens (5) for model building
-            const { data: rawParamTokenResult } = await serviceClient.rpc(
-              'deduct_tokens',
-              {
-                p_user_id: userData.user!.id,
-                p_operation: 'parametric',
-                p_reference_id: toolCall.id,
-              },
-            );
-
-            const paramTokenResult = rawParamTokenResult as {
-              success: boolean;
-            } | null;
-
-            if (!paramTokenResult?.success) {
-              content = {
-                ...content,
-                error: 'insufficient_tokens',
-              };
-              streamMessage(controller, { ...newMessageData, content });
-              return;
-            }
-            let toolInput: {
-              text?: string;
-              imageIds?: string[];
-              baseCode?: string;
-              error?: string;
-            } = {};
+            // `resolved` tracks whether this tool call reached a terminal
+            // state (success = entry removed, or explicit `error`). The
+            // finally below guarantees that *every* exit — throw, early
+            // return, upstream hang unmasked by AbortController — leaves
+            // the persisted tool call as `error` rather than forever-
+            // pending. Without this, a mid-stream kill produces a message
+            // that renders as a perpetually streaming code block.
+            let resolved = false;
             try {
-              toolInput = JSON.parse(toolCall.arguments);
-            } catch (e) {
-              console.error('Invalid tool input JSON', e);
-              content = markToolAsError(content, toolCall.id);
-              streamMessage(controller, { ...newMessageData, content });
-              return;
-            }
-
-            // Build code generation messages
-            const baseContext: OpenAIMessage[] = toolInput.baseCode
-              ? [{ role: 'assistant' as const, content: toolInput.baseCode }]
-              : [];
-
-            // If baseContext adds an assistant message, re-state user request so conversation ends with user
-            const userText = newMessage?.content.text || '';
-            const needsUserMessage = baseContext.length > 0 || toolInput.error;
-            const finalUserMessage: OpenAIMessage[] = needsUserMessage
-              ? [
+              // Deduct parametric tokens (5) for model building
+              try {
+                const paramResult = await billing.consume(
+                  userData.user!.email!,
                   {
-                    role: 'user' as const,
-                    content: toolInput.error
-                      ? `${userText}\n\nFix this OpenSCAD error: ${toolInput.error}`
-                      : userText,
+                    tokens: PARAMETRIC_TOKEN_COST,
+                    operation: 'parametric',
+                    referenceId: toolCall.id,
                   },
-                ]
-              : [];
-
-            const codeMessages: OpenAIMessage[] = [
-              ...messagesToSend,
-              ...baseContext,
-              ...finalUserMessage,
-            ];
-
-            // Code generation request logic (SSE streaming)
-            const codeRequestBody: OpenRouterRequest = {
-              model,
-              messages: [
-                { role: 'system', content: STRICT_CODE_PROMPT },
-                ...codeMessages,
-              ],
-              stream: true,
-            };
-            applyCompletionTokenLimit(codeRequestBody, model, 16000);
-
-            // Also apply thinking to code generation if enabled
-            if (thinking) {
-              codeRequestBody.reasoning = {
-                max_tokens: 12000,
-              };
-              applyCompletionTokenLimit(codeRequestBody, model, 20000);
-            }
-
-            // Kick off title generation alongside the streamed code.
-            const titlePromise = generateTitleFromMessages(messagesToSend);
-
-            let rawCode = '';
-            let codeGenFailed = false;
-
-            const stripCodeFences = (s: string): string => {
-              let out = s;
-              out = out.replace(/^```(?:openscad)?\s*\n?/, '');
-              out = out.replace(/\n?```\s*$/, '');
-              return out;
-            };
-
-            try {
-              const codeResponse =
-                await fetchOpenRouterChatCompletion(codeRequestBody);
-
-              if (!codeResponse.ok) {
-                const t = await codeResponse.text();
-                throw new Error(
-                  `Code gen error: ${codeResponse.status} - ${t}`,
                 );
+                if (!paramResult.ok) {
+                  content = {
+                    ...markToolAsError(content, toolCall.id),
+                    error: 'insufficient_tokens',
+                  };
+                  streamMessage(controller, { ...newMessageData, content });
+                  resolved = true;
+                  return;
+                }
+              } catch (err) {
+                const status =
+                  err instanceof BillingClientError ? err.status : 502;
+                logError(err, {
+                  functionName: 'parametric-chat',
+                  statusCode: status,
+                  userId: userData.user?.id,
+                  conversationId,
+                  additionalContext: {
+                    operation: 'parametric',
+                    toolCallId: toolCall.id,
+                  },
+                });
+                content = {
+                  ...markToolAsError(content, toolCall.id),
+                  error: 'billing_unavailable',
+                };
+                streamMessage(controller, { ...newMessageData, content });
+                resolved = true;
+                return;
+              }
+              let toolInput: {
+                text?: string;
+                imageIds?: string[];
+                baseCode?: string;
+                error?: string;
+              } = {};
+              try {
+                toolInput = JSON.parse(toolCall.arguments);
+              } catch (e) {
+                console.error('Invalid tool input JSON', e);
+                content = markToolAsError(content, toolCall.id);
+                streamMessage(controller, { ...newMessageData, content });
+                resolved = true;
+                return;
               }
 
-              const codeReader = codeResponse.body?.getReader();
-              if (!codeReader) throw new Error('No code response body');
+              // Build code generation messages
+              const baseContext: OpenAIMessage[] = toolInput.baseCode
+                ? [{ role: 'assistant' as const, content: toolInput.baseCode }]
+                : [];
 
-              const codeDecoder = new TextDecoder();
-              let codeBuffer = '';
+              // If baseContext adds an assistant message, re-state user request so conversation ends with user
+              const userText = newMessage?.content.text || '';
+              const needsUserMessage =
+                baseContext.length > 0 || toolInput.error;
+              const finalUserMessage: OpenAIMessage[] = needsUserMessage
+                ? [
+                    {
+                      role: 'user' as const,
+                      content: toolInput.error
+                        ? `${userText}\n\nFix this OpenSCAD error: ${toolInput.error}`
+                        : userText,
+                    },
+                  ]
+                : [];
 
-              while (true) {
-                const { done, value } = await codeReader.read();
-                if (done) break;
+              const codeMessages: OpenAIMessage[] = [
+                ...messagesToSend,
+                ...baseContext,
+                ...finalUserMessage,
+              ];
 
-                codeBuffer += codeDecoder.decode(value, { stream: true });
-                const codeLines = codeBuffer.split('\n');
-                codeBuffer = codeLines.pop() || '';
+              // Code generation request logic (SSE streaming)
+              // Note: no `provider.require_parameters` here — code-gen doesn't
+              // send tools, so all providers in the pool are eligible.
+              const codeRequestBody: OpenRouterRequest = {
+                model,
+                messages: [
+                  { role: 'system', content: STRICT_CODE_PROMPT },
+                  ...codeMessages,
+                ],
+                stream: true,
+              };
+              applyCompletionTokenLimit(codeRequestBody, model, 48000);
 
-                for (const line of codeLines) {
-                  // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
-                  // and anything that isn't a `data:` event.
-                  if (!line.startsWith('data: ')) continue;
-                  const data = line.slice(6);
-                  if (data === '[DONE]') continue;
+              // Also apply thinking to code generation if enabled
+              if (thinking) {
+                codeRequestBody.reasoning = {
+                  max_tokens: 12000,
+                };
+                applyCompletionTokenLimit(codeRequestBody, model, 60000);
+              }
 
-                  let chunk: {
-                    error?: { message?: string };
-                    choices?: Array<{
-                      delta?: { content?: string };
-                    }>;
-                  };
-                  try {
-                    chunk = JSON.parse(data);
-                  } catch (e) {
-                    // Malformed chunk — log and skip, don't abort the stream.
-                    console.error('Error parsing code SSE chunk:', e);
-                    continue;
-                  }
+              // Kick off title generation alongside the streamed code.
+              const titlePromise = generateTitleFromMessages(messagesToSend);
 
-                  // Surfaced API errors must abort code-gen so the outer
-                  // catch can mark the tool call as failed — never swallow.
-                  if (chunk.error) {
-                    throw new Error(
-                      chunk.error.message ||
-                        `OpenRouter error: ${JSON.stringify(chunk.error)}`,
-                    );
-                  }
+              let rawCode = '';
+              let codeGenFailed = false;
 
-                  const deltaContent = chunk.choices?.[0]?.delta?.content;
-                  if (typeof deltaContent === 'string' && deltaContent) {
-                    rawCode += deltaContent;
-                    const streamed = stripCodeFences(rawCode);
-                    content = {
-                      ...content,
-                      artifact: {
-                        title: 'Generated Object',
-                        version: 'v1',
-                        code: streamed,
-                        parameters: [],
-                      },
+              const stripCodeFences = (s: string): string => {
+                let out = s;
+                out = out.replace(/^```(?:openscad)?\s*\n?/, '');
+                out = out.replace(/\n?```\s*$/, '');
+                return out;
+              };
+
+              // Draws from the same request deadline as the agent fetch —
+              // whatever budget remains after the outer stream is ours.
+              // A hung upstream aborts in userland so the catch below
+              // marks this tool call `error` instead of being SIGKILLed.
+              const codeGenAbort = new AbortController();
+              const codeGenTimeout = setTimeout(
+                () =>
+                  codeGenAbort.abort(new Error('code-gen upstream timeout')),
+                remainingBudgetMs(),
+              );
+              try {
+                const codeResponse = await fetchOpenRouterChatCompletion(
+                  codeRequestBody,
+                  codeGenAbort.signal,
+                );
+
+                if (!codeResponse.ok) {
+                  const t = await codeResponse.text();
+                  throw new Error(
+                    `Code gen error: ${codeResponse.status} - ${t}`,
+                  );
+                }
+
+                const codeReader = codeResponse.body?.getReader();
+                if (!codeReader) throw new Error('No code response body');
+
+                const codeDecoder = new TextDecoder();
+                let codeBuffer = '';
+                // Throttle SSE flushes to avoid O(n^2) memory blow-up on long
+                // generations — without this, each of hundreds of deltas
+                // re-serializes the full accumulated artifact.
+                let lastFlushTime = 0;
+                let lastFlushedLen = 0;
+                const FLUSH_INTERVAL_MS = 120;
+
+                while (true) {
+                  const { done, value } = await codeReader.read();
+                  if (done) break;
+
+                  codeBuffer += codeDecoder.decode(value, { stream: true });
+                  const codeLines = codeBuffer.split('\n');
+                  codeBuffer = codeLines.pop() || '';
+
+                  for (const line of codeLines) {
+                    // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
+                    // and anything that isn't a `data:` event.
+                    if (!line.startsWith('data: ')) continue;
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+
+                    let chunk: {
+                      error?: { message?: string };
+                      choices?: Array<{
+                        delta?: { content?: string };
+                      }>;
                     };
-                    streamMessage(controller, {
-                      ...newMessageData,
-                      content,
-                    });
+                    try {
+                      chunk = JSON.parse(data);
+                    } catch (e) {
+                      // Malformed chunk — log and skip, don't abort the stream.
+                      console.error('Error parsing code SSE chunk:', e);
+                      continue;
+                    }
+
+                    // Surfaced API errors must abort code-gen so the outer
+                    // catch can mark the tool call as failed — never swallow.
+                    if (chunk.error) {
+                      throw new Error(
+                        chunk.error.message ||
+                          `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                      );
+                    }
+
+                    const deltaContent = chunk.choices?.[0]?.delta?.content;
+                    if (typeof deltaContent === 'string' && deltaContent) {
+                      rawCode += deltaContent;
+                      const now = Date.now();
+                      if (
+                        now - lastFlushTime >= FLUSH_INTERVAL_MS &&
+                        rawCode.length > lastFlushedLen
+                      ) {
+                        const streamed = stripCodeFences(rawCode);
+                        content = {
+                          ...content,
+                          artifact: {
+                            title: 'Generated Object',
+                            version: 'v1',
+                            code: streamed,
+                            parameters: [],
+                          },
+                        };
+                        streamMessage(controller, {
+                          ...newMessageData,
+                          content,
+                        });
+                        lastFlushTime = now;
+                        lastFlushedLen = rawCode.length;
+                      }
+                    }
                   }
                 }
+              } catch (e) {
+                console.error('Code generation failed:', e);
+                codeGenFailed = true;
+              } finally {
+                clearTimeout(codeGenTimeout);
               }
-            } catch (e) {
-              console.error('Code generation failed:', e);
-              codeGenFailed = true;
-            }
 
-            const code = stripCodeFences(rawCode.trim()).trim();
+              const code = stripCodeFences(rawCode.trim()).trim();
 
-            let title = await titlePromise.catch(() => 'Generated Object');
-            const lower = title.toLowerCase();
-            if (lower.includes('sorry') || lower.includes('apologize')) {
-              title = 'Generated Object';
-            }
+              let title = await titlePromise.catch(() => 'Generated Object');
+              const lower = title.toLowerCase();
+              if (lower.includes('sorry') || lower.includes('apologize'))
+                title = 'Generated Object';
 
-            if (codeGenFailed || !code) {
-              content = {
-                ...content,
-                artifact: undefined,
-                toolCalls: (content.toolCalls || []).map((c) =>
-                  c.id === toolCall.id ? { ...c, status: 'error' } : c,
-                ),
-              };
-            } else {
-              const artifact: ParametricArtifact = {
-                title,
-                version: 'v1',
-                code,
-                parameters: parseParameters(code),
-              };
-              content = {
-                ...content,
-                toolCalls: (content.toolCalls || []).filter(
-                  (c) => c.id !== toolCall.id,
-                ),
-                artifact,
-              };
+              if (codeGenFailed || !code) {
+                // Preserve whatever partial artifact was streamed rather than
+                // unsetting it. Clearing `artifact` here flipped `hasArtifact`
+                // back to false on the client mid-stream, which crashed the
+                // conditional parameters Panel in react-resizable-panels. The
+                // `toolCalls[].status === 'error'` signal already carries the
+                // failure; keeping the partial code lets the user see what was
+                // generated before the error.
+                content = {
+                  ...content,
+                  toolCalls: (content.toolCalls || []).map((c) =>
+                    c.id === toolCall.id ? { ...c, status: 'error' } : c,
+                  ),
+                };
+              } else {
+                const artifact: ParametricArtifact = {
+                  title,
+                  version: 'v1',
+                  code,
+                  parameters: parseParameters(code),
+                };
+                content = {
+                  ...content,
+                  toolCalls: (content.toolCalls || []).filter(
+                    (c) => c.id !== toolCall.id,
+                  ),
+                  artifact,
+                };
+              }
+              // Mark resolved *before* the side-effectful streamMessage:
+              // `content` already reflects the terminal state (artifact set
+              // or tool call removed), so if streamMessage ever threw, the
+              // finally below must not clobber that with an `error` flip.
+              resolved = true;
+              streamMessage(controller, { ...newMessageData, content });
+            } finally {
+              // Safety net: any escape from the block above (thrown error,
+              // forgotten return, upstream abort) that left this tool call
+              // `pending` gets flipped to `error` here so the DB write in
+              // the outer finally never persists a zombie pending state.
+              if (!resolved) {
+                content = markToolAsError(content, toolCall.id);
+                streamMessage(controller, { ...newMessageData, content });
+              }
             }
-            streamMessage(controller, { ...newMessageData, content });
           } else if (toolCall.name === 'apply_parameter_changes') {
             let toolInput: {
               updates?: Array<{ name: string; value: string }>;
@@ -1187,27 +1379,21 @@ Deno.serve(async (req) => {
               let coerced: string | number | boolean = upd.value;
               try {
                 if (target.type === 'number') coerced = Number(upd.value);
-                else if (target.type === 'boolean') {
+                else if (target.type === 'boolean')
                   coerced = String(upd.value) === 'true';
-                } else if (target.type === 'string') {
-                  coerced = String(upd.value);
-                } else coerced = upd.value;
+                else if (target.type === 'string') coerced = String(upd.value);
+                else coerced = upd.value;
               } catch (_) {
                 coerced = upd.value;
               }
               patchedCode = patchedCode.replace(
                 new RegExp(
-                  `^\\s*(${escapeRegExp(
-                    target.name,
-                  )}\\s*=\\s*)[^;]+;([\\t\\f\\cK ]*\\/\\/[^\\n]*)?`,
+                  `^\\s*(${escapeRegExp(target.name)}\\s*=\\s*)[^;]+;([\\t\\f\\cK ]*\\/\\/[^\\n]*)?`,
                   'm',
                 ),
                 (_, g1: string, g2: string) => {
-                  if (target.type === 'string') {
-                    return `${g1}"${String(coerced).replace(/"/g, '\\"')}";${
-                      g2 || ''
-                    }`;
-                  }
+                  if (target.type === 'string')
+                    return `${g1}"${String(coerced).replace(/"/g, '\\"')}";${g2 || ''}`;
                   return `${g1}${coerced};${g2 || ''}`;
                 },
               );
@@ -1249,6 +1435,10 @@ Deno.serve(async (req) => {
         text: 'An error occurred while processing your request.',
       };
     }
+    // Symmetric to the stream's inner finally: if we bail before/around
+    // returning the ReadableStream with tool calls already populated,
+    // never leave a pending entry in the persisted row.
+    content = markPendingToolsAsError(content);
 
     const { data: updatedMessageData } = await supabaseClient
       .from('messages')

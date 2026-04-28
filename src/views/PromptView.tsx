@@ -23,7 +23,8 @@ import { BrandLogo } from '@/components/BrandLogo';
 export function PromptView() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, totalTokens, isLoading } = useAuth();
+  const { user, billing, isLoading } = useAuth();
+  const totalTokens = billing?.tokens.total ?? 0;
   const { data: profile, isLoading: isProfileLoading } = useProfile();
   const { isSidebarOpen } = useOutletContext<{ isSidebarOpen: boolean }>();
   const queryClient = useQueryClient();
