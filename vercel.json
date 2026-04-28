@@ -1,27 +1,12 @@
 {
   "rewrites": [
     {
-      "source": "/cadam",
-      "destination": "/cadam/index.html"
+      "source": "/assets/:path*",
+      "destination": "/assets/:path*"
     },
     {
-      "source": "/cadam/",
-      "destination": "/cadam/index.html"
-    },
-    {
-      "source": "/cadam/assets/:path*",
-      "destination": "/cadam/assets/:path*"
-    },
-    {
-      "source": "/cadam/:path*",
-      "destination": "/cadam/index.html"
-    }
-  ],
-  "redirects": [
-    {
-      "source": "/",
-      "destination": "/cadam/",
-      "permanent": false
+      "source": "/:path*",
+      "destination": "/index.html"
     }
   ],
   "trailingSlash": false
