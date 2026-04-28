@@ -17,6 +17,7 @@ import {
   Wand2,
   Box,
   X,
+  Sparkles,
 } from 'lucide-react';
 import {
   cn,
@@ -74,6 +75,7 @@ import {
 import { useMeshFiles } from '@/contexts/MeshFilesContext';
 import { AnimatePresence, motion } from 'framer-motion';
 import { BrandLogo } from '@/components/BrandLogo';
+import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -494,6 +496,7 @@ function TextAreaChat({
   const [isDragging, setIsDragging] = useState(false);
   const [isDragHover, setIsDragHover] = useState(false);
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
+  const [isGeneratingInputImage, setIsGeneratingInputImage] = useState(false);
   const [dropMessageOpacityClass, setDropMessageOpacityClass] = useState(
     'opacity-0 pointer-events-none',
   );
@@ -784,7 +787,12 @@ function TextAreaChat({
     const hasNoContent = images.length === 0 && !input?.trim() && !mesh;
     const hasUploadingImages = images.some((img) => img.isUploading);
 
-    if (hasNoContent || isLoading || hasUploadingImages) {
+    if (
+      hasNoContent ||
+      isLoading ||
+      hasUploadingImages ||
+      isGeneratingInputImage
+    ) {
       return;
     }
     let content: Content = {
@@ -1230,6 +1238,60 @@ function TextAreaChat({
       });
     } finally {
       setIsGeneratingPrompt(false);
+    }
+  };
+
+  const generateInputImage = async () => {
+    if (isGeneratingInputImage || type !== 'creative' || isMultiview) return;
+    const prompt = input.trim();
+    if (!prompt) {
+      toast({
+        title: 'Prompt required',
+        description: 'Describe the object before generating an input image.',
+      });
+      textareaRef.current?.focus();
+      return;
+    }
+
+    setIsGeneratingInputImage(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-view', {
+        method: 'POST',
+        body: {
+          conversationId: conversation.id,
+          view: 'front',
+          prompt,
+          provider: 'openai',
+          mode: 'input',
+        },
+      });
+
+      if (error) throw error;
+      if (!data?.id || !data?.url) {
+        throw new Error('No image returned from generator');
+      }
+
+      setImages((prevImages) => [
+        ...prevImages,
+        {
+          id: data.id as string,
+          url: data.url as string,
+          isUploading: false,
+          source: 'upload',
+        },
+      ]);
+    } catch (error) {
+      console.error('Error generating input image:', error);
+      toast({
+        title: 'Image generation failed',
+        description:
+          error instanceof Error
+            ? error.message
+            : 'Could not generate an input image. Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsGeneratingInputImage(false);
     }
   };
 
@@ -1693,6 +1755,43 @@ function TextAreaChat({
               </div>
             )}
 
+            {type === 'creative' && !isMultiview && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void generateInputImage();
+                    }}
+                    disabled={
+                      disabled ||
+                      isLoading ||
+                      isGeneratingInputImage ||
+                      !input.trim()
+                    }
+                  >
+                    {isGeneratingInputImage ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    <span className="hidden text-xs lg:inline">Image</span>
+                    <span className="hidden rounded bg-adam-neutral-800 px-1 text-[10px] text-adam-text-secondary xl:inline">
+                      {formatTokenCost(
+                        FEATURE_COSTS.generatedInputImage.tokens,
+                      )}
+                    </span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Generate input image with OpenAI (
+                  {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)})
+                </TooltipContent>
+              </Tooltip>
+            )}
+
             {/* Creative mode toggle button */}
             {onTypeChange && (
               <Tooltip>
@@ -1790,6 +1889,7 @@ function TextAreaChat({
                 disabled={
                   isLoading ||
                   disabled ||
+                  isGeneratingInputImage ||
                   (isMultiview
                     ? !hasFrontMultiviewSlot(multiviewSlots) ||
                       anyMultiviewBusy(multiviewSlots)

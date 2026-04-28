@@ -9,6 +9,7 @@ import {
 import { ImagePlus, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
+import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
 import { getMultiviewGenerationReference } from '@/utils/multiviewReference';
@@ -226,6 +227,8 @@ export function MultiviewComposer({
               view: slot,
               prompt: trimmedPrompt || undefined,
               refImageId: refImageId || undefined,
+              provider: slot === 'front' ? 'openai' : 'nano-banana',
+              mode: 'multiview',
             },
           },
         );
@@ -380,6 +383,11 @@ export function MultiviewComposer({
             onUpload={handleUpload}
             onGenerate={handleGenerate}
             onRemove={handleRemove}
+            tokenCost={
+              slot === 'front'
+                ? FEATURE_COSTS.multiviewFrontImage.tokens
+                : FEATURE_COSTS.multiviewNanoBananaView.tokens
+            }
           />
         ))}
       </div>
@@ -394,6 +402,7 @@ interface MultiviewSlotCardProps {
   onUpload: (slot: MultiviewSlot, file: File) => void;
   onGenerate: (slot: MultiviewSlot) => void;
   onRemove: (slot: MultiviewSlot) => void;
+  tokenCost: number;
 }
 
 function MultiviewSlotCard({
@@ -403,6 +412,7 @@ function MultiviewSlotCard({
   onUpload,
   onGenerate,
   onRemove,
+  tokenCost,
 }: MultiviewSlotCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isHover, setIsHover] = useState(false);
@@ -486,6 +496,9 @@ function MultiviewSlotCard({
               <TooltipContent>Generate with AI</TooltipContent>
             </Tooltip>
           </div>
+          <span className="mt-1 rounded bg-adam-neutral-900 px-1.5 py-0.5 text-[9px] text-adam-text-secondary">
+            {formatTokenCost(tokenCost)}
+          </span>
         </div>
       )}
 

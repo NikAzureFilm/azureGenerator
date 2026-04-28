@@ -4,6 +4,7 @@ import { GoogleGenAI } from 'npm:@google/genai';
 import {
   generateImageWithGeminiFlash,
   generateImageWithGeminiFlashEdit,
+  generateImageWithGptImage2,
 } from '../_shared/imageGen.ts';
 import {
   getServiceRoleSupabaseClient,
@@ -12,7 +13,10 @@ import {
 import { reformatSignedUrl } from '../_shared/messageUtils.ts';
 import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
+import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 import { Buffer } from 'node:buffer';
+import OpenAI from 'npm:openai@^6.34.0';
 
 initSentry();
 
@@ -25,6 +29,10 @@ const debugLog = (...args: unknown[]) => {
 
 const googleGenAI = new GoogleGenAI({
   apiKey: Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '',
+});
+
+const openAI = new OpenAI({
+  apiKey: Deno.env.get('OPENAI_API_KEY')?.trim() ?? '',
 });
 
 type ViewLabel = 'front' | 'left' | 'back' | 'right';
@@ -45,7 +53,14 @@ const buildPrompt = (
   view: ViewLabel,
   userPrompt: string,
   hasRef: boolean,
+  mode: 'input' | 'multiview',
 ): string => {
+  if (mode === 'input') {
+    if (hasRef) {
+      return `${BASE_INSTRUCTIONS} Re-render the reference as a clean 3D-ready input image. Preserve the main object's identity, proportions, colors, and materials. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
+    }
+    return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}.`;
+  }
   const viewDirective = VIEW_DIRECTIVE[view];
   if (hasRef) {
     return `${BASE_INSTRUCTIONS} Re-render the SAME object shown in the reference image from a different angle: ${viewDirective} Preserve the object's identity, geometry, proportions, colors, and materials exactly. Only the viewing angle changes. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
@@ -87,64 +102,20 @@ Deno.serve(async (req) => {
 
     const serviceClient = getServiceRoleSupabaseClient();
 
-    const { data: rawTokenResult, error: tokenError } = await serviceClient.rpc(
-      'deduct_tokens',
-      {
-        p_user_id: userData.user.id,
-        p_operation: 'chat',
-      },
-    );
-
-    const tokenResult = rawTokenResult as {
-      success: boolean;
-      tokensRequired?: number;
-      tokensAvailable?: number;
-    } | null;
-
-    if (tokenError || !tokenResult) {
-      logError(tokenError ?? new Error('Token deduction returned null'), {
-        functionName: 'generate-view',
-        statusCode: 500,
-        userId: userData.user.id,
-      });
-      return new Response(
-        JSON.stringify({
-          error: { message: tokenError?.message ?? 'Token deduction failed' },
-        }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    if (!tokenResult.success) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            message: 'insufficient_tokens',
-            code: 'insufficient_tokens',
-            tokensRequired: tokenResult.tokensRequired,
-            tokensAvailable: tokenResult.tokensAvailable,
-          },
-        }),
-        {
-          status: 402,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
     const {
       prompt,
       view,
       conversationId,
       refImageId,
+      provider,
+      mode = 'multiview',
     }: {
       prompt?: string;
       view?: ViewLabel;
       conversationId?: string;
       refImageId?: string;
+      provider?: 'openai' | 'nano-banana';
+      mode?: 'input' | 'multiview';
     } = await req.json();
 
     if (!conversationId) {
@@ -181,34 +152,114 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
-    const builtPrompt = buildPrompt(view, userPrompt, !!refImageId);
+    const shouldUseOpenAi =
+      provider === 'openai' || (mode === 'multiview' && view === 'front');
+    const builtPrompt = buildPrompt(view, userPrompt, !!refImageId, mode);
+    const tokenCost = shouldUseOpenAi
+      ? mode === 'input'
+        ? FEATURE_COSTS.generatedInputImage.tokens
+        : FEATURE_COSTS.multiviewFrontImage.tokens
+      : FEATURE_COSTS.multiviewNanoBananaView.tokens;
 
-    debugLog('generate-view', { view, hasRef: !!refImageId });
+    if (!userData.user.email) {
+      return new Response(
+        JSON.stringify({ error: { message: 'User email missing' } }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
 
-    let imageBytes: Buffer;
-    if (refImageId) {
-      const refPath = `${userId}/${conversationId}/${refImageId}`;
-      const { data: signedRef, error: signedRefError } =
-        await serviceClient.storage
-          .from('images')
-          .createSignedUrl(refPath, 60 * 60);
-      if (signedRefError || !signedRef?.signedUrl) {
-        throw new Error(
-          `Failed to sign reference image: ${signedRefError?.message ?? 'unknown'}`,
+    try {
+      const consumeResult = await billing.consume(userData.user.email, {
+        tokens: tokenCost,
+        operation: 'chat',
+        referenceId: crypto.randomUUID(),
+      });
+      if (!consumeResult.ok) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'insufficient_tokens',
+              code: 'insufficient_tokens',
+              tokensRequired: consumeResult.tokensRequired,
+              tokensAvailable: consumeResult.tokensAvailable,
+            },
+          }),
+          {
+            status: 402,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
         );
       }
-      imageBytes = await generateImageWithGeminiFlashEdit(
-        googleGenAI,
-        builtPrompt,
-        reformatSignedUrl(signedRef.signedUrl),
+    } catch (err) {
+      const status = err instanceof BillingClientError ? err.status : 502;
+      logError(err, {
+        functionName: 'generate-view',
+        statusCode: status,
+        userId,
+      });
+      return new Response(
+        JSON.stringify({ error: { message: 'billing_unavailable' } }),
+        {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
       );
+    }
+
+    debugLog('generate-view', {
+      view,
+      hasRef: !!refImageId,
+      provider: shouldUseOpenAi ? 'openai' : 'nano-banana',
+      tokenCost,
+      mode,
+    });
+
+    let imageBytes: Buffer;
+    let contentType: string | undefined;
+    if (shouldUseOpenAi) {
+      const result = await generateImageWithGptImage2(
+        serviceClient,
+        openAI,
+        userId,
+        conversationId,
+        builtPrompt,
+        refImageId ? [refImageId] : [],
+        null,
+        'high',
+      );
+      imageBytes = result.imageBytes;
+      contentType = result.contentType;
     } else {
-      imageBytes = await generateImageWithGeminiFlash(googleGenAI, builtPrompt);
+      if (refImageId) {
+        const refPath = `${userId}/${conversationId}/${refImageId}`;
+        const { data: signedRef, error: signedRefError } =
+          await serviceClient.storage
+            .from('images')
+            .createSignedUrl(refPath, 60 * 60);
+        if (signedRefError || !signedRef?.signedUrl) {
+          throw new Error(
+            `Failed to sign reference image: ${signedRefError?.message ?? 'unknown'}`,
+          );
+        }
+        imageBytes = await generateImageWithGeminiFlashEdit(
+          googleGenAI,
+          builtPrompt,
+          reformatSignedUrl(signedRef.signedUrl),
+        );
+      } else {
+        imageBytes = await generateImageWithGeminiFlash(
+          googleGenAI,
+          builtPrompt,
+        );
+      }
     }
 
     const imageId = crypto.randomUUID();
     const path = `${userId}/${conversationId}/${imageId}`;
-    const contentType = detectImageMediaType(imageBytes);
+    contentType = contentType ?? detectImageMediaType(imageBytes);
     const { error: uploadError } = await serviceClient.storage
       .from('images')
       .upload(path, imageBytes, { contentType });

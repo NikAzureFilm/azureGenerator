@@ -31,3 +31,7 @@ dist-ssr
 # other secret files
 .env.local
 .env.langfuse
+
+# local-only internal pricing / markup data
+shared/internal-pricing.local.*
+supabase/functions/admin-pricing/internal-pricing.local.*

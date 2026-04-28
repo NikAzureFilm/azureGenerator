@@ -8,6 +8,8 @@ import {
   Settings,
   LayoutGrid,
   ArrowUpRight,
+  CircleDollarSign,
+  ShieldCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -54,6 +56,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const { user, signOut } = useAuth();
   const isMobile = useIsMobile();
   const { data: profile } = useProfile();
+  const showAdminNav = import.meta.env.VITE_SHOW_ADMIN_NAV === 'true';
 
   // Get 10 most recent conversations
   const { data: recentConversations } = useQuery<Conversation[]>({
@@ -313,6 +316,68 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                   AzureFilm
                 </Button>
               </a>
+            )}
+
+            {!isSidebarOpen && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="adam_dark_collapsed"
+                    className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
+                    onClick={() => sidebarNavigate('/pricing')}
+                  >
+                    <CircleDollarSign className="h-[22px] w-[22px]" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="flex flex-col">
+                  <span className="font-semibold">Pricing</span>
+                  <span className="text-xs text-muted-foreground">
+                    View token costs
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {isSidebarOpen && (
+              <Button
+                variant="adam_dark"
+                className="flex h-10 w-full items-center justify-start gap-2"
+                onClick={() => sidebarNavigate('/pricing')}
+              >
+                <CircleDollarSign className="h-[22px] w-[22px] min-w-[22px]" />
+                Pricing
+              </Button>
+            )}
+
+            {showAdminNav && !isSidebarOpen && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="adam_dark_collapsed"
+                    className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
+                    onClick={() => sidebarNavigate('/admin/pricing')}
+                  >
+                    <ShieldCheck className="h-[22px] w-[22px]" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="flex flex-col">
+                  <span className="font-semibold">Admin Pricing</span>
+                  <span className="text-xs text-muted-foreground">
+                    Internal pricing dashboard
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {showAdminNav && isSidebarOpen && (
+              <Button
+                variant="adam_dark"
+                className="flex h-10 w-full items-center justify-start gap-2"
+                onClick={() => sidebarNavigate('/admin/pricing')}
+              >
+                <ShieldCheck className="h-[22px] w-[22px] min-w-[22px]" />
+                Admin Pricing
+              </Button>
             )}
 
             {/* GitHub Button - Collapsed state */}

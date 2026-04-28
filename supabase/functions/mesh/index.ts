@@ -13,6 +13,10 @@ import {
 } from '../_shared/imageGen.ts';
 import { Model, MeshFileType, MultiviewImages } from '@shared/types.ts';
 import {
+  FEATURE_COSTS,
+  getCreativeModelTokenCost,
+} from '../../../shared/tokenCosts.ts';
+import {
   getServiceRoleSupabaseClient,
   SupabaseClient,
 } from '../_shared/supabaseClient.ts';
@@ -22,7 +26,9 @@ import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError, logApiError } from '../_shared/sentry.ts';
 import { Buffer } from 'node:buffer';
 
-const MESH_TOKEN_COST = 30;
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
 
 // Initialize Sentry for error logging
 initSentry();
@@ -100,6 +106,23 @@ async function getPriorImageCallId(
   return data?.[0]?.image_generation_call_id ?? null;
 }
 
+async function getSignedImageUrl(
+  supabaseClient: SupabaseClient,
+  userId: string,
+  conversationId: string,
+  imageId: string,
+): Promise<string> {
+  const { data, error } = await supabaseClient.storage
+    .from('images')
+    .createSignedUrl(`${userId}/${conversationId}/${imageId}`, 60 * 60);
+  if (error || !data?.signedUrl) {
+    throw new Error(
+      `Failed to sign image ${imageId}: ${error?.message ?? 'unknown error'}`,
+    );
+  }
+  return reformatSignedUrl(data.signedUrl);
+}
+
 // Unified mesh-image generation. Every mesh mode goes through this helper:
 //   1. Primary: gpt-image-2 via OpenAI Responses API (canonical per OpenAI
 //      docs, supports multi-turn via image_generation_call id)
@@ -108,11 +131,9 @@ async function getPriorImageCallId(
 //
 // Flux is also the sole provider for mesh previews (see submitPreviewJob),
 // which intentionally does not go through this chain.
-// Per-mode gpt-image-2 quality. fast mode defaults to `low` ($0.006/image,
-// cheaper than the Flux it replaced) since fast-mode output is inherently
-// draft quality. quality/ultra use `high` ($0.21/image) for final seed
-// fidelity. See https://developers.openai.com/api/docs/guides/image-generation
-// for pricing tiers.
+// Per-mode gpt-image-2 quality. Fast mode defaults to `low` since fast-mode
+// output is inherently draft quality. Quality/ultra use `high` for final seed
+// fidelity. Internal cost assumptions live in protected admin pricing config.
 const QUALITY_BY_MESH_MODEL: Record<
   'fast' | 'quality' | 'ultra',
   GptImageQuality
@@ -411,51 +432,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Deduct tokens for mesh operation via adam-billing
     if (!userData.user.email) {
       return new Response(
         JSON.stringify({ error: { message: 'User email missing' } }),
         {
           status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    const meshReferenceId = crypto.randomUUID();
-    try {
-      const result = await billing.consume(userData.user.email, {
-        tokens: MESH_TOKEN_COST,
-        operation: 'mesh',
-        referenceId: meshReferenceId,
-      });
-      if (!result.ok) {
-        return new Response(
-          JSON.stringify({
-            error: {
-              message: 'insufficient_tokens',
-              code: 'insufficient_tokens',
-              tokensRequired: result.tokensRequired,
-              tokensAvailable: result.tokensAvailable,
-            },
-          }),
-          {
-            status: 402,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-    } catch (err) {
-      const status = err instanceof BillingClientError ? err.status : 502;
-      logError(err, {
-        functionName: 'mesh',
-        statusCode: status,
-        userId: userData.user.id,
-      });
-      return new Response(
-        JSON.stringify({ error: { message: 'billing_unavailable' } }),
-        {
-          status: 502,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       );
@@ -500,6 +481,57 @@ Deno.serve(async (req) => {
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
+
+    const meshTokenCost =
+      action === 'upscale'
+        ? FEATURE_COSTS.upscaleMesh.tokens
+        : getCreativeModelTokenCost(
+            model === 'fast' ||
+              model === 'quality' ||
+              model === 'ultra' ||
+              model === 'multiview'
+              ? model
+              : 'quality',
+          );
+
+    const meshReferenceId = crypto.randomUUID();
+    try {
+      const result = await billing.consume(userData.user.email, {
+        tokens: meshTokenCost,
+        operation: 'mesh',
+        referenceId: meshReferenceId,
+      });
+      if (!result.ok) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'insufficient_tokens',
+              code: 'insufficient_tokens',
+              tokensRequired: result.tokensRequired,
+              tokensAvailable: result.tokensAvailable,
+            },
+          }),
+          {
+            status: 402,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+    } catch (err) {
+      const status = err instanceof BillingClientError ? err.status : 502;
+      logError(err, {
+        functionName: 'mesh',
+        statusCode: status,
+        userId: userData.user.id,
+      });
+      return new Response(
+        JSON.stringify({ error: { message: 'billing_unavailable' } }),
+        {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
 
     // Handle upscale action with streaming response
     if (action === 'upscale' && upscaleMeshId && conversationId) {

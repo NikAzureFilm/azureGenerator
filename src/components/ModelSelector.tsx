@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Model } from '@shared/types';
+import { formatTokenCost } from '@shared/tokenCosts';
 import { ModelConfig } from '../types/misc.ts';
 import { useConversation } from '@/contexts/ConversationContext';
 
@@ -166,6 +167,11 @@ export function ModelSelector({
               {selectedModelConfig?.name}
             </span>
           </span>
+          {selectedModelConfig?.tokenCost ? (
+            <span className="hidden rounded bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary md:inline">
+              {formatTokenCost(selectedModelConfig.tokenCost)}
+            </span>
+          ) : null}
           <ChevronDown
             className={`ml-1 h-4 w-4 flex-shrink-0 opacity-70 transition-transform duration-200 ${
               isDropdownOpen ? 'rotate-180' : ''
@@ -205,7 +211,7 @@ export function ModelSelector({
             disabled={!!model.disabled}
           >
             <div className="flex-1">
-              <div className="flex items-center">
+              <div className="flex items-center justify-between gap-2">
                 <span
                   className={cn(
                     'font-medium',
@@ -214,6 +220,11 @@ export function ModelSelector({
                 >
                   {model.name}
                 </span>
+                {model.tokenCost ? (
+                  <span className="border-adam-neutral-600 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-adam-text-secondary">
+                    {formatTokenCost(model.tokenCost)}
+                  </span>
+                ) : null}
               </div>
               <p
                 className={cn(

@@ -26,6 +26,8 @@ import { TermsOfServiceView } from './views/TermsOfServiceView.tsx';
 import EmailConfirmation from './views/EmailConfirmation.tsx';
 import { PromptView } from './views/PromptView.tsx';
 import { SubscriptionView } from './views/SubscriptionView.tsx';
+import { PricingView } from './views/PricingView.tsx';
+import { AdminPricingView } from './views/AdminPricingView.tsx';
 import { HistoryView } from './views/HistoryView.tsx';
 import { AuthGuard } from './components/auth/AuthGuard.tsx';
 import { Layout } from './components/Layout.tsx';
@@ -90,6 +92,11 @@ const router = sentryCreateBrowserRouter(
               errorElement: <ErrorView />,
             },
             {
+              path: '/pricing',
+              element: <PricingView />,
+              errorElement: <ErrorView />,
+            },
+            {
               element: (
                 <AuthGuard>
                   <Outlet />
@@ -110,6 +117,11 @@ const router = sentryCreateBrowserRouter(
                   path: '/subscription',
                   errorElement: <ErrorView />,
                   element: <SubscriptionView />,
+                },
+                {
+                  path: '/admin/pricing',
+                  errorElement: <ErrorView />,
+                  element: <AdminPricingView />,
                 },
                 {
                   path: '/settings',

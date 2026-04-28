@@ -140,8 +140,8 @@ export const generateImageWithGptImage2 = async (
   prompt: string,
   images: string[],
   priorImageCallId: string | null,
-  // 'low' (~$0.006) for fast/draft use, 'high' (~$0.21) for final mesh
-  // seeds. 'medium' also available (~$0.053).
+  // Quality is selected by workflow tier. Internal cost assumptions live in
+  // protected admin pricing config, not in source.
   quality: GptImageQuality,
 ): Promise<GptImage2Result> => {
   debugLog('Generating image with gpt-image-2 via Responses API', {
@@ -407,7 +407,6 @@ export const generateImageWithFalFlux = async (
     const result = await fal.run('fal-ai/flux-pro/v1.1', {
       input: {
         prompt: enhancedPrompt,
-        enable_safety_checker: false,
         safety_tolerance: '6',
       },
     });

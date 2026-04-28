@@ -21,6 +21,7 @@ export interface ModelConfig {
   supportsTools?: boolean;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  tokenCost?: number;
 }
 
 export interface MessageItem {

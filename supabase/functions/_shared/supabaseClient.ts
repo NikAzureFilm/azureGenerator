@@ -3,7 +3,7 @@ import {
   SupabaseClient as DefaultSupabaseClient,
   SupabaseClientOptions,
 } from 'https://esm.sh/@supabase/supabase-js@2.49.9';
-import { Database } from '@shared/database.ts';
+import { Database } from '../../../shared/database.ts';
 
 export type SupabaseClient = DefaultSupabaseClient<Database>;
 

@@ -36,6 +36,10 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.admin-pricing]
+enabled = true
+verify_jwt = true
+
 [functions.mesh]
 enabled = true
 verify_jwt = true

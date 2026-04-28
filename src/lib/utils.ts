@@ -2,6 +2,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Message, Model, Parameter } from '@shared/types';
 import { ModelConfig } from '../types/misc.ts';
+import { FEATURE_COSTS, getCreativeModelTokenCost } from '@shared/tokenCosts';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -244,6 +245,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
+    tokenCost: FEATURE_COSTS.parametric.tokens,
   },
   {
     id: 'anthropic/claude-opus-4.7',
@@ -253,6 +255,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
+    tokenCost: FEATURE_COSTS.parametric.tokens,
   },
   {
     id: 'openai/gpt-5.5',
@@ -262,6 +265,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
+    tokenCost: FEATURE_COSTS.parametric.tokens,
   },
   {
     id: 'deepseek/deepseek-v4-pro',
@@ -271,6 +275,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsTools: true,
     supportsThinking: true,
     supportsVision: false,
+    tokenCost: FEATURE_COSTS.parametric.tokens,
   },
 ];
 
@@ -280,18 +285,21 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     name: 'Max Quality',
     description: 'Highest quality mesh and clean topology',
     timeEstimate: '5-6 minutes',
+    tokenCost: getCreativeModelTokenCost('ultra'),
   },
   {
     id: 'quality',
     name: 'Draft',
     description: 'Rough quality for quick iterations',
     timeEstimate: '~45 seconds',
+    tokenCost: getCreativeModelTokenCost('quality'),
   },
   {
     id: 'fast',
     name: 'Textureless',
     description: 'Faster, with simpler, textureless output.',
     timeEstimate: '60-90 seconds',
+    tokenCost: getCreativeModelTokenCost('fast'),
   },
   {
     id: 'multiview',
@@ -299,6 +307,7 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     description:
       'Four labeled views (front/left/back/right) for precise geometry.',
     timeEstimate: '~60 seconds',
+    tokenCost: getCreativeModelTokenCost('multiview'),
   },
 ];
 
