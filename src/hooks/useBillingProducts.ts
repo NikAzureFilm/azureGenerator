@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { useQuery } from '@tanstack/react-query';
+import { getFallbackSubscriptionProducts } from '@/hooks/billingProductFallbacks';
 
 export type SubscriptionLevel = 'standard' | 'pro';
 
@@ -24,8 +25,9 @@ export function useSubscriptionProducts() {
         'billing-products?type=subscription',
         { method: 'GET' },
       );
-      if (error) throw error;
-      return (data as BillingProduct[]) ?? [];
+      if (error) return getFallbackSubscriptionProducts();
+      const products = (data as BillingProduct[]) ?? [];
+      return products.length > 0 ? products : getFallbackSubscriptionProducts();
     },
   });
 }

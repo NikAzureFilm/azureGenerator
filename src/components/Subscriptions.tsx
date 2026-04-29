@@ -225,8 +225,9 @@ export function Subscriptions() {
                         key={pack.id}
                         variant="dark"
                         className="rounded-full border border-adam-neutral-700 px-5 font-light"
-                        disabled={isPurchaseLoading}
+                        disabled={isPurchaseLoading || !pack.stripePriceId}
                         onClick={() =>
+                          pack.stripePriceId &&
                           purchaseTokenPack({ priceId: pack.stripePriceId })
                         }
                       >

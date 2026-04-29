@@ -387,9 +387,12 @@ export default function SettingsView() {
                         <button
                           key={pack.id}
                           type="button"
-                          disabled={isPurchaseLoading}
+                          disabled={isPurchaseLoading || !pack.stripePriceId}
                           onClick={() =>
-                            purchaseTokenPack({ priceId: pack.stripePriceId })
+                            pack.stripePriceId &&
+                            purchaseTokenPack({
+                              priceId: pack.stripePriceId,
+                            })
                           }
                           className={cn(
                             'relative flex flex-col items-start rounded-lg border border-adam-neutral-800 bg-adam-background-1 px-3 py-2.5 text-left transition-colors',

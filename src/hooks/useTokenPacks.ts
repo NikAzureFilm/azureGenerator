@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { useQuery } from '@tanstack/react-query';
+import { getFallbackTokenPackProducts } from '@/hooks/billingProductFallbacks';
 import type { BillingProduct } from '@/hooks/useBillingProducts';
 
 export function useTokenPacks() {
@@ -10,9 +11,11 @@ export function useTokenPacks() {
         'billing-products?type=pack',
         { method: 'GET' },
       );
-      if (error) throw error;
+      if (error) return getFallbackTokenPackProducts();
       const products = (data as BillingProduct[]) ?? [];
-      return [...products].sort((a, b) => a.tokenAmount - b.tokenAmount);
+      const visibleProducts =
+        products.length > 0 ? products : getFallbackTokenPackProducts();
+      return [...visibleProducts].sort((a, b) => a.tokenAmount - b.tokenAmount);
     },
   });
 }
