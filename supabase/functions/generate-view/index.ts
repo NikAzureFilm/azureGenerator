@@ -15,6 +15,7 @@ import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
+import { getImageGenerationTokenCost } from '../../../shared/imageGeneration.ts';
 import { Buffer } from 'node:buffer';
 import OpenAI from 'npm:openai@^6.34.0';
 
@@ -160,7 +161,7 @@ Deno.serve(async (req) => {
       ? mode === 'input'
         ? FEATURE_COSTS.generatedInputImage.tokens
         : FEATURE_COSTS.multiviewFrontImage.tokens
-      : FEATURE_COSTS.multiviewNanoBananaView.tokens;
+      : getImageGenerationTokenCost('nano-banana-2');
 
     if (!userData.user.email) {
       return new Response(

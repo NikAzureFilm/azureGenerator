@@ -11,9 +11,11 @@ import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationProvider,
+  getImageGenerationTokenCost,
+  IMAGE_GENERATION_MODELS,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
-import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
+import { formatTokenCost } from '@shared/tokenCosts';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
 import { getMultiviewGenerationReference } from '@/utils/multiviewReference';
@@ -57,6 +59,7 @@ interface MultiviewComposerProps {
   onSlotsChange: Dispatch<SetStateAction<MultiviewSlotMap>>;
   prompt: string;
   imageGenerationModel?: ImageGenerationModel;
+  onImageGenerationModelChange?: (model: ImageGenerationModel) => void;
   disabled?: boolean;
 }
 
@@ -67,6 +70,7 @@ export function MultiviewComposer({
   onSlotsChange,
   prompt,
   imageGenerationModel = DEFAULT_IMAGE_GENERATION_MODEL,
+  onImageGenerationModelChange,
   disabled = false,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
@@ -223,6 +227,37 @@ export function MultiviewComposer({
             : 'Add Front first — it becomes the reference for the others'}
         </span>
       </div>
+      <div className="grid grid-cols-2 gap-1 rounded-lg bg-adam-neutral-800 p-1 md:ml-auto md:w-fit">
+        {IMAGE_GENERATION_MODELS.map((model) => {
+          const selected = imageGenerationModel === model.id;
+          return (
+            <button
+              key={model.id}
+              type="button"
+              disabled={disabled || !onImageGenerationModelChange}
+              onClick={() => onImageGenerationModelChange?.(model.id)}
+              className={cn(
+                'rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                selected
+                  ? 'bg-adam-blue text-white'
+                  : 'text-adam-text-secondary hover:bg-adam-neutral-700 hover:text-adam-text-primary',
+              )}
+            >
+              <span className="block text-[10px] font-medium leading-3">
+                {model.name}
+              </span>
+              <span
+                className={cn(
+                  'block text-[9px]',
+                  selected ? 'text-white/80' : 'text-adam-text-secondary',
+                )}
+              >
+                {formatTokenCost(getImageGenerationTokenCost(model.id))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
       <div className="grid grid-cols-4 gap-2">
         {SLOT_ORDER.map((slot) => (
           <MultiviewSlotCard
@@ -234,11 +269,7 @@ export function MultiviewComposer({
             onGenerate={handleGenerate}
             onRemove={handleRemove}
             isReference={slot === firstFilledSlot}
-            tokenCost={
-              slot === 'front'
-                ? FEATURE_COSTS.multiviewFrontImage.tokens
-                : FEATURE_COSTS.multiviewNanoBananaView.tokens
-            }
+            tokenCost={getImageGenerationTokenCost(imageGenerationModel)}
           />
         ))}
       </div>

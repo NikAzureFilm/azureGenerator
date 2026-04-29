@@ -24,9 +24,16 @@ export const FEATURE_COSTS = {
   },
   generatedInputImage: {
     id: 'generated-input-image',
-    label: 'Generated input image',
+    label: 'Generated input image - Image Gen 2',
     tokens: 63,
-    description: 'Create a reference image from a prompt.',
+    description: 'Create a reference image from a prompt with Image Gen 2.',
+  },
+  generatedInputImageNanoBanana: {
+    id: 'generated-input-image-nano-banana',
+    label: 'Generated input image - Nano Banana 2',
+    tokens: 15,
+    description:
+      'Create a lower-cost reference image from a prompt with Nano Banana 2.',
   },
   multiviewFrontImage: {
     id: 'multiview-front-image',

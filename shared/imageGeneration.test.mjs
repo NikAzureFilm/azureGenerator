@@ -3,6 +3,7 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   IMAGE_GENERATION_MODELS,
   getImageGenerationProvider,
+  getImageGenerationTokenCost,
   normalizeImageGenerationModel,
 } from './imageGeneration.ts';
 
@@ -21,3 +22,6 @@ assert.equal(normalizeImageGenerationModel('unknown-model'), 'gpt-image-2');
 
 assert.equal(getImageGenerationProvider('gpt-image-2'), 'openai');
 assert.equal(getImageGenerationProvider('nano-banana-2'), 'nano-banana');
+
+assert.equal(getImageGenerationTokenCost('gpt-image-2'), 63);
+assert.equal(getImageGenerationTokenCost('nano-banana-2'), 15);

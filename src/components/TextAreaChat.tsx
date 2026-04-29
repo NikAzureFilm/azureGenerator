@@ -83,10 +83,11 @@ import {
 import { useMeshFiles } from '@/contexts/MeshFilesContext';
 import { AnimatePresence, motion } from 'framer-motion';
 import { BrandLogo } from '@/components/BrandLogo';
-import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
+import { formatTokenCost } from '@shared/tokenCosts';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationProvider,
+  getImageGenerationTokenCost,
   IMAGE_GENERATION_MODELS,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
@@ -478,61 +479,60 @@ function ImageGenerationModelControl({
   value,
   onChange,
   disabled = false,
-  compact = false,
 }: {
   value: ImageGenerationModel;
   onChange: (model: ImageGenerationModel) => void;
   disabled?: boolean;
-  compact?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-1 rounded-lg bg-adam-neutral-800 p-1">
+      {IMAGE_GENERATION_MODELS.map((model) => {
+        const selected = value === model.id;
+        return (
+          <button
+            key={model.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(model.id)}
+            className={cn(
+              'rounded-md px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              selected
+                ? 'bg-adam-blue text-white'
+                : 'text-adam-text-secondary hover:bg-adam-neutral-700 hover:text-adam-text-primary',
+            )}
+          >
+            <span className="block text-xs font-medium">{model.name}</span>
+            <span
+              className={cn(
+                'mt-0.5 block text-[10px]',
+                selected ? 'text-white/80' : 'text-adam-text-secondary',
+              )}
+            >
+              {formatTokenCost(getImageGenerationTokenCost(model.id))}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SelectedImageGenerationLabel({
+  value,
+}: {
+  value: ImageGenerationModel;
 }) {
   const selected =
     IMAGE_GENERATION_MODELS.find((model) => model.id === value) ??
     IMAGE_GENERATION_MODELS[0];
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          className={cn(
-            'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
-            compact ? 'w-fit' : 'w-full justify-between',
-          )}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <span className="flex items-center gap-1.5">
-            <Sparkles className="h-4 w-4" />
-            <span className="text-xs">{selected.name}</span>
-          </span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="flex w-56 flex-col gap-1 rounded-lg border-adam-neutral-700 bg-adam-neutral-700 p-1"
-        onClick={(event) => event.stopPropagation()}
-      >
-        {IMAGE_GENERATION_MODELS.map((model) => (
-          <button
-            key={model.id}
-            type="button"
-            className={cn(
-              'rounded-md px-3 py-2 text-left transition-colors hover:bg-adam-bg-secondary-dark',
-              value === model.id && 'bg-adam-neutral-800',
-            )}
-            onClick={() => onChange(model.id)}
-          >
-            <span className="block text-sm font-medium text-adam-text-primary">
-              {model.name}
-            </span>
-            <span className="block text-xs text-adam-text-secondary">
-              {model.description}
-            </span>
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
+    <>
+      <span className="hidden text-xs xl:inline">{selected.name}</span>
+      <span className="hidden rounded bg-adam-neutral-800 px-1 text-[10px] text-adam-text-secondary xl:inline">
+        {formatTokenCost(getImageGenerationTokenCost(value))}
+      </span>
+    </>
   );
 }
 
@@ -1639,11 +1639,15 @@ function TextAreaChat({
               }}
             />
             <div className="text-xs text-adam-text-secondary">
-              Cost: {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)}
+              Cost:{' '}
+              {formatTokenCost(getImageGenerationTokenCost(imageCreatorModel))}
             </div>
             <ImageGenerationModelControl
               value={imageCreatorModel}
-              onChange={setImageCreatorModel}
+              onChange={(nextModel) => {
+                setImageCreatorModel(nextModel);
+                setImageGenerationModel?.(nextModel);
+              }}
               disabled={isGeneratingInputImage || isUploadingCreatorRef}
             />
           </div>
@@ -1691,6 +1695,7 @@ function TextAreaChat({
             onSlotsChange={setMultiviewSlots}
             prompt={input}
             imageGenerationModel={selectedImageGenerationModel}
+            onImageGenerationModelChange={setImageGenerationModel}
             disabled={disabled || isLoading}
           />
         </div>
@@ -2046,37 +2051,24 @@ function TextAreaChat({
                       <Sparkles className="h-4 w-4" />
                     )}
                     <span className="hidden text-xs lg:inline">Image</span>
-                    <span className="hidden rounded bg-adam-neutral-800 px-1 text-[10px] text-adam-text-secondary xl:inline">
-                      {formatTokenCost(
-                        FEATURE_COSTS.generatedInputImage.tokens,
-                      )}
-                    </span>
+                    <SelectedImageGenerationLabel
+                      value={selectedImageGenerationModel}
+                    />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Generate input image with OpenAI (
-                  {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)})
+                  Generate input image with{' '}
+                  {
+                    IMAGE_GENERATION_MODELS.find(
+                      (item) => item.id === selectedImageGenerationModel,
+                    )?.name
+                  }{' '}
+                  (
+                  {formatTokenCost(
+                    getImageGenerationTokenCost(selectedImageGenerationModel),
+                  )}
+                  )
                 </TooltipContent>
-              </Tooltip>
-            )}
-
-            {type === 'creative' && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div>
-                    <ImageGenerationModelControl
-                      value={selectedImageGenerationModel}
-                      onChange={(nextModel) =>
-                        setImageGenerationModel?.(nextModel)
-                      }
-                      disabled={
-                        disabled || isLoading || !setImageGenerationModel
-                      }
-                      compact
-                    />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>Image generation model</TooltipContent>
               </Tooltip>
             )}
 
