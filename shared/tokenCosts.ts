@@ -22,23 +22,24 @@ export const FEATURE_COSTS = {
     tokens: 5,
     description: 'Text-to-CAD generation with editable parameters.',
   },
-  parametricCadQuick: {
-    id: 'parametric-cad-quick',
-    label: 'CAD Quick generation',
-    tokens: 3,
-    description: 'Lightweight CAD generation for fast iterations.',
-  },
   parametricCadPro: {
     id: 'parametric-cad-pro',
     label: 'CAD Pro generation',
-    tokens: 6,
-    description: 'Balanced practical CAD generation with adaptive reasoning.',
+    tokens: 8,
+    description: 'Recommended default for accurate, practical CAD generation.',
   },
-  parametricCadMax: {
-    id: 'parametric-cad-max',
-    label: 'CAD Max generation',
-    tokens: 12,
-    description: 'Top-tier reasoning for complex CAD problems.',
+  parametricCadLite: {
+    id: 'parametric-cad-lite',
+    label: 'CAD Lite generation',
+    tokens: 4,
+    description: 'Cheaper, faster alternative for quick iterations.',
+  },
+  parametricCadReasoning: {
+    id: 'parametric-cad-reasoning',
+    label: 'CAD Reasoning generation',
+    tokens: 50,
+    description:
+      'Alternative engine with deeper reasoning — slower and costlier per call.',
   },
   generatedInputImage: {
     id: 'generated-input-image',

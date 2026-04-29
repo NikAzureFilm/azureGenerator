@@ -8,9 +8,9 @@ const FEATURE_ROWS = [
     group: 'Core',
     rows: [
       FEATURE_COSTS.chat,
-      FEATURE_COSTS.parametricCadQuick,
+      FEATURE_COSTS.parametricCadLite,
       FEATURE_COSTS.parametricCadPro,
-      FEATURE_COSTS.parametricCadMax,
+      FEATURE_COSTS.parametricCadReasoning,
     ],
   },
   {
