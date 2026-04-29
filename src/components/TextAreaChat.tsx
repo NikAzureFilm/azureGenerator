@@ -16,6 +16,7 @@ import {
   CircleX,
   Wand2,
   Box,
+  Ruler,
   X,
   Sparkles,
 } from 'lucide-react';
@@ -2072,35 +2073,57 @@ function TextAreaChat({
               </Tooltip>
             )}
 
-            {/* Creative mode toggle button */}
+            {/* CAD / Mesh segmented control */}
             {onTypeChange && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm transition-colors',
-                      type === 'creative'
-                        ? 'border-adam-blue/50 bg-adam-blue/10 text-adam-blue'
-                        : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTypeChange(
-                        type === 'parametric' ? 'creative' : 'parametric',
-                      );
-                    }}
-                  >
-                    <Box className="h-4 w-4" />
-                    <span className="hidden text-xs lg:inline">Mesh</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {type === 'parametric'
-                    ? 'Switch to Creative mode'
-                    : 'Switch to Parametric mode'}
-                </TooltipContent>
-              </Tooltip>
+              <div className="flex items-center gap-0.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        type === 'parametric'
+                          ? 'bg-adam-blue/15 text-adam-blue'
+                          : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (type !== 'parametric') onTypeChange('parametric');
+                      }}
+                    >
+                      <Ruler className="h-4 w-4" />
+                      <span className="hidden lg:inline">CAD</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Generate a CAD model — precise parts, mechanisms, practical
+                    engineering
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        type === 'creative'
+                          ? 'bg-adam-blue/15 text-adam-blue'
+                          : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (type !== 'creative') onTypeChange('creative');
+                      }}
+                    >
+                      <Box className="h-4 w-4" />
+                      <span className="hidden lg:inline">Mesh</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Generate a mesh — figurines, organic shapes, sculpts
+                  </TooltipContent>
+                </Tooltip>
+              </div>
             )}
 
             {/* Quads vs Polys toggle button - show for standard and ultra models */}

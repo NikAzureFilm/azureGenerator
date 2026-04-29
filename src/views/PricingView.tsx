@@ -6,7 +6,12 @@ import { Button } from '@/components/ui/button';
 const FEATURE_ROWS = [
   {
     group: 'Core',
-    rows: [FEATURE_COSTS.chat, FEATURE_COSTS.parametric],
+    rows: [
+      FEATURE_COSTS.chat,
+      FEATURE_COSTS.parametricCadQuick,
+      FEATURE_COSTS.parametricCadPro,
+      FEATURE_COSTS.parametricCadMax,
+    ],
   },
   {
     group: 'Image inputs',
