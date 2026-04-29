@@ -55,21 +55,6 @@ export function PricingView() {
           </Button>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          <Metric
-            label="Assistant"
-            value={formatTokenCost(FEATURE_COSTS.chat.tokens)}
-          />
-          <Metric
-            label="Generated image"
-            value={formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)}
-          />
-          <Metric
-            label="Max quality mesh"
-            value={formatTokenCost(FEATURE_COSTS.ultraMesh.tokens)}
-          />
-        </section>
-
         <section className="flex flex-col gap-6">
           {FEATURE_ROWS.map((group) => (
             <div key={group.group} className="flex flex-col gap-3">
@@ -102,14 +87,5 @@ export function PricingView() {
         </section>
       </div>
     </main>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 p-4">
-      <div className="text-xs text-adam-text-secondary">{label}</div>
-      <div className="mt-2 text-lg font-medium text-white">{value}</div>
-    </div>
   );
 }
