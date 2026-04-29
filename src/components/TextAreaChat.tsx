@@ -56,6 +56,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { useMutation } from '@tanstack/react-query';
@@ -499,6 +507,10 @@ function TextAreaChat({
   const [isDragHover, setIsDragHover] = useState(false);
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
   const [isGeneratingInputImage, setIsGeneratingInputImage] = useState(false);
+  const [isImageCreatorOpen, setIsImageCreatorOpen] = useState(false);
+  const [imageCreatorPrompt, setImageCreatorPrompt] = useState(
+    DEFAULT_CREATIVE_PROMPT,
+  );
   const [dropMessageOpacityClass, setDropMessageOpacityClass] = useState(
     'opacity-0 pointer-events-none',
   );
@@ -1251,9 +1263,15 @@ function TextAreaChat({
     }
   };
 
-  const generateInputImage = async () => {
+  const openImageCreator = useCallback(() => {
+    setImageCreatorPrompt(input.trim() || DEFAULT_CREATIVE_PROMPT);
+    setIsImageCreatorOpen(true);
+  }, [input]);
+
+  const generateInputImage = async (promptOverride?: string) => {
     if (isGeneratingInputImage || type !== 'creative' || isMultiview) return;
-    const prompt = input.trim() || DEFAULT_CREATIVE_PROMPT;
+    const prompt =
+      promptOverride?.trim() || input.trim() || DEFAULT_CREATIVE_PROMPT;
 
     setIsGeneratingInputImage(true);
     try {
@@ -1282,6 +1300,7 @@ function TextAreaChat({
           source: 'upload',
         },
       ]);
+      setIsImageCreatorOpen(false);
     } catch (error) {
       console.error('Error generating input image:', error);
       toast({
@@ -1411,6 +1430,59 @@ function TextAreaChat({
         textareaRef.current?.focus();
       }}
     >
+      <Dialog open={isImageCreatorOpen} onOpenChange={setIsImageCreatorOpen}>
+        <DialogContent
+          className="max-w-xl border-adam-neutral-700 bg-adam-neutral-950 text-adam-text-primary"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <DialogHeader>
+            <DialogTitle>Create input image</DialogTitle>
+            <DialogDescription className="text-adam-text-secondary">
+              Generate a 3D-ready reference image and attach it to this prompt.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              value={imageCreatorPrompt}
+              onChange={(event) => setImageCreatorPrompt(event.target.value)}
+              placeholder="Describe the object to render..."
+              className="min-h-28 resize-none border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary placeholder:text-adam-text-secondary/70"
+              disabled={isGeneratingInputImage}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  void generateInputImage(imageCreatorPrompt);
+                }
+              }}
+            />
+            <div className="text-xs text-adam-text-secondary">
+              {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
+              onClick={() => setIsImageCreatorOpen(false)}
+              disabled={isGeneratingInputImage}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-adam-blue text-white hover:bg-adam-blue/90"
+              onClick={() => void generateInputImage(imageCreatorPrompt)}
+              disabled={isGeneratingInputImage}
+            >
+              {isGeneratingInputImage ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              Generate image
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {isMultiview ? (
         <div
           className={cn(
@@ -1765,7 +1837,7 @@ function TextAreaChat({
                     className="flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void generateInputImage();
+                      openImageCreator();
                     }}
                     disabled={disabled || isLoading || isGeneratingInputImage}
                   >
