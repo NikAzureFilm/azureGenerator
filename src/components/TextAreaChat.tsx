@@ -56,6 +56,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { useMutation } from '@tanstack/react-query';
@@ -499,6 +507,14 @@ function TextAreaChat({
   const [isDragHover, setIsDragHover] = useState(false);
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
   const [isGeneratingInputImage, setIsGeneratingInputImage] = useState(false);
+  const [isImageCreatorOpen, setIsImageCreatorOpen] = useState(false);
+  const [imageCreatorPrompt, setImageCreatorPrompt] = useState('');
+  const [imageCreatorRef, setImageCreatorRef] = useState<{
+    id: string;
+    previewUrl: string;
+  } | null>(null);
+  const [isUploadingCreatorRef, setIsUploadingCreatorRef] = useState(false);
+  const imageCreatorFileInputRef = useRef<HTMLInputElement>(null);
   const [dropMessageOpacityClass, setDropMessageOpacityClass] = useState(
     'opacity-0 pointer-events-none',
   );
@@ -1251,9 +1267,15 @@ function TextAreaChat({
     }
   };
 
-  const generateInputImage = async () => {
+  const generateInputImage = async (options?: {
+    promptOverride?: string;
+    refImageId?: string;
+  }) => {
     if (isGeneratingInputImage || type !== 'creative' || isMultiview) return;
-    const prompt = input.trim() || DEFAULT_CREATIVE_PROMPT;
+    const prompt =
+      options?.promptOverride?.trim() ||
+      input.trim() ||
+      DEFAULT_CREATIVE_PROMPT;
 
     setIsGeneratingInputImage(true);
     try {
@@ -1265,6 +1287,7 @@ function TextAreaChat({
           prompt,
           provider: 'openai',
           mode: 'input',
+          ...(options?.refImageId ? { refImageId: options.refImageId } : {}),
         },
       });
 
@@ -1282,6 +1305,9 @@ function TextAreaChat({
           source: 'upload',
         },
       ]);
+      setIsImageCreatorOpen(false);
+      setImageCreatorPrompt('');
+      setImageCreatorRef(null);
     } catch (error) {
       console.error('Error generating input image:', error);
       toast({
@@ -1294,6 +1320,38 @@ function TextAreaChat({
       });
     } finally {
       setIsGeneratingInputImage(false);
+    }
+  };
+
+  const openImageCreator = useCallback(() => {
+    setImageCreatorPrompt(input.trim());
+    setImageCreatorRef(null);
+    setIsImageCreatorOpen(true);
+  }, [input]);
+
+  const handleImageCreatorRefSelected = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!VALID_IMAGE_FORMATS.includes(file.type)) {
+      toast({
+        title: 'Unsupported image',
+        description: 'Use a JPG, PNG, or WebP image.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const id = crypto.randomUUID();
+    setIsUploadingCreatorRef(true);
+    try {
+      const previewUrl = await uploadImageAsync({ file, id });
+      setImageCreatorRef({ id, previewUrl });
+    } catch {
+      // toast already handled by uploadImageAsync onError
+    } finally {
+      setIsUploadingCreatorRef(false);
     }
   };
 
@@ -1411,6 +1469,115 @@ function TextAreaChat({
         textareaRef.current?.focus();
       }}
     >
+      <Dialog
+        open={isImageCreatorOpen}
+        onOpenChange={(open) => {
+          if (isGeneratingInputImage || isUploadingCreatorRef) return;
+          setIsImageCreatorOpen(open);
+        }}
+      >
+        <DialogContent
+          className="max-w-xl border-adam-neutral-700 bg-adam-neutral-950 text-adam-text-primary"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <DialogHeader>
+            <DialogTitle>Create input image</DialogTitle>
+            <DialogDescription className="text-adam-text-secondary">
+              Generate a 3D-ready reference image from a prompt and an optional
+              reference image.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <input
+              ref={imageCreatorFileInputRef}
+              type="file"
+              accept={VALID_IMAGE_FORMATS.join(',')}
+              className="hidden"
+              onChange={handleImageCreatorRefSelected}
+            />
+            {imageCreatorRef ? (
+              <div className="relative w-fit">
+                <img
+                  src={imageCreatorRef.previewUrl}
+                  alt="Reference"
+                  className="h-32 w-32 rounded-md border border-adam-neutral-700 object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => setImageCreatorRef(null)}
+                  className="absolute -right-2 -top-2 rounded-full bg-adam-neutral-800 p-1 text-adam-text-primary hover:bg-adam-neutral-700"
+                  disabled={isGeneratingInputImage}
+                  aria-label="Remove reference image"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => imageCreatorFileInputRef.current?.click()}
+                disabled={isUploadingCreatorRef || isGeneratingInputImage}
+                className="flex h-32 w-32 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-adam-neutral-700 bg-adam-background-2 text-xs text-adam-text-secondary hover:border-adam-blue/40 hover:bg-adam-bg-secondary-dark disabled:opacity-50"
+              >
+                {isUploadingCreatorRef ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-adam-blue" />
+                ) : (
+                  <ImagePlus className="h-5 w-5" />
+                )}
+                <span>
+                  {isUploadingCreatorRef ? 'Uploading…' : 'Add reference'}
+                </span>
+              </button>
+            )}
+            <Textarea
+              value={imageCreatorPrompt}
+              onChange={(event) => setImageCreatorPrompt(event.target.value)}
+              placeholder={DEFAULT_CREATIVE_PROMPT}
+              className="min-h-28 resize-none border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary placeholder:text-adam-text-secondary/70"
+              disabled={isGeneratingInputImage}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  void generateInputImage({
+                    promptOverride: imageCreatorPrompt,
+                    refImageId: imageCreatorRef?.id,
+                  });
+                }
+              }}
+            />
+            <div className="text-xs text-adam-text-secondary">
+              Cost: {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
+              onClick={() => setIsImageCreatorOpen(false)}
+              disabled={isGeneratingInputImage || isUploadingCreatorRef}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-adam-blue text-white hover:bg-adam-blue/90"
+              onClick={() =>
+                void generateInputImage({
+                  promptOverride: imageCreatorPrompt,
+                  refImageId: imageCreatorRef?.id,
+                })
+              }
+              disabled={isGeneratingInputImage || isUploadingCreatorRef}
+            >
+              {isGeneratingInputImage ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              Generate image
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {isMultiview ? (
         <div
           className={cn(
@@ -1765,7 +1932,7 @@ function TextAreaChat({
                     className="flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void generateInputImage();
+                      openImageCreator();
                     }}
                     disabled={disabled || isLoading || isGeneratingInputImage}
                   >
