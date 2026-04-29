@@ -2,6 +2,8 @@
 // onshape-extension/src/lib/billing/client.ts so CADAM and onshape behave
 // identically against the same endpoints.
 
+import { FEATURE_COSTS, TOKEN_USD_VALUE } from '../../../shared/tokenCosts.ts';
+
 export type SubscriptionLevel = 'standard' | 'pro';
 
 export type BillingStatus = {
@@ -62,6 +64,64 @@ export type BillingProduct = {
   interval: string | null;
   active: boolean;
 };
+
+const isLocalBillingBypassEnabled = (): boolean =>
+  Deno.env.get('ENVIRONMENT') === 'local' &&
+  (!Deno.env.get('BILLING_SERVICE_URL') ||
+    !Deno.env.get('BILLING_SERVICE_KEY'));
+
+const localStatus = (): BillingStatus => ({
+  user: {
+    hasTrialed: false,
+  },
+  subscription: {
+    level: 'pro',
+    status: 'local',
+    currentPeriodEnd: null,
+  },
+  tokens: {
+    free: 0,
+    subscription: 100000,
+    purchased: 0,
+    total: 100000,
+  },
+});
+
+const localConsume = (tokens: number): ConsumeSuccess => ({
+  ok: true,
+  tokensDeducted: tokens,
+  freeBalance: 0,
+  subscriptionBalance: Math.max(100000 - tokens, 0),
+  purchasedBalance: 0,
+  totalBalance: Math.max(100000 - tokens, 0),
+});
+
+const localProducts = (): BillingProduct[] => [
+  {
+    id: 'local-pro',
+    stripeProductId: 'local-pro',
+    stripePriceId: 'local-pro-monthly',
+    productType: 'subscription',
+    subscriptionLevel: 'pro',
+    tokenAmount: 100000,
+    name: 'Local Pro',
+    priceCents: 0,
+    interval: 'month',
+    active: true,
+  },
+  ...Object.values(FEATURE_COSTS).map((feature) => ({
+    id: `local-${feature.id}`,
+    stripeProductId: `local-${feature.id}`,
+    stripePriceId: `local-${feature.id}`,
+    productType: 'pack' as const,
+    subscriptionLevel: null,
+    tokenAmount: feature.tokens,
+    name: feature.label,
+    priceCents: Math.round(feature.tokens * TOKEN_USD_VALUE * 100),
+    interval: null,
+    active: true,
+  })),
+];
 
 export class BillingClientError extends Error {
   readonly status: number;
@@ -162,15 +222,29 @@ export type CancelSubscriptionResult =
 
 export const billing = {
   getStatus: (email: string) =>
-    call<BillingStatus>('GET', `/v1/users/${enc(email)}/status`),
+    isLocalBillingBypassEnabled()
+      ? Promise.resolve(localStatus())
+      : call<BillingStatus>('GET', `/v1/users/${enc(email)}/status`),
 
   consume: (email: string, body: ConsumeBody) =>
-    call<ConsumeResult>('POST', `/v1/users/${enc(email)}/consume`, body, {
-      allowStatus: [422],
-    }),
+    isLocalBillingBypassEnabled()
+      ? Promise.resolve(localConsume(body.tokens))
+      : call<ConsumeResult>('POST', `/v1/users/${enc(email)}/consume`, body, {
+          allowStatus: [422],
+        }),
 
   refund: (email: string, body: RefundBody) =>
-    call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
+    isLocalBillingBypassEnabled()
+      ? Promise.resolve({
+          ok: true,
+          tokensRefunded: body.tokens,
+          source: 'subscription' as const,
+          freeBalance: 0,
+          subscriptionBalance: 100000,
+          purchasedBalance: 0,
+          totalBalance: 100000,
+        })
+      : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
 
   createCheckout: (email: string, body: CheckoutBody) =>
     call<{ url: string }>('POST', `/v1/users/${enc(email)}/checkout`, body),
@@ -186,11 +260,24 @@ export const billing = {
     ),
 
   getProductsByType: (type: 'subscription' | 'pack') =>
-    call<BillingProduct[]>('GET', `/v1/products?type=${type}`),
+    isLocalBillingBypassEnabled()
+      ? Promise.resolve(
+          localProducts().filter((product) => product.productType === type),
+        )
+      : call<BillingProduct[]>('GET', `/v1/products?type=${type}`),
 
   getAllProducts: () =>
-    call<{ subscriptions: BillingProduct[]; packs: BillingProduct[] }>(
-      'GET',
-      '/v1/products',
-    ),
+    isLocalBillingBypassEnabled()
+      ? Promise.resolve({
+          subscriptions: localProducts().filter(
+            (product) => product.productType === 'subscription',
+          ),
+          packs: localProducts().filter(
+            (product) => product.productType === 'pack',
+          ),
+        })
+      : call<{ subscriptions: BillingProduct[]; packs: BillingProduct[] }>(
+          'GET',
+          '/v1/products',
+        ),
 };
