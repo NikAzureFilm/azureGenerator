@@ -15,13 +15,13 @@ export const IMAGE_GENERATION_MODELS: Array<{
 }> = [
   {
     id: 'gpt-image-2',
-    name: 'Image Gen 2',
+    name: 'Premium',
     description: 'OpenAI image generation',
     provider: 'openai',
   },
   {
     id: 'nano-banana-2',
-    name: 'Nano Banana 2',
+    name: 'Lite',
     description: 'Google image generation',
     provider: 'nano-banana',
   },

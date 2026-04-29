@@ -239,7 +239,7 @@ export function getInitials(fullName: string | null) {
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
     id: 'openai/gpt-5.5',
-    name: 'GPT-5.5',
+    name: 'Premium',
     description: 'Most powerful OpenAI model with adaptive reasoning',
     provider: 'OpenAI',
     supportsTools: true,
@@ -249,7 +249,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
   },
   {
     id: 'google/gemini-3.1-pro-preview',
-    name: 'Gemini 3.1 Pro',
+    name: 'Lite',
     description: 'Temporarily unavailable for CAD code generation',
     provider: 'Google',
     supportsTools: true,
@@ -257,16 +257,6 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsVision: true,
     disabled: true,
     tokenCost: FEATURE_COSTS.parametricCadLite.tokens,
-  },
-  {
-    id: 'anthropic/claude-opus-4.7',
-    name: 'Claude Opus 4.7',
-    description: 'Most powerful Anthropic model for complex reasoning',
-    provider: 'Anthropic',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametricCadReasoning.tokens,
   },
 ];
 
