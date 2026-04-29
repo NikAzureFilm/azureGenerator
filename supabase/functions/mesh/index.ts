@@ -43,6 +43,92 @@ const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
 
+const QUALITY_CAPTION_TIMEOUT_MS = 10000;
+const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
+const QUALITY_MASK_TIMEOUT_MS = 10000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function recordFalQueueRequest(
+  supabaseClient: SupabaseClient,
+  meshId: string,
+  endpoint: string,
+  submission: unknown,
+) {
+  const requestId =
+    submission &&
+    typeof submission === 'object' &&
+    'request_id' in submission &&
+    typeof submission.request_id === 'string'
+      ? submission.request_id
+      : null;
+
+  if (!requestId) {
+    debugLog('FAL submit response did not include request_id', {
+      endpoint,
+      meshId,
+      submission,
+    });
+    return;
+  }
+
+  const { data: meshRow, error: selectError } = await supabaseClient
+    .from('meshes')
+    .select('prompt')
+    .eq('id', meshId)
+    .maybeSingle();
+
+  if (selectError) {
+    debugLog('Failed to read mesh prompt for FAL request tracking', {
+      meshId,
+      endpoint,
+      error: selectError.message,
+    });
+    return;
+  }
+
+  const prompt =
+    meshRow?.prompt && typeof meshRow.prompt === 'object'
+      ? (meshRow.prompt as Record<string, unknown>)
+      : {};
+
+  await supabaseClient
+    .from('meshes')
+    .update({
+      prompt: {
+        ...prompt,
+        fal: {
+          endpoint,
+          request_id: requestId,
+          submitted_at: new Date().toISOString(),
+        },
+      },
+    })
+    .eq('id', meshId);
+}
+
 // Returns the image_generation_call_id to thread into the next gpt-image-2
 // call, or null when the prior image was produced by a fallback (Gemini/Flux)
 // and has no call ID.
@@ -1528,11 +1614,12 @@ async function submitMeshJob(
       try {
         debugLog('Step 1: Captioning image with Moondream3 (long only)...');
 
-        const longResult = await fal.subscribe(
-          'fal-ai/moondream3-preview/caption',
-          {
+        const longResult = await withTimeout(
+          fal.subscribe('fal-ai/moondream3-preview/caption', {
             input: { length: 'long', image_url: imageUrl },
-          },
+          }),
+          QUALITY_CAPTION_TIMEOUT_MS,
+          'Moondream3 caption',
         );
 
         const longData = longResult.data;
@@ -1562,10 +1649,16 @@ Input: ${longCaption}
 Output:`;
 
           try {
-            const genericResult = await googleGenAI.models.generateContent({
-              model: 'gemini-2.5-flash-lite',
-              contents: [{ role: 'user', parts: [{ text: genericizePrompt }] }],
-            });
+            const genericResult = await withTimeout(
+              googleGenAI.models.generateContent({
+                model: 'gemini-2.5-flash-lite',
+                contents: [
+                  { role: 'user', parts: [{ text: genericizePrompt }] },
+                ],
+              }),
+              QUALITY_GENERICIZE_TIMEOUT_MS,
+              'Caption genericization',
+            );
             const genericText =
               genericResult.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
             if (genericText) {
@@ -1591,14 +1684,18 @@ Output:`;
       const tryPrompt = async (name: string, prompt: string) => {
         try {
           debugLog(`Trying prompt "${name}":`, prompt);
-          const result = await fal.subscribe('fal-ai/sam-3/image', {
-            input: {
-              image_url: imageUrl,
-              prompt: prompt,
-              apply_mask: false,
-              include_scores: true,
-            },
-          });
+          const result = await withTimeout(
+            fal.subscribe('fal-ai/sam-3/image', {
+              input: {
+                image_url: imageUrl,
+                prompt: prompt,
+                apply_mask: false,
+                include_scores: true,
+              },
+            }),
+            QUALITY_MASK_TIMEOUT_MS,
+            `SAM-3/image prompt "${name}"`,
+          );
 
           const data = result.data;
           if (!data || typeof data !== 'object') {
@@ -1688,10 +1785,17 @@ Output:`;
 
       debugLog('SAM 3D input:', JSON.stringify(sam3dInput, null, 2));
 
-      await fal.queue.submit('fal-ai/sam-3/3d-objects', {
+      const sam3dEndpoint = 'fal-ai/sam-3/3d-objects';
+      const sam3dSubmission = await fal.queue.submit(sam3dEndpoint, {
         input: sam3dInput,
         webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
       });
+      await recordFalQueueRequest(
+        supabaseClient,
+        meshId,
+        sam3dEndpoint,
+        sam3dSubmission,
+      );
 
       debugLog('Successfully submitted to SAM 3D');
 
