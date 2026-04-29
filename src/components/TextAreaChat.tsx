@@ -515,6 +515,7 @@ function TextAreaChat({
   } | null>(null);
   const [isUploadingCreatorRef, setIsUploadingCreatorRef] = useState(false);
   const imageCreatorFileInputRef = useRef<HTMLInputElement>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [dropMessageOpacityClass, setDropMessageOpacityClass] = useState(
     'opacity-0 pointer-events-none',
   );
@@ -1461,6 +1462,25 @@ function TextAreaChat({
       }}
     >
       <Dialog
+        open={!!previewImageUrl}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImageUrl(null);
+        }}
+      >
+        <DialogContent
+          className="max-w-3xl border-adam-neutral-700 bg-adam-neutral-950 p-2"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {previewImageUrl && (
+            <img
+              src={previewImageUrl}
+              alt="Preview"
+              className="mx-auto max-h-[80vh] w-auto rounded-md object-contain"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={isImageCreatorOpen}
         onOpenChange={(open) => {
           if (isGeneratingInputImage || isUploadingCreatorRef) return;
@@ -1741,18 +1761,33 @@ function TextAreaChat({
                         exit="exit"
                         layout
                       >
-                        <img
-                          src={image.url}
-                          alt="Image"
-                          className="h-12 w-12 rounded-md object-cover"
-                        />
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (image.isUploading || !image.url) return;
+                            setPreviewImageUrl(image.url);
+                          }}
+                          disabled={image.isUploading || !image.url}
+                          className="block h-12 w-12 overflow-hidden rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-adam-blue"
+                          aria-label="Preview image"
+                        >
+                          <img
+                            src={image.url}
+                            alt="Image"
+                            className="h-12 w-12 rounded-md object-cover transition-opacity hover:opacity-80"
+                          />
+                        </button>
                         {image.isUploading && (
-                          <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50">
+                          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-black/50">
                             <Loader2 className="h-4 w-4 animate-spin text-white" />
                           </div>
                         )}
                         <button
-                          onClick={() => handleImageRemoved(image)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleImageRemoved(image);
+                          }}
                           disabled={image.isUploading}
                           className={cn(
                             'absolute right-[-0.50rem] top-[-0.50rem] rounded-full border border-adam-neutral-500 bg-adam-neutral-500 text-white transition-colors duration-200 hover:border-adam-neutral-700 hover:bg-adam-neutral-700',
