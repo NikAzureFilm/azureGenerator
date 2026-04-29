@@ -455,6 +455,8 @@ const VALID_IMAGE_FORMATS = [
   'image/webp',
 ];
 
+const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D asset';
+
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
   if (lowerFilename.endsWith('.stl')) return 'stl';
@@ -783,8 +785,9 @@ function TextAreaChat({
       return;
     }
 
-    // Debug the early return conditions
-    const hasNoContent = images.length === 0 && !input?.trim() && !mesh;
+    const trimmedInput = input.trim();
+    const hasNoContent =
+      images.length === 0 && !trimmedInput && !mesh && type !== 'creative';
     const hasUploadingImages = images.some((img) => img.isUploading);
 
     if (
@@ -796,13 +799,16 @@ function TextAreaChat({
       return;
     }
     let content: Content = {
-      ...(input.trim() !== '' && { text: input.trim() }),
+      ...(trimmedInput !== '' && { text: trimmedInput }),
       ...(images.length > 0 && { images: images.map((img) => img.id) }),
       model: model,
     };
     if (type === 'creative') {
       content = {
         ...content,
+        ...(trimmedInput === '' &&
+          images.length === 0 &&
+          !mesh && { text: DEFAULT_CREATIVE_PROMPT }),
         ...(mesh && {
           mesh: { id: mesh.id, fileType: mesh.fileType || 'glb' },
         }),
@@ -1124,6 +1130,10 @@ function TextAreaChat({
       handleSubmit();
     }
   };
+
+  const canSubmit = isMultiview
+    ? hasFrontMultiviewSlot(multiviewSlots) && !anyMultiviewBusy(multiviewSlots)
+    : type === 'creative' || images.length > 0 || !!input.trim() || !!mesh;
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = event.clipboardData.files;
@@ -1890,11 +1900,8 @@ function TextAreaChat({
                   isLoading ||
                   disabled ||
                   isGeneratingInputImage ||
-                  (isMultiview
-                    ? !hasFrontMultiviewSlot(multiviewSlots) ||
-                      anyMultiviewBusy(multiviewSlots)
-                    : (images.length === 0 && !input?.trim()) ||
-                      images.some((img) => img.isUploading))
+                  !canSubmit ||
+                  (isMultiview ? false : images.some((img) => img.isUploading))
                 }
               >
                 <ArrowUp className="h-5 w-5" />
