@@ -1253,15 +1253,7 @@ function TextAreaChat({
 
   const generateInputImage = async () => {
     if (isGeneratingInputImage || type !== 'creative' || isMultiview) return;
-    const prompt = input.trim();
-    if (!prompt) {
-      toast({
-        title: 'Prompt required',
-        description: 'Describe the object before generating an input image.',
-      });
-      textareaRef.current?.focus();
-      return;
-    }
+    const prompt = input.trim() || DEFAULT_CREATIVE_PROMPT;
 
     setIsGeneratingInputImage(true);
     try {
@@ -1775,12 +1767,7 @@ function TextAreaChat({
                       e.stopPropagation();
                       void generateInputImage();
                     }}
-                    disabled={
-                      disabled ||
-                      isLoading ||
-                      isGeneratingInputImage ||
-                      !input.trim()
-                    }
+                    disabled={disabled || isLoading || isGeneratingInputImage}
                   >
                     {isGeneratingInputImage ? (
                       <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
