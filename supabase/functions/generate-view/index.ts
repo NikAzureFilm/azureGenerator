@@ -176,6 +176,7 @@ Deno.serve(async (req) => {
         tokens: tokenCost,
         operation: 'chat',
         referenceId: crypto.randomUUID(),
+        userId,
       });
       if (!consumeResult.ok) {
         return new Response(

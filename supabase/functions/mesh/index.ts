@@ -500,6 +500,7 @@ Deno.serve(async (req) => {
         tokens: meshTokenCost,
         operation: 'mesh',
         referenceId: meshReferenceId,
+        userId: userData.user.id,
       });
       if (!result.ok) {
         return new Response(

@@ -629,6 +629,7 @@ Deno.serve(async (req) => {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
       referenceId: crypto.randomUUID(),
+      userId: userData.user.id,
     });
     if (!result.ok) {
       return new Response(
@@ -1111,6 +1112,7 @@ Deno.serve(async (req) => {
                     tokens: PARAMETRIC_TOKEN_COST,
                     operation: 'parametric',
                     referenceId: toolCall.id,
+                    userId: userData.user!.id,
                   },
                 );
                 if (!paramResult.ok) {

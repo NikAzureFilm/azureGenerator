@@ -3,6 +3,7 @@
 // identically against the same endpoints.
 
 import { FEATURE_COSTS, TOKEN_USD_VALUE } from '../../../shared/tokenCosts.ts';
+import { getServiceRoleSupabaseClient } from './supabaseClient.ts';
 
 export type SubscriptionLevel = 'standard' | 'pro';
 
@@ -65,10 +66,12 @@ export type BillingProduct = {
   active: boolean;
 };
 
+const isBillingServiceConfigured = (): boolean =>
+  !!Deno.env.get('BILLING_SERVICE_URL') &&
+  !!Deno.env.get('BILLING_SERVICE_KEY');
+
 const isLocalBillingBypassEnabled = (): boolean =>
-  Deno.env.get('ENVIRONMENT') === 'local' &&
-  (!Deno.env.get('BILLING_SERVICE_URL') ||
-    !Deno.env.get('BILLING_SERVICE_KEY'));
+  Deno.env.get('ENVIRONMENT') === 'local' && !isBillingServiceConfigured();
 
 const localStatus = (): BillingStatus => ({
   user: {
@@ -122,6 +125,146 @@ const localProducts = (): BillingProduct[] => [
     active: true,
   })),
 ];
+
+const readBalances = async (userId: string) => {
+  const supabase = getServiceRoleSupabaseClient();
+  const { error: refreshError } = await supabase.rpc('ensure_free_tier_fresh', {
+    p_user_id: userId,
+  });
+  if (refreshError) throw refreshError;
+
+  const { data, error } = await supabase
+    .from('token_balances')
+    .select('source,balance,expires_at')
+    .eq('user_id', userId);
+  if (error) throw error;
+
+  const bySource = new Map((data ?? []).map((row) => [row.source, row]));
+  const subscriptionRow = bySource.get('subscription');
+  const subscriptionExpired =
+    !!subscriptionRow?.expires_at &&
+    new Date(subscriptionRow.expires_at).getTime() < Date.now();
+  const subscription = subscriptionExpired
+    ? 0
+    : (subscriptionRow?.balance ?? 0);
+  const purchased = bySource.get('purchased')?.balance ?? 0;
+
+  return { supabase, subscription, purchased };
+};
+
+const consumeFromSupabase = async (
+  body: ConsumeBody,
+): Promise<ConsumeResult> => {
+  if (!body.userId) {
+    throw new Error('userId is required for Supabase billing fallback');
+  }
+
+  const { supabase, subscription, purchased } = await readBalances(body.userId);
+  const total = subscription + purchased;
+  if (total < body.tokens) {
+    return {
+      ok: false,
+      reason: 'insufficient_tokens',
+      tokensRequired: body.tokens,
+      tokensAvailable: total,
+      tokensDeducted: 0,
+    };
+  }
+
+  const subscriptionDeduct = Math.min(body.tokens, subscription);
+  const purchasedDeduct = body.tokens - subscriptionDeduct;
+  const subscriptionBalance = subscription - subscriptionDeduct;
+  const purchasedBalance = purchased - purchasedDeduct;
+
+  if (subscriptionDeduct > 0) {
+    const { error } = await supabase
+      .from('token_balances')
+      .update({
+        balance: subscriptionBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', body.userId)
+      .eq('source', 'subscription');
+    if (error) throw error;
+  }
+
+  if (purchasedDeduct > 0) {
+    const { error } = await supabase
+      .from('token_balances')
+      .update({
+        balance: purchasedBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', body.userId)
+      .eq('source', 'purchased');
+    if (error) throw error;
+  }
+
+  const { error: transactionError } = await supabase
+    .from('token_transactions')
+    .insert({
+      user_id: body.userId,
+      operation: body.operation ?? 'chat',
+      amount: -body.tokens,
+      source: subscriptionDeduct > 0 ? 'subscription' : 'purchased',
+      reference_id: body.referenceId ?? null,
+      subscription_balance_after: subscriptionBalance,
+      purchased_balance_after: purchasedBalance,
+    });
+  if (transactionError) throw transactionError;
+
+  return {
+    ok: true,
+    tokensDeducted: body.tokens,
+    freeBalance: 0,
+    subscriptionBalance,
+    purchasedBalance,
+    totalBalance: subscriptionBalance + purchasedBalance,
+  };
+};
+
+const refundToSupabase = async (body: RefundBody): Promise<RefundResult> => {
+  if (!body.userId) {
+    throw new Error('userId is required for Supabase billing fallback');
+  }
+
+  const { supabase, subscription, purchased } = await readBalances(body.userId);
+  const subscriptionBalance = subscription + body.tokens;
+
+  const { error: upsertError } = await supabase.from('token_balances').upsert(
+    {
+      user_id: body.userId,
+      source: 'subscription',
+      balance: subscriptionBalance,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,source' },
+  );
+  if (upsertError) throw upsertError;
+
+  const { error: transactionError } = await supabase
+    .from('token_transactions')
+    .insert({
+      user_id: body.userId,
+      operation: 'refund',
+      amount: body.tokens,
+      source: 'subscription',
+      reference_id: body.referenceId ?? null,
+      subscription_balance_after: subscriptionBalance,
+      purchased_balance_after: purchased,
+    });
+  if (transactionError) throw transactionError;
+
+  return {
+    ok: true,
+    tokensRefunded: body.tokens,
+    source: 'subscription',
+    freeBalance: 0,
+    subscriptionBalance,
+    purchasedBalance: purchased,
+    totalBalance: subscriptionBalance + purchased,
+  };
+};
 
 export class BillingClientError extends Error {
   readonly status: number;
@@ -188,12 +331,14 @@ type ConsumeBody = {
   tokens: number;
   operation?: string;
   referenceId?: string;
+  userId?: string;
 };
 
 type RefundBody = {
   tokens: number;
   operation?: string;
   referenceId?: string;
+  userId?: string;
 };
 
 type CheckoutBody = {
@@ -229,9 +374,11 @@ export const billing = {
   consume: (email: string, body: ConsumeBody) =>
     isLocalBillingBypassEnabled()
       ? Promise.resolve(localConsume(body.tokens))
-      : call<ConsumeResult>('POST', `/v1/users/${enc(email)}/consume`, body, {
-          allowStatus: [422],
-        }),
+      : !isBillingServiceConfigured()
+        ? consumeFromSupabase(body)
+        : call<ConsumeResult>('POST', `/v1/users/${enc(email)}/consume`, body, {
+            allowStatus: [422],
+          }),
 
   refund: (email: string, body: RefundBody) =>
     isLocalBillingBypassEnabled()
@@ -244,7 +391,9 @@ export const billing = {
           purchasedBalance: 0,
           totalBalance: 100000,
         })
-      : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
+      : !isBillingServiceConfigured()
+        ? refundToSupabase(body)
+        : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
 
   createCheckout: (email: string, body: CheckoutBody) =>
     call<{ url: string }>('POST', `/v1/users/${enc(email)}/checkout`, body),
