@@ -11,7 +11,7 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 
-const DEFAULT_PARAMETRIC_MODEL: Model = 'openai/gpt-5.4';
+const DEFAULT_PARAMETRIC_MODEL: Model = 'openai/gpt-5.5';
 
 function normalizeParametricChatModel(model: Model | undefined): Model {
   if (!model || model === 'fast' || model === 'quality' || model === 'ultra') {

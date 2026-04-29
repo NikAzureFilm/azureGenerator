@@ -23,12 +23,9 @@ initSentry();
 // OpenRouter API configuration
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
-const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'openai/gpt-5.4';
-const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'openai/gpt-5.4';
-const CODE_GENERATION_FALLBACK_MODELS = [
-  'openai/gpt-5.4',
-  'anthropic/claude-haiku-4.5',
-];
+const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
+const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
+const CODE_GENERATION_FALLBACK_MODELS = ['anthropic/claude-haiku-4.5'];
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`

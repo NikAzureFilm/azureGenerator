@@ -81,7 +81,7 @@ export function ChatSection({
 
   const model =
     conversation.settings?.model ??
-    (conversation.type === 'parametric' ? 'openai/gpt-5.4' : 'quality');
+    (conversation.type === 'parametric' ? 'openai/gpt-5.5' : 'quality');
 
   const lowPrompts = useMemo(() => {
     return totalTokens > 0 && totalTokens <= 10;

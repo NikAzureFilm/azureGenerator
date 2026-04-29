@@ -238,9 +238,9 @@ export function getInitials(fullName: string | null) {
 
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
-    id: 'openai/gpt-5.4',
-    name: 'GPT-5.4',
-    description: 'Reliable default model for parametric CAD generation',
+    id: 'openai/gpt-5.5',
+    name: 'GPT-5.5',
+    description: 'Most powerful OpenAI model with adaptive reasoning',
     provider: 'OpenAI',
     supportsTools: true,
     supportsThinking: true,
@@ -263,16 +263,6 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     name: 'Claude Opus 4.7',
     description: 'Most powerful Anthropic model for complex reasoning',
     provider: 'Anthropic',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametric.tokens,
-  },
-  {
-    id: 'openai/gpt-5.5',
-    name: 'GPT-5.5',
-    description: 'Most powerful OpenAI model with adaptive reasoning',
-    provider: 'OpenAI',
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
@@ -336,7 +326,7 @@ export function getBackupModel({
     return parentMessage.content.model;
   }
   if (type === 'parametric') {
-    return 'openai/gpt-5.4';
+    return 'openai/gpt-5.5';
   } else {
     return 'quality';
   }

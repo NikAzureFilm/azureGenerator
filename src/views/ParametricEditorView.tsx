@@ -129,7 +129,7 @@ export function ParametricEditorView() {
 
       const newContent: Content = {
         text: message.content.text ?? '',
-        model: message.content.model ?? 'openai/gpt-5.4',
+        model: message.content.model ?? 'openai/gpt-5.5',
         artifact: {
           title: message.content.artifact?.title ?? '',
           version: message.content.artifact?.version ?? '',

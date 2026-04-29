@@ -11,7 +11,7 @@ import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const PROMPT_GENERATOR_MODEL = 'openai/gpt-5.5';
-const PROMPT_GENERATOR_FALLBACK_MODEL = 'openai/gpt-5.4';
+const PROMPT_GENERATOR_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 
 type OpenRouterMessageContent =
   | string
