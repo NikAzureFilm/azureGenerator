@@ -38,7 +38,6 @@ import {
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuery } from '@tanstack/react-query';
 import { ConditionalWrapper } from './ConditionalWrapper';
-import { GitHubIcon } from './icons/CompanyIcons';
 import { BrandLogo } from '@/components/BrandLogo';
 import { BRAND_NAME } from '@/config/brand';
 import { cn } from '@/lib/utils';
@@ -378,49 +377,6 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                 <ShieldCheck className="h-[22px] w-[22px] min-w-[22px]" />
                 Admin Pricing
               </Button>
-            )}
-
-            {/* GitHub Button - Collapsed state */}
-            {!isSidebarOpen && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <a
-                    href="https://github.com/NikAzureFilm/azureGenerator"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button
-                      variant="adam_dark_collapsed"
-                      className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
-                    >
-                      <GitHubIcon className="h-[22px] w-[22px]" />
-                    </Button>
-                  </a>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="flex flex-col">
-                  <span className="font-semibold">GitHub</span>
-                  <span className="text-xs text-muted-foreground">
-                    View repository
-                  </span>
-                </TooltipContent>
-              </Tooltip>
-            )}
-
-            {/* GitHub Button - Expanded state */}
-            {isSidebarOpen && (
-              <a
-                href="https://github.com/NikAzureFilm/azureGenerator"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Button
-                  variant="adam_dark"
-                  className="flex h-10 w-full items-center justify-start gap-2"
-                >
-                  <GitHubIcon className="h-[22px] w-[22px] min-w-[22px]" />
-                  GitHub
-                </Button>
-              </a>
             )}
 
             <DropdownMenu>

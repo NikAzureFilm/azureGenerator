@@ -185,6 +185,33 @@ export function TermsOfServiceView() {
                   <p>Email: {BRAND_CONTACT_EMAIL}</p>
                 </div>
               </section>
+
+              <section>
+                <h2 className="mb-3 text-xl font-semibold text-white">
+                  12. Open Source Notice
+                </h2>
+                <div className="space-y-3 text-gray-400">
+                  <p>
+                    This application includes software licensed under the GNU
+                    General Public License version 3.0 or later. It is provided
+                    without warranty, except where warranties are expressly
+                    provided by {BRAND_NAME}.
+                  </p>
+                  <p>
+                    The applicable license terms and corresponding source code
+                    are available in the project repository:{' '}
+                    <a
+                      href="https://github.com/NikAzureFilm/azureGenerator"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-gray-300 underline-offset-4 transition-colors hover:text-white hover:underline"
+                    >
+                      source code
+                    </a>
+                    .
+                  </p>
+                </div>
+              </section>
             </div>
           </ScrollArea>
         </div>
