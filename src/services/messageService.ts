@@ -11,6 +11,20 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 
+const DEFAULT_PARAMETRIC_MODEL: Model = 'openai/gpt-5.4';
+
+function normalizeParametricChatModel(model: Model | undefined): Model {
+  if (!model || model === 'fast' || model === 'quality' || model === 'ultra') {
+    return DEFAULT_PARAMETRIC_MODEL;
+  }
+
+  if (model.startsWith('google/gemini-3.1-pro')) {
+    return DEFAULT_PARAMETRIC_MODEL;
+  }
+
+  return model;
+}
+
 function messageSentConversationUpdate(
   newMessage: Message,
   conversationId: string,
@@ -641,7 +655,9 @@ export function useSendContentMutation({
         });
       } else {
         await sendToParametricChat({
-          model: content.model ?? conversation.settings?.model ?? 'fast',
+          model: normalizeParametricChatModel(
+            content.model ?? conversation.settings?.model,
+          ),
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -740,7 +756,7 @@ export function useEditMessageMutation({
         });
       } else {
         sendToParametricChat({
-          model: conversation.settings?.model ?? 'fast',
+          model: normalizeParametricChatModel(conversation.settings?.model),
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -783,6 +799,10 @@ export function useRetryMessageMutation({
       if (!updateConversationAsync) {
         throw new Error('Cannot update conversation');
       }
+      const runtimeModel =
+        conversation.type === 'parametric'
+          ? normalizeParametricChatModel(model)
+          : model;
 
       await updateConversationAsync({
         ...conversation,
@@ -790,20 +810,20 @@ export function useRetryMessageMutation({
           ...(typeof conversation.settings === 'object'
             ? conversation.settings
             : {}),
-          model: model,
+          model: runtimeModel,
         },
         current_message_leaf_id: id,
       });
 
       if (conversation.type === 'creative') {
         sendToCreativeChat({
-          model: model,
+          model: runtimeModel,
           messageId: id,
           conversationId: conversation.id,
         });
       } else {
         sendToParametricChat({
-          model: model,
+          model: runtimeModel,
           messageId: id,
           conversationId: conversation.id,
         });

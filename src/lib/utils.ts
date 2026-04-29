@@ -238,13 +238,24 @@ export function getInitials(fullName: string | null) {
 
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
+    id: 'openai/gpt-5.4',
+    name: 'GPT-5.4',
+    description: 'Reliable default model for parametric CAD generation',
+    provider: 'OpenAI',
+    supportsTools: true,
+    supportsThinking: true,
+    supportsVision: true,
+    tokenCost: FEATURE_COSTS.parametric.tokens,
+  },
+  {
     id: 'google/gemini-3.1-pro-preview',
     name: 'Gemini 3.1 Pro',
-    description: 'Latest Google model with excellent multi-modal capabilities',
+    description: 'Temporarily unavailable for CAD code generation',
     provider: 'Google',
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
+    disabled: true,
     tokenCost: FEATURE_COSTS.parametric.tokens,
   },
   {
@@ -325,7 +336,7 @@ export function getBackupModel({
     return parentMessage.content.model;
   }
   if (type === 'parametric') {
-    return 'fast';
+    return 'openai/gpt-5.4';
   } else {
     return 'quality';
   }

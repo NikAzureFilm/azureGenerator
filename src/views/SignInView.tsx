@@ -18,6 +18,7 @@ import { useMutation } from '@tanstack/react-query';
 import { GoogleIcon } from '@/components/icons/CompanyIcons';
 import { validateRedirectUrl } from '@/lib/utils';
 import { BrandLogo } from '@/components/BrandLogo';
+import { authRedirectUrl } from '@/lib/authRedirect';
 
 export function SignInView() {
   const [email, setEmail] = useState('');
@@ -54,10 +55,7 @@ export function SignInView() {
     useMutation({
       mutationFn: async () => {
         // Use Supabase's built-in redirectTo parameter with validated URL
-        const redirectTo =
-          redirectPath !== '/'
-            ? `${window.location.origin}${redirectPath}`
-            : `${window.location.origin}/`;
+        const redirectTo = authRedirectUrl(redirectPath);
 
         await supabase.auth.signInWithOAuth({
           provider: 'google',

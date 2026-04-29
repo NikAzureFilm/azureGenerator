@@ -40,7 +40,7 @@ export function PromptView() {
 
   const [type, setType] = useState<'parametric' | 'creative'>('parametric');
 
-  const [model, setModel] = useState<Model>('google/gemini-3.1-pro-preview');
+  const [model, setModel] = useState<Model>('openai/gpt-5.4');
 
   const handleTypeChange = (newType: 'parametric' | 'creative') => {
     setType(newType);
@@ -48,7 +48,7 @@ export function PromptView() {
     if (newType === 'creative') {
       setModel('quality');
     } else {
-      setModel('google/gemini-3.1-pro-preview');
+      setModel('openai/gpt-5.4');
     }
   };
 
