@@ -3,7 +3,7 @@ import { GLTF, STLExporter, STLExporterOptionsBinary } from 'three-stdlib';
 
 // Print processing constants
 const PRINT_CONSTANTS = {
-  // Size requirements for Mandarin3D
+  // Size requirements for printable model exports
   BASE_MINIMUM_SIZE_MM: 100, // 100mm (10cm) minimum dimension
   BASE_MINIMUM_BOUNDING_RADIUS_MM: 80, // 80mm radius
   GUARANTEED_MINIMUM_OUTPUT_MM: 20, // 20mm (2cm) minimum dimension
@@ -942,7 +942,7 @@ const processUserModelCore = (
 };
 
 /**
- * Process the user's model to ensure it works with Mandarin3D
+ * Process the user's model for printable STL export
  * Uses advanced mesh repair that may destroy texture coordinates
  */
 export const processUserModelForPrint = async (
@@ -953,7 +953,7 @@ export const processUserModelForPrint = async (
   const processedScene = processUserModelCore(
     gltf,
     makeModelWatertightForSTL,
-    'Mandarin3D',
+    'PrintableExport',
   );
 
   // Apply final geometry fixes for STL
@@ -983,7 +983,7 @@ export const processUserModelForPrint = async (
 };
 
 /**
- * Apply the same scaling logic used for Mandarin3D to ensure proper size
+ * Apply the same scaling logic used for printable model exports
  * Returns a properly scaled and positioned THREE.Scene
  * Uses basic mesh repair to preserve texture coordinates for OBJ downloads
  */
