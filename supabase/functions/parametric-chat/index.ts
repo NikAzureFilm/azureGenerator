@@ -14,9 +14,12 @@ import { formatUserMessage } from '../_shared/messageUtils.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
+import {
+  FEATURE_COSTS,
+  getParametricModelTokenCost,
+} from '../../../shared/tokenCosts.ts';
 
-const CHAT_TOKEN_COST = 1;
-const PARAMETRIC_TOKEN_COST = 5;
+const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
 initSentry();
 
@@ -1106,7 +1109,7 @@ Deno.serve(async (req) => {
                 const paramResult = await billing.consume(
                   userData.user!.email!,
                   {
-                    tokens: PARAMETRIC_TOKEN_COST,
+                    tokens: getParametricModelTokenCost(model),
                     operation: 'parametric',
                     referenceId: toolCall.id,
                     userId: userData.user!.id,

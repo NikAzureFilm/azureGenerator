@@ -16,9 +16,9 @@ CREATE POLICY "token_costs_read" ON "public"."token_costs" FOR SELECT TO authent
 
 -- Default costs
 INSERT INTO "public"."token_costs" ("operation", "cost") VALUES
-    ('mesh', 30),
-    ('parametric', 5),
-    ('chat', 1)
+    ('mesh', 41),
+    ('parametric', 35),
+    ('chat', 10)
 ON CONFLICT (operation) DO NOTHING;
 
 -- Per-user token balances

@@ -22,8 +22,9 @@ import {
   getSignedUrls,
   formatCreativeUserMessage,
 } from '../_shared/messageUtils.ts';
+import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 
-const CHAT_TOKEN_COST = 1;
+const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
 // Initialize Sentry for error logging
 initSentry();

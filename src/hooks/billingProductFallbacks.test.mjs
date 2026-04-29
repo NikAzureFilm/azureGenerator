@@ -15,10 +15,10 @@ assert.deepEqual(
     product.stripePriceId,
   ]),
   [
-    ['standard', 'month', 1000, 1000, ''],
-    ['standard', 'year', 1000, 7200, ''],
-    ['pro', 'month', 5000, 4000, ''],
-    ['pro', 'year', 5000, 28800, ''],
+    ['standard', 'month', 1000, 3000, ''],
+    ['standard', 'year', 1000, 21600, ''],
+    ['pro', 'month', 5000, 15000, ''],
+    ['pro', 'year', 5000, 108000, ''],
   ],
 );
 
@@ -32,9 +32,9 @@ assert.deepEqual(
     product.stripePriceId,
   ]),
   [
-    ['500 tokens', 500, 500, ''],
-    ['1,000 tokens', 1000, 1000, ''],
-    ['2,500 tokens', 2500, 2500, ''],
-    ['5,000 tokens', 5000, 5000, ''],
+    ['500 tokens', 500, 1500, ''],
+    ['1,000 tokens', 1000, 3000, ''],
+    ['2,500 tokens', 2500, 7500, ''],
+    ['5,000 tokens', 5000, 15000, ''],
   ],
 );
