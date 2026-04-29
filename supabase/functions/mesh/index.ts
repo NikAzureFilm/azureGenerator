@@ -13,6 +13,11 @@ import {
 } from '../_shared/imageGen.ts';
 import { Model, MeshFileType, MultiviewImages } from '@shared/types.ts';
 import {
+  getImageGenerationProvider,
+  normalizeImageGenerationModel,
+  type ImageGenerationModel,
+} from '../../../shared/imageGeneration.ts';
+import {
   FEATURE_COSTS,
   getCreativeModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
@@ -241,6 +246,7 @@ async function generateMeshImage(
   // The specific mesh the user is editing from (branch anchor), if any.
   // Makes the multi-turn lookup branch-aware.
   priorMeshId: string | undefined,
+  imageGenerationModel: ImageGenerationModel | undefined,
   sentryStage: { meshModel: 'fast' | 'quality' | 'ultra'; subStage?: string },
 ): Promise<{
   imageBytes: Buffer;
@@ -283,6 +289,11 @@ async function generateMeshImage(
     userId,
     conversationId,
   };
+  const selectedImageGenerationModel =
+    normalizeImageGenerationModel(imageGenerationModel);
+  const selectedProvider = getImageGenerationProvider(
+    selectedImageGenerationModel,
+  );
 
   let provider: 'gpt-image-2' | 'nano-banana-pro' | 'flux';
   let result: {
@@ -291,28 +302,80 @@ async function generateMeshImage(
     contentType: 'image/jpeg' | 'image/png';
   };
 
-  try {
-    result = await generateImageWithGptImage2(
-      supabaseClient,
-      openAI,
-      userId,
-      conversationId,
-      prompt,
-      gptImageReferenceImages,
-      priorImageCallId,
-      QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
-    );
-    provider = 'gpt-image-2';
-  } catch (gptImageError) {
-    logError(gptImageError, {
-      ...sentryContext,
-      additionalContext: {
-        stage: 'gpt_image_2_fallback',
-        hasFreshUserImages,
-        priorImageCallIdStatus,
-        ...sentryStage,
-      },
-    });
+  if (selectedProvider === 'openai') {
+    try {
+      result = await generateImageWithGptImage2(
+        supabaseClient,
+        openAI,
+        userId,
+        conversationId,
+        prompt,
+        gptImageReferenceImages,
+        priorImageCallId,
+        QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
+      );
+      provider = 'gpt-image-2';
+    } catch (gptImageError) {
+      logError(gptImageError, {
+        ...sentryContext,
+        additionalContext: {
+          stage: 'gpt_image_2_fallback',
+          selectedImageGenerationModel,
+          hasFreshUserImages,
+          priorImageCallIdStatus,
+          ...sentryStage,
+        },
+      });
+      try {
+        const imageBytes = await generateImageWithGeminiMultiTurn(
+          supabaseClient,
+          googleGenAI,
+          userId,
+          conversationId,
+          prompt,
+          gptImageReferenceImages,
+        );
+        // Gemini Multi-Turn returns png.
+        result = { imageBytes, imageCallId: null, contentType: 'image/png' };
+        provider = 'nano-banana-pro';
+      } catch (geminiError) {
+        logError(geminiError, {
+          ...sentryContext,
+          additionalContext: {
+            stage: 'nano_banana_pro_fallback',
+            selectedImageGenerationModel,
+            hasFreshUserImages,
+            priorImageCallIdStatus,
+            ...sentryStage,
+          },
+        });
+        try {
+          const imageBytes = await generateImageWithFalFlux(
+            supabaseClient,
+            userId,
+            conversationId,
+            prompt,
+            gptImageReferenceImages,
+          );
+          // Flux returns png per its output_format config.
+          result = { imageBytes, imageCallId: null, contentType: 'image/png' };
+          provider = 'flux';
+        } catch (fluxError) {
+          logError(fluxError, {
+            ...sentryContext,
+            additionalContext: {
+              stage: 'flux_fallback',
+              selectedImageGenerationModel,
+              hasFreshUserImages,
+              priorImageCallIdStatus,
+              ...sentryStage,
+            },
+          });
+          throw fluxError;
+        }
+      }
+    }
+  } else {
     try {
       const imageBytes = await generateImageWithGeminiMultiTurn(
         supabaseClient,
@@ -322,41 +385,43 @@ async function generateMeshImage(
         prompt,
         gptImageReferenceImages,
       );
-      // Gemini Multi-Turn returns png.
       result = { imageBytes, imageCallId: null, contentType: 'image/png' };
       provider = 'nano-banana-pro';
     } catch (geminiError) {
       logError(geminiError, {
         ...sentryContext,
         additionalContext: {
-          stage: 'nano_banana_pro_fallback',
+          stage: 'nano_banana_pro_primary',
+          selectedImageGenerationModel,
           hasFreshUserImages,
           priorImageCallIdStatus,
           ...sentryStage,
         },
       });
       try {
-        const imageBytes = await generateImageWithFalFlux(
+        result = await generateImageWithGptImage2(
           supabaseClient,
+          openAI,
           userId,
           conversationId,
           prompt,
           gptImageReferenceImages,
+          priorImageCallId,
+          QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
         );
-        // Flux returns png per its output_format config.
-        result = { imageBytes, imageCallId: null, contentType: 'image/png' };
-        provider = 'flux';
-      } catch (fluxError) {
-        logError(fluxError, {
+        provider = 'gpt-image-2';
+      } catch (gptImageError) {
+        logError(gptImageError, {
           ...sentryContext,
           additionalContext: {
-            stage: 'flux_fallback',
+            stage: 'gpt_image_2_fallback',
+            selectedImageGenerationModel,
             hasFreshUserImages,
             priorImageCallIdStatus,
             ...sentryStage,
           },
         });
-        throw fluxError;
+        throw gptImageError;
       }
     }
   }
@@ -372,6 +437,7 @@ async function generateMeshImage(
       (provider === 'gpt-image-2'
         ? ` quality=${QUALITY_BY_MESH_MODEL[sentryStage.meshModel]}`
         : '') +
+      ` selected=${selectedImageGenerationModel}` +
       ` contentType=${result.contentType}` +
       ` callId=${result.imageCallId ?? 'none'}`,
   );
@@ -551,6 +617,7 @@ Deno.serve(async (req) => {
       meshId: upscaleMeshId,
       parentMessageId,
       multiviewImages,
+      imageGenerationModel,
     }: {
       images?: string[];
       mesh?: string;
@@ -564,6 +631,7 @@ Deno.serve(async (req) => {
       meshId?: string;
       parentMessageId?: string;
       multiviewImages?: MultiviewImages;
+      imageGenerationModel?: ImageGenerationModel;
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
@@ -950,6 +1018,7 @@ Deno.serve(async (req) => {
           ...(mesh && { mesh: mesh }),
           ...(model && { model: model }),
           ...(multiviewImages && { multiviewImages }),
+          ...(imageGenerationModel && { imageGenerationModel }),
         },
       })
       .select()
@@ -1011,6 +1080,7 @@ Deno.serve(async (req) => {
         meshTopology,
         polygonCount,
         multiviewImages,
+        imageGenerationModel,
       ),
     );
 
@@ -1057,6 +1127,7 @@ async function submitMeshJob(
   meshTopology: 'quads' | 'polys' | undefined,
   polygonCount: number | undefined,
   multiviewImages: MultiviewImages | undefined,
+  imageGenerationModel: ImageGenerationModel | undefined,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
@@ -1159,6 +1230,7 @@ async function submitMeshJob(
               ...(text && { text: text }),
               ...(allImages.length > 0 && { images: allImages }),
               ...(model && { model: model }),
+              ...(imageGenerationModel && { imageGenerationModel }),
             },
           })
           .select()
@@ -1188,6 +1260,7 @@ async function submitMeshJob(
             images ?? [],
             allImages,
             mesh,
+            imageGenerationModel,
             { meshModel: 'quality' },
           );
 
@@ -1234,6 +1307,7 @@ async function submitMeshJob(
               ...(text && { text: text }),
               ...(allImages.length > 0 && { images: allImages }),
               ...(model && { model: model }),
+              ...(imageGenerationModel && { imageGenerationModel }),
             },
           })
           .select()
@@ -1263,6 +1337,7 @@ async function submitMeshJob(
             images ?? [],
             allImages,
             mesh,
+            imageGenerationModel,
             { meshModel: 'fast' },
           );
 
@@ -1381,6 +1456,7 @@ async function submitMeshJob(
             ...(text && { text: text }),
             ...(allImages.length > 0 && { images: allImages }),
             ...(model && { model: model }),
+            ...(imageGenerationModel && { imageGenerationModel }),
           },
         })
         .select()
@@ -1428,6 +1504,7 @@ async function submitMeshJob(
         images ?? [],
         allImages,
         mesh,
+        imageGenerationModel,
         { meshModel: 'ultra', subStage: ultraSubStage },
       );
 

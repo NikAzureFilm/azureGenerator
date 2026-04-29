@@ -722,6 +722,8 @@ Deno.serve(async (req) => {
                   const meshTopology = newMessage?.content?.meshTopology;
                   const polygonCount = newMessage?.content?.polygonCount;
                   const multiviewImages = newMessage?.content?.multiviewImages;
+                  const imageGenerationModel =
+                    newMessage?.content?.imageGenerationModel;
 
                   const fallbackText =
                     toolInput.text ?? newMessage?.content?.text;
@@ -737,6 +739,7 @@ Deno.serve(async (req) => {
                     ...(meshTopology && { meshTopology }),
                     ...(polygonCount && { polygonCount }),
                     ...(multiviewImages && { multiviewImages }),
+                    ...(imageGenerationModel && { imageGenerationModel }),
                   };
 
                   debugLog('=== CREATIVE-CHAT: CALLING MESH ENDPOINT ===');

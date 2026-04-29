@@ -25,6 +25,11 @@ import {
 } from '@/components/ui/popover';
 import { Share } from 'lucide-react';
 import { useMeshData } from '@/hooks/useMeshData';
+import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  normalizeImageGenerationModel,
+  type ImageGenerationModel,
+} from '@shared/imageGeneration';
 
 interface ChatSectionProps {
   messages: TreeNode<Message>[];
@@ -82,6 +87,9 @@ export function ChatSection({
   const model =
     conversation.settings?.model ??
     (conversation.type === 'parametric' ? 'openai/gpt-5.5' : 'quality');
+  const imageGenerationModel = normalizeImageGenerationModel(
+    conversation.settings?.imageGenerationModel,
+  );
 
   const lowPrompts = useMemo(() => {
     return totalTokens > 0 && totalTokens <= 10;
@@ -154,9 +162,10 @@ export function ChatSection({
       onSendMessage?.({
         text: suggestion,
         model: conversation.settings?.model,
+        imageGenerationModel,
       });
     },
-    [conversation.settings?.model, onSendMessage],
+    [conversation.settings?.model, imageGenerationModel, onSendMessage],
   );
 
   const handleModelChange = useCallback(
@@ -169,6 +178,22 @@ export function ChatSection({
             ? conversation.settings
             : {}),
           model: model,
+        },
+      });
+    },
+    [conversation, updateConversation],
+  );
+
+  const handleImageGenerationModelChange = useCallback(
+    (nextModel: ImageGenerationModel) => {
+      if (!updateConversation) return;
+      updateConversation({
+        ...conversation,
+        settings: {
+          ...(typeof conversation.settings === 'object'
+            ? conversation.settings
+            : {}),
+          imageGenerationModel: nextModel,
         },
       });
     },
@@ -288,6 +313,12 @@ export function ChatSection({
             type={conversation.type}
             model={model}
             setModel={handleModelChange}
+            imageGenerationModel={
+              conversation.type === 'creative'
+                ? imageGenerationModel
+                : DEFAULT_IMAGE_GENERATION_MODEL
+            }
+            setImageGenerationModel={handleImageGenerationModelChange}
             conversation={conversation}
           />
         </div>

@@ -84,6 +84,13 @@ import { useMeshFiles } from '@/contexts/MeshFilesContext';
 import { AnimatePresence, motion } from 'framer-motion';
 import { BrandLogo } from '@/components/BrandLogo';
 import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
+import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  getImageGenerationProvider,
+  IMAGE_GENERATION_MODELS,
+  normalizeImageGenerationModel,
+  type ImageGenerationModel,
+} from '@shared/imageGeneration';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -95,6 +102,8 @@ interface TextAreaChatProps {
   disabled?: boolean;
   model: Model;
   setModel: (model: Model) => void;
+  imageGenerationModel?: ImageGenerationModel;
+  setImageGenerationModel?: (model: ImageGenerationModel) => void;
   showPromptGenerator?: boolean;
   showFullLabels?: boolean; // Controls whether to show full text labels on buttons
   onTypeChange?: (type: 'parametric' | 'creative') => void;
@@ -465,6 +474,68 @@ const VALID_IMAGE_FORMATS = [
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D asset';
 
+function ImageGenerationModelControl({
+  value,
+  onChange,
+  disabled = false,
+  compact = false,
+}: {
+  value: ImageGenerationModel;
+  onChange: (model: ImageGenerationModel) => void;
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const selected =
+    IMAGE_GENERATION_MODELS.find((model) => model.id === value) ??
+    IMAGE_GENERATION_MODELS[0];
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className={cn(
+            'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+            compact ? 'w-fit' : 'w-full justify-between',
+          )}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="h-4 w-4" />
+            <span className="text-xs">{selected.name}</span>
+          </span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="flex w-56 flex-col gap-1 rounded-lg border-adam-neutral-700 bg-adam-neutral-700 p-1"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {IMAGE_GENERATION_MODELS.map((model) => (
+          <button
+            key={model.id}
+            type="button"
+            className={cn(
+              'rounded-md px-3 py-2 text-left transition-colors hover:bg-adam-bg-secondary-dark',
+              value === model.id && 'bg-adam-neutral-800',
+            )}
+            onClick={() => onChange(model.id)}
+          >
+            <span className="block text-sm font-medium text-adam-text-primary">
+              {model.name}
+            </span>
+            <span className="block text-xs text-adam-text-secondary">
+              {model.description}
+            </span>
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
   if (lowerFilename.endsWith('.stl')) return 'stl';
@@ -495,6 +566,8 @@ function TextAreaChat({
   disabled = false,
   model,
   setModel,
+  imageGenerationModel = DEFAULT_IMAGE_GENERATION_MODEL,
+  setImageGenerationModel,
   showPromptGenerator = false,
   showFullLabels = false,
   onTypeChange,
@@ -509,6 +582,8 @@ function TextAreaChat({
   const [isGeneratingInputImage, setIsGeneratingInputImage] = useState(false);
   const [isImageCreatorOpen, setIsImageCreatorOpen] = useState(false);
   const [imageCreatorPrompt, setImageCreatorPrompt] = useState('');
+  const [imageCreatorModel, setImageCreatorModel] =
+    useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
   const [imageCreatorRef, setImageCreatorRef] = useState<{
     id: string;
     previewUrl: string;
@@ -536,6 +611,8 @@ function TextAreaChat({
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
   const isMultiview = type === 'creative' && model === 'multiview';
+  const selectedImageGenerationModel =
+    normalizeImageGenerationModel(imageGenerationModel);
 
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {
@@ -786,6 +863,7 @@ function TextAreaChat({
         ...(input.trim() !== '' && { text: input.trim() }),
         model,
         multiviewImages,
+        imageGenerationModel: selectedImageGenerationModel,
       };
       onSubmit(content);
       setInput('');
@@ -810,6 +888,9 @@ function TextAreaChat({
       ...(trimmedInput !== '' && { text: trimmedInput }),
       ...(images.length > 0 && { images: images.map((img) => img.id) }),
       model: model,
+      ...(type === 'creative' && {
+        imageGenerationModel: selectedImageGenerationModel,
+      }),
     };
     if (type === 'creative') {
       content = {
@@ -1277,7 +1358,7 @@ function TextAreaChat({
           conversationId: conversation.id,
           view: 'front',
           prompt,
-          provider: 'openai',
+          provider: getImageGenerationProvider(imageCreatorModel),
           mode: 'input',
           ...(options?.refImageId ? { refImageId: options.refImageId } : {}),
         },
@@ -1317,9 +1398,10 @@ function TextAreaChat({
 
   const openImageCreator = useCallback(() => {
     setImageCreatorPrompt(input.trim());
+    setImageCreatorModel(selectedImageGenerationModel);
     setImageCreatorRef(null);
     setIsImageCreatorOpen(true);
-  }, [input]);
+  }, [input, selectedImageGenerationModel]);
 
   const handleImageCreatorRefSelected = async (
     event: ChangeEvent<HTMLInputElement>,
@@ -1559,6 +1641,11 @@ function TextAreaChat({
             <div className="text-xs text-adam-text-secondary">
               Cost: {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)}
             </div>
+            <ImageGenerationModelControl
+              value={imageCreatorModel}
+              onChange={setImageCreatorModel}
+              disabled={isGeneratingInputImage || isUploadingCreatorRef}
+            />
           </div>
           <DialogFooter>
             <Button
@@ -1603,6 +1690,7 @@ function TextAreaChat({
             slots={multiviewSlots}
             onSlotsChange={setMultiviewSlots}
             prompt={input}
+            imageGenerationModel={selectedImageGenerationModel}
             disabled={disabled || isLoading}
           />
         </div>
@@ -1969,6 +2057,26 @@ function TextAreaChat({
                   Generate input image with OpenAI (
                   {formatTokenCost(FEATURE_COSTS.generatedInputImage.tokens)})
                 </TooltipContent>
+              </Tooltip>
+            )}
+
+            {type === 'creative' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div>
+                    <ImageGenerationModelControl
+                      value={selectedImageGenerationModel}
+                      onChange={(nextModel) =>
+                        setImageGenerationModel?.(nextModel)
+                      }
+                      disabled={
+                        disabled || isLoading || !setImageGenerationModel
+                      }
+                      compact
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>Image generation model</TooltipContent>
               </Tooltip>
             )}
 

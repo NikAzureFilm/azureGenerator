@@ -153,7 +153,8 @@ Deno.serve(async (req) => {
 
     const userId = userData.user.id;
     const shouldUseOpenAi =
-      provider === 'openai' || (mode === 'multiview' && view === 'front');
+      provider === 'openai' ||
+      (!provider && mode === 'multiview' && view === 'front');
     const builtPrompt = buildPrompt(view, userPrompt, !!refImageId, mode);
     const tokenCost = shouldUseOpenAi
       ? mode === 'input'

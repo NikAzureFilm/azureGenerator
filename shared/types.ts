@@ -1,4 +1,5 @@
 import { Database } from './database.ts';
+import type { ImageGenerationModel } from './imageGeneration.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
 
@@ -70,6 +71,8 @@ export type Content = {
   preferredFormat?: 'glb' | 'fbx';
   // 4-slot labeled images for the 'multiview' model (front/left/back/right)
   multiviewImages?: MultiviewImages;
+  // Image provider used when creating seed/reference images for mesh generation.
+  imageGenerationModel?: ImageGenerationModel;
 };
 
 export type ParametricArtifact = {
@@ -117,6 +120,7 @@ export type GenerationStatus = Database['public']['Enums']['generation-status'];
 
 export type ConversationSettings = {
   model?: Model;
+  imageGenerationModel?: ImageGenerationModel;
 } | null;
 
 export type Profile = Database['public']['Tables']['profiles']['Row'];

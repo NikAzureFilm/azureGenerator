@@ -19,6 +19,10 @@ import * as Sentry from '@sentry/react';
 import { useSendContentMutation } from '@/services/messageService';
 import { useProfile } from '@/services/profileService';
 import { BrandLogo } from '@/components/BrandLogo';
+import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  type ImageGenerationModel,
+} from '@shared/imageGeneration';
 
 export function PromptView() {
   const navigate = useNavigate();
@@ -41,6 +45,8 @@ export function PromptView() {
   const [type, setType] = useState<'parametric' | 'creative'>('parametric');
 
   const [model, setModel] = useState<Model>('openai/gpt-5.5');
+  const [imageGenerationModel, setImageGenerationModel] =
+    useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
 
   const handleTypeChange = (newType: 'parametric' | 'creative') => {
     setType(newType);
@@ -76,7 +82,7 @@ export function PromptView() {
       id: newConversationId,
       user_id: user?.id ?? '',
       type: type,
-      settings: { model: model },
+      settings: { model: model, imageGenerationModel },
       current_message_leaf_id: null,
     },
   });
@@ -125,6 +131,7 @@ export function PromptView() {
             type: type,
             settings: {
               model: model,
+              imageGenerationModel,
             },
           },
         ])
@@ -260,6 +267,8 @@ export function PromptView() {
                   disabled={limitReached}
                   model={model}
                   setModel={setModel}
+                  imageGenerationModel={imageGenerationModel}
+                  setImageGenerationModel={setImageGenerationModel}
                   showPromptGenerator={true}
                   showFullLabels={true}
                   onTypeChange={handleTypeChange}

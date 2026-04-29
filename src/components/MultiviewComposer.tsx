@@ -8,6 +8,11 @@ import {
 import { ImagePlus, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
+import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  getImageGenerationProvider,
+  type ImageGenerationModel,
+} from '@shared/imageGeneration';
 import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
@@ -51,6 +56,7 @@ interface MultiviewComposerProps {
   slots: MultiviewSlotMap;
   onSlotsChange: Dispatch<SetStateAction<MultiviewSlotMap>>;
   prompt: string;
+  imageGenerationModel?: ImageGenerationModel;
   disabled?: boolean;
 }
 
@@ -60,6 +66,7 @@ export function MultiviewComposer({
   slots,
   onSlotsChange,
   prompt,
+  imageGenerationModel = DEFAULT_IMAGE_GENERATION_MODEL,
   disabled = false,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
@@ -146,7 +153,7 @@ export function MultiviewComposer({
               view: slot,
               prompt: trimmedPrompt || undefined,
               refImageId: refImageId || undefined,
-              provider: slot === 'front' ? 'openai' : 'nano-banana',
+              provider: getImageGenerationProvider(imageGenerationModel),
               mode: 'multiview',
             },
           },
@@ -174,7 +181,14 @@ export function MultiviewComposer({
         });
       }
     },
-    [conversationId, prompt, refImageId, updateSlot, toast],
+    [
+      conversationId,
+      prompt,
+      refImageId,
+      imageGenerationModel,
+      updateSlot,
+      toast,
+    ],
   );
 
   const handleRemove = useCallback(
