@@ -2,7 +2,6 @@ import {
   type Dispatch,
   type SetStateAction,
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from 'react';
@@ -42,12 +41,6 @@ export interface MultiviewSlotState {
   kind?: 'upload' | 'generated';
 }
 
-interface SourceReferenceState {
-  id: string;
-  url: string;
-  isBusy: boolean;
-}
-
 export type MultiviewSlotMap = Partial<
   Record<MultiviewSlot, MultiviewSlotState>
 >;
@@ -59,7 +52,6 @@ interface MultiviewComposerProps {
   onSlotsChange: Dispatch<SetStateAction<MultiviewSlotMap>>;
   prompt: string;
   disabled?: boolean;
-  onReferencePickerReady?: (openPicker: (() => void) | null) => void;
 }
 
 export function MultiviewComposer({
@@ -69,38 +61,15 @@ export function MultiviewComposer({
   onSlotsChange,
   prompt,
   disabled = false,
-  onReferencePickerReady,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
-  const sourceReferenceInputRef = useRef<HTMLInputElement | null>(null);
-  const [sourceReference, setSourceReference] = useState<
-    SourceReferenceState | undefined
-  >();
   // Pick the first populated slot (in SLOT_ORDER) as the reference image for
   // consistency when generating subsequent views.
   const firstFilledSlot = SLOT_ORDER.find((s) => {
     const state = slots[s];
     return !!state?.id && !state.isBusy;
   });
-  const sourceReferenceId =
-    sourceReference?.id && !sourceReference.isBusy
-      ? sourceReference.id
-      : undefined;
-  const refImageId = getMultiviewGenerationReference({
-    slots,
-    sourceReferenceId,
-  });
-  const isSourceReferenceBusy = !!sourceReference?.isBusy;
-
-  const openSourceReferencePicker = useCallback(() => {
-    if (disabled || isSourceReferenceBusy) return;
-    sourceReferenceInputRef.current?.click();
-  }, [disabled, isSourceReferenceBusy]);
-
-  useEffect(() => {
-    onReferencePickerReady?.(openSourceReferencePicker);
-    return () => onReferencePickerReady?.(null);
-  }, [onReferencePickerReady, openSourceReferencePicker]);
+  const refImageId = getMultiviewGenerationReference({ slots });
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
@@ -116,56 +85,6 @@ export function MultiviewComposer({
     },
     [onSlotsChange],
   );
-
-  const handleSourceReferenceUpload = useCallback(
-    async (file: File) => {
-      if (!VALID_IMAGE_FORMATS.includes(file.type)) {
-        toast({
-          title: 'Invalid image format',
-          description: 'Use jpeg, png, or webp.',
-        });
-        return;
-      }
-
-      const id = crypto.randomUUID();
-      const objectUrl = URL.createObjectURL(file);
-      setSourceReference({ id, url: objectUrl, isBusy: true });
-      try {
-        const { error } = await supabase.storage
-          .from('images')
-          .upload(`${userId}/${conversationId}/${id}`, file);
-        if (error) throw error;
-        setSourceReference({ id, url: objectUrl, isBusy: false });
-      } catch (error) {
-        console.error('Error uploading multiview source reference:', error);
-        URL.revokeObjectURL(objectUrl);
-        setSourceReference(undefined);
-        toast({
-          title: 'Upload failed',
-          description:
-            'Could not upload the reference image. Please try again.',
-          variant: 'destructive',
-        });
-      }
-    },
-    [conversationId, userId, toast],
-  );
-
-  const handleSourceReferenceRemove = useCallback(async () => {
-    const current = sourceReference;
-    if (!current?.id) return;
-    try {
-      await supabase.storage
-        .from('images')
-        .remove([`${userId}/${conversationId}/${current.id}`]);
-    } catch (err) {
-      console.warn('Failed to remove multiview source reference:', err);
-    }
-    if (current.url.startsWith('blob:')) {
-      URL.revokeObjectURL(current.url);
-    }
-    setSourceReference(undefined);
-  }, [conversationId, sourceReference, userId]);
 
   const handleUpload = useCallback(
     async (slot: MultiviewSlot, file: File) => {
@@ -280,109 +199,27 @@ export function MultiviewComposer({
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-adam-text-secondary">
-            Multiview · 4 angles
-          </span>
-          {refImageId && (
-            <span className="text-[10px] text-adam-text-secondary/70">
-              {firstFilledSlot
-                ? `Generated views match the ${firstFilledSlot} reference`
-                : 'Front AI uses the input reference'}
-            </span>
-          )}
-        </div>
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-adam-text-secondary">
+          Multiview · 4 angles
+        </span>
+        <span className="text-[10px] text-adam-text-secondary/70">
+          {firstFilledSlot
+            ? `${SLOT_LABEL[firstFilledSlot]} is the reference for the other views`
+            : 'Add Front first — it becomes the reference for the others'}
+        </span>
       </div>
-      {(!firstFilledSlot || sourceReference?.url) && (
-        <div className="flex h-12 items-center justify-between gap-2 rounded-lg border border-adam-neutral-800 bg-adam-background-2 px-2">
-          <input
-            ref={sourceReferenceInputRef}
-            type="file"
-            accept={VALID_IMAGE_FORMATS.join(',')}
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleSourceReferenceUpload(file);
-              e.target.value = '';
-            }}
-          />
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-adam-neutral-700 bg-adam-neutral-900">
-              {sourceReference?.url ? (
-                <img
-                  src={sourceReference.url}
-                  alt="Input reference"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <ImagePlus className="h-4 w-4 text-adam-text-secondary" />
-              )}
-              {isSourceReferenceBusy && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                  <Loader2 className="h-4 w-4 animate-spin text-white" />
-                </div>
-              )}
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-[11px] font-medium text-adam-text-secondary">
-                Input reference
-              </div>
-              <div className="truncate text-[10px] text-adam-text-secondary/60">
-                {sourceReference?.url
-                  ? firstFilledSlot
-                    ? 'Stored'
-                    : 'Ready for AI'
-                  : 'Optional'}
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-shrink-0 items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={openSourceReferencePicker}
-                  disabled={disabled || isSourceReferenceBusy}
-                  className="flex h-7 w-7 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-white disabled:opacity-50"
-                >
-                  <ImagePlus className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {sourceReference?.url
-                  ? 'Replace reference'
-                  : 'Upload reference'}
-              </TooltipContent>
-            </Tooltip>
-            {sourceReference?.url && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => void handleSourceReferenceRemove()}
-                    disabled={disabled || isSourceReferenceBusy}
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-white disabled:opacity-50"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Remove reference</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </div>
-      )}
       <div className="grid grid-cols-4 gap-2">
         {SLOT_ORDER.map((slot) => (
           <MultiviewSlotCard
             key={slot}
             slot={slot}
             state={slots[slot]}
-            disabled={disabled || isSourceReferenceBusy}
+            disabled={disabled}
             onUpload={handleUpload}
             onGenerate={handleGenerate}
             onRemove={handleRemove}
+            isReference={slot === firstFilledSlot}
             tokenCost={
               slot === 'front'
                 ? FEATURE_COSTS.multiviewFrontImage.tokens
@@ -402,6 +239,7 @@ interface MultiviewSlotCardProps {
   onUpload: (slot: MultiviewSlot, file: File) => void;
   onGenerate: (slot: MultiviewSlot) => void;
   onRemove: (slot: MultiviewSlot) => void;
+  isReference?: boolean;
   tokenCost: number;
 }
 
@@ -412,6 +250,7 @@ function MultiviewSlotCard({
   onUpload,
   onGenerate,
   onRemove,
+  isReference = false,
   tokenCost,
 }: MultiviewSlotCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -430,12 +269,19 @@ function MultiviewSlotCard({
       className={cn(
         'group relative flex aspect-square w-full flex-col overflow-hidden rounded-lg border-2 transition-colors',
         hasImage
-          ? 'border-adam-neutral-700 bg-adam-neutral-900'
+          ? isReference
+            ? 'border-adam-blue/60 bg-adam-neutral-900'
+            : 'border-adam-neutral-700 bg-adam-neutral-900'
           : 'border-dashed border-adam-neutral-700 bg-adam-background-2 hover:border-adam-neutral-500',
       )}
       onMouseEnter={() => setIsHover(true)}
       onMouseLeave={() => setIsHover(false)}
     >
+      {isReference && hasImage && (
+        <div className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-adam-blue/90 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-white">
+          Reference
+        </div>
+      )}
       <input
         ref={inputRef}
         type="file"
