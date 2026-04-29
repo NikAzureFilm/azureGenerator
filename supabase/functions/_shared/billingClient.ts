@@ -2,7 +2,11 @@
 // onshape-extension/src/lib/billing/client.ts so CADAM and onshape behave
 // identically against the same endpoints.
 
-import { FEATURE_COSTS, TOKEN_USD_VALUE } from '../../../shared/tokenCosts.ts';
+import {
+  PLAN_CATALOG,
+  TOKEN_PACK_CATALOG,
+  type PaidPlanLevel,
+} from '../../../shared/pricingCatalog.ts';
 import { getServiceRoleSupabaseClient } from './supabaseClient.ts';
 
 export type SubscriptionLevel = 'standard' | 'pro';
@@ -84,9 +88,9 @@ const localStatus = (): BillingStatus => ({
   },
   tokens: {
     free: 0,
-    subscription: 100000,
+    subscription: PLAN_CATALOG.pro.tokenAmount,
     purchased: 0,
-    total: 100000,
+    total: PLAN_CATALOG.pro.tokenAmount,
   },
 });
 
@@ -94,33 +98,50 @@ const localConsume = (tokens: number): ConsumeSuccess => ({
   ok: true,
   tokensDeducted: tokens,
   freeBalance: 0,
-  subscriptionBalance: Math.max(100000 - tokens, 0),
+  subscriptionBalance: Math.max(PLAN_CATALOG.pro.tokenAmount - tokens, 0),
   purchasedBalance: 0,
-  totalBalance: Math.max(100000 - tokens, 0),
+  totalBalance: Math.max(PLAN_CATALOG.pro.tokenAmount - tokens, 0),
 });
 
 const localProducts = (): BillingProduct[] => [
-  {
-    id: 'local-pro',
-    stripeProductId: 'local-pro',
-    stripePriceId: 'local-pro-monthly',
-    productType: 'subscription',
-    subscriptionLevel: 'pro',
-    tokenAmount: 100000,
-    name: 'Local Pro',
-    priceCents: 0,
-    interval: 'month',
-    active: true,
-  },
-  ...Object.values(FEATURE_COSTS).map((feature) => ({
-    id: `local-${feature.id}`,
-    stripeProductId: `local-${feature.id}`,
-    stripePriceId: `local-${feature.id}`,
+  ...(['standard', 'pro'] as PaidPlanLevel[]).flatMap((level) => {
+    const plan = PLAN_CATALOG[level];
+    return [
+      {
+        id: `local-${level}-monthly`,
+        stripeProductId: `local-${level}`,
+        stripePriceId: `local-${level}-monthly`,
+        productType: 'subscription' as const,
+        subscriptionLevel: level,
+        tokenAmount: plan.tokenAmount,
+        name: `${plan.displayName} Monthly`,
+        priceCents: plan.monthlyPriceCents,
+        interval: 'month',
+        active: true,
+      },
+      {
+        id: `local-${level}-yearly`,
+        stripeProductId: `local-${level}`,
+        stripePriceId: `local-${level}-yearly`,
+        productType: 'subscription' as const,
+        subscriptionLevel: level,
+        tokenAmount: plan.tokenAmount,
+        name: `${plan.displayName} Annual`,
+        priceCents: plan.yearlyPriceCents ?? plan.monthlyPriceCents * 12,
+        interval: 'year',
+        active: true,
+      },
+    ];
+  }),
+  ...TOKEN_PACK_CATALOG.map((pack) => ({
+    id: `local-${pack.lookupKey}`,
+    stripeProductId: `local-${pack.lookupKey}`,
+    stripePriceId: `local-${pack.lookupKey}`,
     productType: 'pack' as const,
     subscriptionLevel: null,
-    tokenAmount: feature.tokens,
-    name: feature.label,
-    priceCents: Math.round(feature.tokens * TOKEN_USD_VALUE * 100),
+    tokenAmount: pack.tokenAmount,
+    name: pack.name,
+    priceCents: pack.priceCents,
     interval: null,
     active: true,
   })),
@@ -387,9 +408,9 @@ export const billing = {
           tokensRefunded: body.tokens,
           source: 'subscription' as const,
           freeBalance: 0,
-          subscriptionBalance: 100000,
+          subscriptionBalance: PLAN_CATALOG.pro.tokenAmount,
           purchasedBalance: 0,
-          totalBalance: 100000,
+          totalBalance: PLAN_CATALOG.pro.tokenAmount,
         })
       : !isBillingServiceConfigured()
         ? refundToSupabase(body)

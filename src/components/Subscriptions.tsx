@@ -24,8 +24,13 @@ import {
 import {
   PLAN_DISPLAY_NAMES,
   PLAN_FEATURES,
+  PLAN_ORDER,
   type PlanLevel,
 } from '@/config/plan-features';
+import {
+  FREE_DAILY_TOKENS,
+  getAnnualDiscountPercent,
+} from '@shared/pricingCatalog';
 
 type Cadence = 'monthly' | 'yearly';
 
@@ -39,8 +44,6 @@ type SubscriptionTier = {
   tokenAmount: number | null;
   popular: boolean;
 };
-
-const DISPLAY_ORDER: PlanLevel[] = ['free', 'pro', 'standard'];
 
 function formatPrice(cents: number): string {
   const dollars = cents / 100;
@@ -102,10 +105,10 @@ function buildTier(
 }
 
 function creditsLines(tier: SubscriptionTier): string[] {
-  const daily = '50 free credits per day';
+  const daily = `${FREE_DAILY_TOKENS.toLocaleString()} free tokens per day`;
   if (tier.level === 'free') return [daily];
   const amount = tier.tokenAmount?.toLocaleString() ?? '';
-  return [daily, `${amount} credits per month`];
+  return [daily, `${amount} tokens per month`];
 }
 
 export function Subscriptions() {
@@ -127,7 +130,7 @@ export function Subscriptions() {
   } = useTokenPackPurchase();
 
   const buildTiers = (cadence: Cadence): SubscriptionTier[] =>
-    DISPLAY_ORDER.map((level) => buildTier(products, level, cadence)).filter(
+    PLAN_ORDER.map((level) => buildTier(products, level, cadence)).filter(
       (t): t is SubscriptionTier => t !== null,
     );
 
@@ -189,7 +192,7 @@ export function Subscriptions() {
               >
                 Annual
                 <span className="ml-1.5 rounded-full bg-adam-blue/20 px-2 text-[10px] font-medium text-adam-blue">
-                  -40%
+                  -{getAnnualDiscountPercent('pro')}%
                 </span>
               </TabsTrigger>
             </TabsList>

@@ -1,8 +1,13 @@
-// Marketing copy for each plan tier — price, name, and token amount come
-// from the billing service (/v1/products), but the bullets below are a
-// product decision that doesn't belong in the billing catalog.
+// Marketing copy for each plan tier. Price, name, and token amount come from
+// shared pricing/billing config; the bullets below are product copy.
 
-export type PlanLevel = 'free' | 'standard' | 'pro';
+import {
+  PLAN_CATALOG,
+  PLAN_ORDER,
+  type PlanLevel,
+} from '@shared/pricingCatalog';
+
+export type { PlanLevel } from '@shared/pricingCatalog';
 
 type PlanCopy = {
   description: string;
@@ -11,18 +16,18 @@ type PlanCopy = {
 
 export const PLAN_FEATURES: Record<PlanLevel, PlanCopy> = {
   free: {
-    description: 'Get started with Adam',
+    description: PLAN_CATALOG.free.description,
     features: ['All AI features', 'Community support'],
   },
   standard: {
-    description: 'For regular use',
+    description: PLAN_CATALOG.standard.description,
     features: [
       'All AI features',
       'Tokens shared between CADAM and the Onshape extension',
     ],
   },
   pro: {
-    description: 'For power users',
+    description: PLAN_CATALOG.pro.description,
     features: [
       'All AI features',
       'Priority support',
@@ -32,9 +37,9 @@ export const PLAN_FEATURES: Record<PlanLevel, PlanCopy> = {
 };
 
 export const PLAN_DISPLAY_NAMES: Record<PlanLevel, string> = {
-  free: 'Free',
-  standard: 'Standard',
-  pro: 'Pro',
+  free: PLAN_CATALOG.free.displayName,
+  standard: PLAN_CATALOG.standard.displayName,
+  pro: PLAN_CATALOG.pro.displayName,
 };
 
-export const PLAN_ORDER: PlanLevel[] = ['free', 'standard', 'pro'];
+export { PLAN_ORDER };

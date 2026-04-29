@@ -25,6 +25,7 @@ import {
   PLAN_ORDER,
   type PlanLevel,
 } from '@/config/plan-features';
+import { FREE_DAILY_TOKENS } from '@shared/pricingCatalog';
 
 interface UpgradeModalProps {
   open: boolean;
@@ -50,7 +51,7 @@ function findMonthly(
 }
 
 function creditsBadge(level: PlanLevel, product: BillingProduct | undefined) {
-  if (level === 'free') return '50 / day';
+  if (level === 'free') return `${FREE_DAILY_TOKENS.toLocaleString()} / day`;
   const amount = product?.tokenAmount ?? 0;
   return `${amount.toLocaleString()} / mo`;
 }
@@ -90,7 +91,7 @@ export function UpgradeModal({ open, onOpenChange }: UpgradeModalProps) {
             Upgrade your plan
           </DialogTitle>
           <DialogDescription className="text-sm text-adam-neutral-400">
-            All plans include every AI feature. Upgrade for more credits.
+            All plans include every AI feature. Upgrade for more tokens.
           </DialogDescription>
         </DialogHeader>
 
