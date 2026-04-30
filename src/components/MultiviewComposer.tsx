@@ -11,19 +11,19 @@ import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationProvider,
-  getImageGenerationTokenCost,
-  IMAGE_GENERATION_MODELS,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
-import { formatTokenCost } from '@shared/tokenCosts';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
-import { getMultiviewGenerationReference } from '@/utils/multiviewReference';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  ImageGenerateDialog,
+  type ImageGenerateReference,
+} from '@/components/ImageGenerateDialog';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
@@ -63,6 +63,12 @@ interface MultiviewComposerProps {
   disabled?: boolean;
 }
 
+interface DialogState {
+  targetSlot: MultiviewSlot;
+  references: ImageGenerateReference[];
+  prompt: string;
+}
+
 export function MultiviewComposer({
   conversationId,
   userId,
@@ -74,13 +80,14 @@ export function MultiviewComposer({
   disabled = false,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
-  // Pick the first populated slot (in SLOT_ORDER) as the reference image for
-  // consistency when generating subsequent views.
   const firstFilledSlot = SLOT_ORDER.find((s) => {
     const state = slots[s];
     return !!state?.id && !state.isBusy;
   });
-  const refImageId = getMultiviewGenerationReference({ slots });
+
+  const [dialogState, setDialogState] = useState<DialogState | null>(null);
+  const [isUploadingDialogRef, setIsUploadingDialogRef] = useState(false);
+  const [isGeneratingDialog, setIsGeneratingDialog] = useState(false);
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
@@ -134,66 +141,154 @@ export function MultiviewComposer({
     [conversationId, userId, updateSlot, toast],
   );
 
-  const handleGenerate = useCallback(
-    async (slot: MultiviewSlot) => {
-      const trimmedPrompt = prompt.trim();
-      if (!trimmedPrompt && !refImageId) {
+  const buildReferencesForSlot = useCallback(
+    (target: MultiviewSlot): ImageGenerateReference[] => {
+      const refs: ImageGenerateReference[] = [];
+      for (const slot of SLOT_ORDER) {
+        if (slot === target) continue;
+        const state = slots[slot];
+        if (!state?.id || !state.url || state.isBusy) continue;
+        refs.push({
+          id: state.id,
+          previewUrl: state.url,
+          label: SLOT_LABEL[slot],
+        });
+      }
+      return refs;
+    },
+    [slots],
+  );
+
+  const openGenerateDialog = useCallback(
+    (slot: MultiviewSlot) => {
+      setDialogState({
+        targetSlot: slot,
+        references: buildReferencesForSlot(slot),
+        prompt: prompt.trim(),
+      });
+    },
+    [buildReferencesForSlot, prompt],
+  );
+
+  const handleDialogOpenChange = useCallback((open: boolean) => {
+    if (!open) setDialogState(null);
+  }, []);
+
+  const handleDialogPromptChange = useCallback((next: string) => {
+    setDialogState((current) =>
+      current ? { ...current, prompt: next } : current,
+    );
+  }, []);
+
+  const handleAddDialogReference = useCallback(
+    async (file: File) => {
+      if (!VALID_IMAGE_FORMATS.includes(file.type)) {
         toast({
-          title: 'Need a prompt or a reference',
-          description:
-            'Type a description, add an input reference, or fill a view first.',
+          title: 'Unsupported image',
+          description: 'Use a JPG, PNG, or WebP image.',
+          variant: 'destructive',
         });
         return;
       }
-
-      updateSlot(slot, { isBusy: true, kind: 'generated' });
+      const id = crypto.randomUUID();
+      setIsUploadingDialogRef(true);
       try {
-        const { data, error } = await supabase.functions.invoke(
-          'generate-view',
-          {
-            method: 'POST',
-            body: {
-              conversationId,
-              view: slot,
-              prompt: trimmedPrompt || undefined,
-              refImageId: refImageId || undefined,
-              provider: getImageGenerationProvider(imageGenerationModel),
-              mode: 'multiview',
-            },
-          },
-        );
+        const { error } = await supabase.storage
+          .from('images')
+          .upload(`${userId}/${conversationId}/${id}`, file);
         if (error) throw error;
-        if (!data?.id || !data?.url) {
-          throw new Error('No image returned from generator');
-        }
-        updateSlot(slot, {
-          id: data.id as string,
-          url: data.url as string,
-          isBusy: false,
-          kind: 'generated',
+        const reader = new FileReader();
+        const previewUrl = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
         });
+        setDialogState((current) =>
+          current
+            ? {
+                ...current,
+                references: [...current.references, { id, previewUrl }],
+              }
+            : current,
+        );
       } catch (error) {
-        console.error('Error generating view:', error);
-        updateSlot(slot, undefined);
+        console.error('Error uploading reference image:', error);
         toast({
-          title: 'Generation failed',
-          description:
-            error instanceof Error
-              ? error.message
-              : 'Could not generate view. Try again.',
+          title: 'Upload failed',
+          description: 'Could not upload reference image.',
           variant: 'destructive',
         });
+      } finally {
+        setIsUploadingDialogRef(false);
       }
     },
-    [
-      conversationId,
-      prompt,
-      refImageId,
-      imageGenerationModel,
-      updateSlot,
-      toast,
-    ],
+    [conversationId, userId, toast],
   );
+
+  const handleRemoveDialogReference = useCallback((id: string) => {
+    setDialogState((current) =>
+      current
+        ? {
+            ...current,
+            references: current.references.filter((ref) => ref.id !== id),
+          }
+        : current,
+    );
+  }, []);
+
+  const handleDialogGenerate = useCallback(async () => {
+    if (!dialogState) return;
+    const { targetSlot, references } = dialogState;
+    const trimmedPrompt = dialogState.prompt.trim();
+    if (!trimmedPrompt && references.length === 0) {
+      toast({
+        title: 'Need a prompt or a reference',
+        description: 'Type a description or add at least one reference image.',
+      });
+      return;
+    }
+
+    setIsGeneratingDialog(true);
+    updateSlot(targetSlot, { isBusy: true, kind: 'generated' });
+    try {
+      const refImageIds = references.map((ref) => ref.id);
+      const { data, error } = await supabase.functions.invoke('generate-view', {
+        method: 'POST',
+        body: {
+          conversationId,
+          view: targetSlot,
+          prompt: trimmedPrompt || undefined,
+          refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
+          provider: getImageGenerationProvider(imageGenerationModel),
+          mode: 'multiview',
+        },
+      });
+      if (error) throw error;
+      if (!data?.id || !data?.url) {
+        throw new Error('No image returned from generator');
+      }
+      updateSlot(targetSlot, {
+        id: data.id as string,
+        url: data.url as string,
+        isBusy: false,
+        kind: 'generated',
+      });
+      setDialogState(null);
+    } catch (error) {
+      console.error('Error generating view:', error);
+      updateSlot(targetSlot, undefined);
+      toast({
+        title: 'Generation failed',
+        description:
+          error instanceof Error
+            ? error.message
+            : 'Could not generate view. Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsGeneratingDialog(false);
+    }
+  }, [dialogState, conversationId, imageGenerationModel, updateSlot, toast]);
 
   const handleRemove = useCallback(
     async (slot: MultiviewSlot) => {
@@ -227,37 +322,6 @@ export function MultiviewComposer({
             : 'Add Front first — it becomes the reference for the others'}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-1 rounded-lg bg-adam-neutral-800 p-1 md:ml-auto md:w-fit">
-        {IMAGE_GENERATION_MODELS.map((model) => {
-          const selected = imageGenerationModel === model.id;
-          return (
-            <button
-              key={model.id}
-              type="button"
-              disabled={disabled || !onImageGenerationModelChange}
-              onClick={() => onImageGenerationModelChange?.(model.id)}
-              className={cn(
-                'rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                selected
-                  ? 'bg-adam-blue text-white'
-                  : 'text-adam-text-secondary hover:bg-adam-neutral-700 hover:text-adam-text-primary',
-              )}
-            >
-              <span className="block text-[10px] font-medium leading-3">
-                {model.name}
-              </span>
-              <span
-                className={cn(
-                  'block text-[9px]',
-                  selected ? 'text-white/80' : 'text-adam-text-secondary',
-                )}
-              >
-                {formatTokenCost(getImageGenerationTokenCost(model.id))}
-              </span>
-            </button>
-          );
-        })}
-      </div>
       <div className="grid grid-cols-4 gap-2">
         {SLOT_ORDER.map((slot) => (
           <MultiviewSlotCard
@@ -266,13 +330,32 @@ export function MultiviewComposer({
             state={slots[slot]}
             disabled={disabled}
             onUpload={handleUpload}
-            onGenerate={handleGenerate}
+            onGenerate={openGenerateDialog}
             onRemove={handleRemove}
             isReference={slot === firstFilledSlot}
-            tokenCost={getImageGenerationTokenCost(imageGenerationModel)}
           />
         ))}
       </div>
+      {dialogState ? (
+        <ImageGenerateDialog
+          open={dialogState !== null}
+          onOpenChange={handleDialogOpenChange}
+          title={`Generate ${SLOT_LABEL[dialogState.targetSlot]} view`}
+          description="Reference images from the other filled views are pre-selected. Add or remove references as needed."
+          references={dialogState.references}
+          onAddReferenceFile={handleAddDialogReference}
+          onRemoveReference={handleRemoveDialogReference}
+          isUploadingReference={isUploadingDialogRef}
+          prompt={dialogState.prompt}
+          onPromptChange={handleDialogPromptChange}
+          promptPlaceholder="Describe the object (optional if references are provided)"
+          model={imageGenerationModel}
+          onModelChange={(next) => onImageGenerationModelChange?.(next)}
+          isGenerating={isGeneratingDialog}
+          onGenerate={handleDialogGenerate}
+          generateLabel={`Generate ${SLOT_LABEL[dialogState.targetSlot]}`}
+        />
+      ) : null}
     </div>
   );
 }
@@ -285,7 +368,6 @@ interface MultiviewSlotCardProps {
   onGenerate: (slot: MultiviewSlot) => void;
   onRemove: (slot: MultiviewSlot) => void;
   isReference?: boolean;
-  tokenCost: number;
 }
 
 function MultiviewSlotCard({
@@ -296,7 +378,6 @@ function MultiviewSlotCard({
   onGenerate,
   onRemove,
   isReference = false,
-  tokenCost,
 }: MultiviewSlotCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isHover, setIsHover] = useState(false);
@@ -387,9 +468,6 @@ function MultiviewSlotCard({
               <TooltipContent>Generate with AI</TooltipContent>
             </Tooltip>
           </div>
-          <span className="mt-1 rounded bg-adam-neutral-900 px-1.5 py-0.5 text-[9px] text-adam-text-secondary">
-            {formatTokenCost(tokenCost)}
-          </span>
         </div>
       )}
 

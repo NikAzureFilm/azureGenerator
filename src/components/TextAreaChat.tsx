@@ -35,6 +35,7 @@ import {
   hasAnyMultiviewSlot,
   anyMultiviewBusy,
 } from '@/components/MultiviewComposer';
+import { ImageGenerateDialog } from '@/components/ImageGenerateDialog';
 import {
   shouldShowPolygonControls,
   getModelDefaultPolygonCount,
@@ -57,14 +58,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { useMutation } from '@tanstack/react-query';
@@ -476,48 +470,6 @@ const VALID_IMAGE_FORMATS = [
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D asset';
 
-function ImageGenerationModelControl({
-  value,
-  onChange,
-  disabled = false,
-}: {
-  value: ImageGenerationModel;
-  onChange: (model: ImageGenerationModel) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-1 rounded-lg bg-adam-neutral-800 p-1">
-      {IMAGE_GENERATION_MODELS.map((model) => {
-        const selected = value === model.id;
-        return (
-          <button
-            key={model.id}
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange(model.id)}
-            className={cn(
-              'rounded-md px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              selected
-                ? 'bg-adam-blue text-white'
-                : 'text-adam-text-secondary hover:bg-adam-neutral-700 hover:text-adam-text-primary',
-            )}
-          >
-            <span className="block text-xs font-medium">{model.name}</span>
-            <span
-              className={cn(
-                'mt-0.5 block text-[10px]',
-                selected ? 'text-white/80' : 'text-adam-text-secondary',
-              )}
-            >
-              {formatTokenCost(getImageGenerationTokenCost(model.id))}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function SelectedImageGenerationLabel({
   value,
 }: {
@@ -590,7 +542,6 @@ function TextAreaChat({
     previewUrl: string;
   } | null>(null);
   const [isUploadingCreatorRef, setIsUploadingCreatorRef] = useState(false);
-  const imageCreatorFileInputRef = useRef<HTMLInputElement>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [dropMessageOpacityClass, setDropMessageOpacityClass] = useState(
     'opacity-0 pointer-events-none',
@@ -1404,12 +1355,7 @@ function TextAreaChat({
     setIsImageCreatorOpen(true);
   }, [input, selectedImageGenerationModel]);
 
-  const handleImageCreatorRefSelected = async (
-    event: ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
+  const handleImageCreatorAddRef = async (file: File) => {
     if (!VALID_IMAGE_FORMATS.includes(file.type)) {
       toast({
         title: 'Unsupported image',
@@ -1563,124 +1509,41 @@ function TextAreaChat({
           )}
         </DialogContent>
       </Dialog>
-      <Dialog
+      <ImageGenerateDialog
         open={isImageCreatorOpen}
-        onOpenChange={(open) => {
-          if (isGeneratingInputImage || isUploadingCreatorRef) return;
-          setIsImageCreatorOpen(open);
+        onOpenChange={setIsImageCreatorOpen}
+        title="Create input image"
+        description="Generate a 3D-ready reference image from a prompt and an optional reference image."
+        references={
+          imageCreatorRef
+            ? [
+                {
+                  id: imageCreatorRef.id,
+                  previewUrl: imageCreatorRef.previewUrl,
+                },
+              ]
+            : []
+        }
+        onAddReferenceFile={handleImageCreatorAddRef}
+        onRemoveReference={() => setImageCreatorRef(null)}
+        isUploadingReference={isUploadingCreatorRef}
+        prompt={imageCreatorPrompt}
+        onPromptChange={setImageCreatorPrompt}
+        promptPlaceholder={DEFAULT_CREATIVE_PROMPT}
+        model={imageCreatorModel}
+        onModelChange={(nextModel) => {
+          setImageCreatorModel(nextModel);
+          setImageGenerationModel?.(nextModel);
         }}
-      >
-        <DialogContent
-          className="max-w-xl border-adam-neutral-700 bg-adam-neutral-950 text-adam-text-primary"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <DialogHeader>
-            <DialogTitle>Create input image</DialogTitle>
-            <DialogDescription className="text-adam-text-secondary">
-              Generate a 3D-ready reference image from a prompt and an optional
-              reference image.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <input
-              ref={imageCreatorFileInputRef}
-              type="file"
-              accept={VALID_IMAGE_FORMATS.join(',')}
-              className="hidden"
-              onChange={handleImageCreatorRefSelected}
-            />
-            {imageCreatorRef ? (
-              <div className="relative w-fit">
-                <img
-                  src={imageCreatorRef.previewUrl}
-                  alt="Reference"
-                  className="h-32 w-32 rounded-md border border-adam-neutral-700 object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => setImageCreatorRef(null)}
-                  className="absolute -right-2 -top-2 rounded-full bg-adam-neutral-800 p-1 text-adam-text-primary hover:bg-adam-neutral-700"
-                  disabled={isGeneratingInputImage}
-                  aria-label="Remove reference image"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => imageCreatorFileInputRef.current?.click()}
-                disabled={isUploadingCreatorRef || isGeneratingInputImage}
-                className="flex h-32 w-32 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-adam-neutral-700 bg-adam-background-2 text-xs text-adam-text-secondary hover:border-adam-blue/40 hover:bg-adam-bg-secondary-dark disabled:opacity-50"
-              >
-                {isUploadingCreatorRef ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-adam-blue" />
-                ) : (
-                  <ImagePlus className="h-5 w-5" />
-                )}
-                <span>
-                  {isUploadingCreatorRef ? 'Uploading…' : 'Add reference'}
-                </span>
-              </button>
-            )}
-            <Textarea
-              value={imageCreatorPrompt}
-              onChange={(event) => setImageCreatorPrompt(event.target.value)}
-              placeholder={DEFAULT_CREATIVE_PROMPT}
-              className="min-h-28 resize-none border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary placeholder:text-adam-text-secondary/70"
-              disabled={isGeneratingInputImage}
-              onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                  event.preventDefault();
-                  void generateInputImage({
-                    promptOverride: imageCreatorPrompt,
-                    refImageId: imageCreatorRef?.id,
-                  });
-                }
-              }}
-            />
-            <div className="text-xs text-adam-text-secondary">
-              Cost:{' '}
-              {formatTokenCost(getImageGenerationTokenCost(imageCreatorModel))}
-            </div>
-            <ImageGenerationModelControl
-              value={imageCreatorModel}
-              onChange={(nextModel) => {
-                setImageCreatorModel(nextModel);
-                setImageGenerationModel?.(nextModel);
-              }}
-              disabled={isGeneratingInputImage || isUploadingCreatorRef}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
-              onClick={() => setIsImageCreatorOpen(false)}
-              disabled={isGeneratingInputImage || isUploadingCreatorRef}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-adam-blue text-white hover:bg-adam-blue/90"
-              onClick={() =>
-                void generateInputImage({
-                  promptOverride: imageCreatorPrompt,
-                  refImageId: imageCreatorRef?.id,
-                })
-              }
-              disabled={isGeneratingInputImage || isUploadingCreatorRef}
-            >
-              {isGeneratingInputImage ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="mr-2 h-4 w-4" />
-              )}
-              Generate image
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        isGenerating={isGeneratingInputImage}
+        onGenerate={() =>
+          void generateInputImage({
+            promptOverride: imageCreatorPrompt,
+            refImageId: imageCreatorRef?.id,
+          })
+        }
+        maxReferences={1}
+      />
       {isMultiview ? (
         <div
           className={cn(

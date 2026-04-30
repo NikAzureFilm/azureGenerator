@@ -108,6 +108,7 @@ Deno.serve(async (req) => {
       view,
       conversationId,
       refImageId,
+      refImageIds,
       provider,
       mode = 'multiview',
     }: {
@@ -115,9 +116,20 @@ Deno.serve(async (req) => {
       view?: ViewLabel;
       conversationId?: string;
       refImageId?: string;
+      refImageIds?: string[];
       provider?: 'openai' | 'nano-banana';
       mode?: 'input' | 'multiview';
     } = await req.json();
+
+    const referenceIds: string[] = (() => {
+      if (Array.isArray(refImageIds) && refImageIds.length > 0) {
+        return refImageIds.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        );
+      }
+      return refImageId ? [refImageId] : [];
+    })();
+    const primaryRefImageId = referenceIds[0];
 
     if (!conversationId) {
       return new Response(
@@ -140,7 +152,7 @@ Deno.serve(async (req) => {
     }
 
     const userPrompt = (prompt ?? '').trim();
-    if (!userPrompt && !refImageId) {
+    if (!userPrompt && referenceIds.length === 0) {
       return new Response(
         JSON.stringify({
           error: { message: 'prompt or refImageId required' },
@@ -156,7 +168,12 @@ Deno.serve(async (req) => {
     const shouldUseOpenAi =
       provider === 'openai' ||
       (!provider && mode === 'multiview' && view === 'front');
-    const builtPrompt = buildPrompt(view, userPrompt, !!refImageId, mode);
+    const builtPrompt = buildPrompt(
+      view,
+      userPrompt,
+      referenceIds.length > 0,
+      mode,
+    );
     const tokenCost = shouldUseOpenAi
       ? mode === 'input'
         ? FEATURE_COSTS.generatedInputImage.tokens
@@ -214,7 +231,8 @@ Deno.serve(async (req) => {
 
     debugLog('generate-view', {
       view,
-      hasRef: !!refImageId,
+      hasRef: referenceIds.length > 0,
+      refCount: referenceIds.length,
       provider: shouldUseOpenAi ? 'openai' : 'nano-banana',
       tokenCost,
       mode,
@@ -229,15 +247,15 @@ Deno.serve(async (req) => {
         userId,
         conversationId,
         builtPrompt,
-        refImageId ? [refImageId] : [],
+        referenceIds,
         null,
         'high',
       );
       imageBytes = result.imageBytes;
       contentType = result.contentType;
     } else {
-      if (refImageId) {
-        const refPath = `${userId}/${conversationId}/${refImageId}`;
+      if (primaryRefImageId) {
+        const refPath = `${userId}/${conversationId}/${primaryRefImageId}`;
         const { data: signedRef, error: signedRefError } =
           await serviceClient.storage
             .from('images')
