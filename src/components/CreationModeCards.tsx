@@ -30,7 +30,7 @@ export function CreationModeCards({
             aria-pressed={isSelected}
             onClick={() => onTypeChange(option.type)}
             className={cn(
-              'group relative flex min-h-[174px] overflow-hidden rounded-xl border bg-adam-background-2 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-adam-blue focus-visible:ring-offset-2 focus-visible:ring-offset-adam-bg-secondary-dark',
+              'group relative flex overflow-hidden rounded-xl border bg-adam-background-2 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-adam-blue focus-visible:ring-offset-2 focus-visible:ring-offset-adam-bg-secondary-dark',
               isSelected
                 ? 'border-adam-blue/80 shadow-[0_0_0_1px_rgba(15,95,244,0.32),0_18px_44px_rgba(0,0,0,0.22)]'
                 : 'border-white/10 shadow-[0_14px_34px_rgba(0,0,0,0.16)] hover:border-white/20 hover:bg-[#1d1e1e]',
@@ -93,14 +93,14 @@ function CreationModePreview({
   return (
     <div
       className={cn(
-        'mt-4 h-[88px] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
+        'mt-4 aspect-[3/1] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
         selected ? 'border-adam-blue/40' : 'border-white/10',
       )}
     >
       <img
         src={src}
         alt={alt}
-        className="h-full w-full object-cover object-center"
+        className="h-full w-full object-contain object-center"
         draggable={false}
       />
     </div>

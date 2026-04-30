@@ -233,23 +233,11 @@ export function PromptView() {
               : 'justify-start pt-20 desktop:justify-center desktop:py-8',
           )}
         >
-          <div
-            className={cn(
-              'mb-8 w-full max-w-5xl',
-              'motion-safe:transition-opacity motion-safe:duration-700 motion-safe:ease-out',
-              isLoaded ? 'opacity-100' : 'opacity-0',
-            )}
-          >
-            <CreationModeCards
-              selectedType={type}
-              onTypeChange={handleTypeChange}
-            />
-          </div>
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center">
             <BrandLogo
               variant="wordmark"
               className={cn(
-                'mb-6 h-10 w-44 md:h-12 md:w-52',
+                'mb-4 h-10 w-44 md:h-12 md:w-52',
                 'motion-safe:transition-opacity motion-safe:duration-1000 motion-safe:ease-out',
                 isLoaded ? 'opacity-100' : 'opacity-0',
               )}
@@ -264,6 +252,18 @@ export function PromptView() {
               {getTimeBasedGreeting}
               {firstName ? `, ${firstName}` : ''}!
             </h1>
+          </div>
+          <div
+            className={cn(
+              'mb-8 w-full max-w-5xl',
+              'motion-safe:transition-opacity motion-safe:duration-700 motion-safe:ease-out',
+              isLoaded ? 'opacity-100' : 'opacity-0',
+            )}
+          >
+            <CreationModeCards
+              selectedType={type}
+              onTypeChange={handleTypeChange}
+            />
           </div>
           <div className="flex w-full flex-col items-center">
             <div className="w-full max-w-3xl space-y-4 pb-12">
