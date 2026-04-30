@@ -42,6 +42,7 @@ import {
 } from '@react-three/drei';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { BufferGeometry } from 'three';
+import { vitePublicAssetUrl } from '@/lib/publicAssetUrl';
 
 interface VisualCardProps {
   conversation: HistoryConversation;
@@ -66,7 +67,7 @@ function ThreePreview({ geometry }: { geometry: BufferGeometry }) {
         zoom={0.4}
       />
       <Stage environment={null} intensity={0.6} position={[0, 0, 0]}>
-        <Environment files={`${import.meta.env.BASE_URL}/city.hdr`} />
+        <Environment files={vitePublicAssetUrl('city.hdr')} />
         <ambientLight intensity={0.8} />
         <directionalLight position={[5, 5, 5]} intensity={1.2} />
         <directionalLight position={[-5, 5, 5]} intensity={0.2} />

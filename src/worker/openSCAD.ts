@@ -10,6 +10,7 @@ import {
 } from './types';
 import OpenSCADError from '@/lib/OpenSCADError';
 import { libraries } from '@/lib/libraries.ts';
+import { vitePublicAssetUrl } from '@/lib/publicAssetUrl';
 
 const fontsConf = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -37,7 +38,7 @@ class OpenSCADWrapper {
     try {
       if (!defaultFont) {
         const fontResponse = await fetch(
-          `${import.meta.env.BASE_URL}/Geist-Regular.ttf`,
+          vitePublicAssetUrl('Geist-Regular.ttf'),
         );
         defaultFont = await fontResponse.arrayBuffer();
       }
