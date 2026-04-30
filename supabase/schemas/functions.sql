@@ -20,56 +20,19 @@ BEGIN
     END IF;
 
     -- Free tier
-    RETURN 50;
+    RETURN 0;
 END;
 $$;
--- Just-in-time daily reset for free-tier users.
--- Safe to call on every read/deduct: only touches the row when it's expired or missing.
--- Decouples correctness from the cron firing on time — the cron is now a backstop.
+-- Compatibility no-op for older callers. Free-tier users no longer receive
+-- recurring subscription tokens; new accounts get a one-time starter grant.
 CREATE OR REPLACE FUNCTION "public"."ensure_free_tier_fresh"("p_user_id" uuid)
 RETURNS void
 LANGUAGE "plpgsql"
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE
-    v_is_free boolean;
-    v_caller uuid;
 BEGIN
-    -- Only allow service role (server-side edge functions) or the user acting
-    -- on themselves. auth.role() = 'anon' with uid = NULL would otherwise slip
-    -- past a uid-only check. Silent return, not an exception, so that a
-    -- legitimate caller's outer flow (user_extradata, deduct_tokens) continues
-    -- on its own fallback path rather than erroring to the client.
-    v_caller := auth.uid();
-    IF auth.role() IS DISTINCT FROM 'service_role' AND v_caller IS DISTINCT FROM p_user_id THEN
-        RETURN;
-    END IF;
-
-    SELECT NOT EXISTS (
-        SELECT 1 FROM public.subscriptions
-        WHERE user_id = p_user_id
-        AND status IN ('active', 'trialing')
-    ) INTO v_is_free;
-
-    IF NOT v_is_free THEN
-        RETURN;
-    END IF;
-
-    INSERT INTO public.token_balances (user_id, source, balance, expires_at, updated_at)
-    VALUES (
-        p_user_id,
-        'subscription',
-        50,
-        date_trunc('day', now()) + interval '1 day',
-        now()
-    )
-    ON CONFLICT (user_id, source) DO UPDATE
-    SET balance = 50,
-        expires_at = date_trunc('day', now()) + interval '1 day',
-        updated_at = now()
-    WHERE token_balances.expires_at IS NULL
-       OR token_balances.expires_at <= now();
+    RETURN;
 END;
 $$;
 
@@ -105,11 +68,8 @@ BEGIN
     WHERE user_id = p_user_id AND source = 'subscription'
     FOR UPDATE;
 
-    -- Expired subscription tokens count as 0. For free-tier users this is
-    -- unreachable after ensure_free_tier_fresh (expires_at is always future).
-    -- It is load-bearing for paid users whose billing-cycle sub has lapsed,
-    -- and for the edge case where ensure_free_tier_fresh silently bailed
-    -- (auth-mismatch). Don't remove without preserving both cases.
+    -- Expired subscription tokens count as 0. This is load-bearing for paid
+    -- users whose billing-cycle subscription balance has lapsed.
     IF v_sub_expires IS NOT NULL AND v_sub_expires < now() THEN
         v_sub_balance := 0;
     END IF;
@@ -334,19 +294,16 @@ BEGIN
 END;
 $$;
 
--- Daily cron backstop for free-tier users.
--- The JIT reset in ensure_free_tier_fresh is the primary mechanism; this cron
--- keeps rows fresh for users who don't check in on a given day. We pin
--- expires_at to the next UTC day boundary to avoid the drift that used to
--- cause the cron to skip its own prior resets.
+-- Backstop retained for old cron/manual calls. Free-tier users no longer get
+-- recurring subscription tokens, so this clears stale free subscription rows.
 CREATE OR REPLACE FUNCTION "public"."reset_free_tier_tokens"()
 RETURNS void
 LANGUAGE "plpgsql"
 AS $$
 BEGIN
     UPDATE public.token_balances tb
-    SET balance = 50,
-        expires_at = date_trunc('day', now()) + interval '1 day',
+    SET balance = 0,
+        expires_at = now(),
         updated_at = now()
     WHERE tb.source = 'subscription'
     AND NOT EXISTS (
@@ -354,10 +311,7 @@ BEGIN
         WHERE s.user_id = tb.user_id
         AND s.status IN ('active', 'trialing')
     )
-    -- Idempotency guard: don't re-credit users whose period is still live.
-    -- With expires_at pinned to the day boundary, the scheduled midnight run
-    -- satisfies `<=` exactly; manual or retried mid-day runs are safely no-ops.
-    AND (tb.expires_at IS NULL OR tb.expires_at <= now());
+    AND tb.balance <> 0;
 END;
 $$;
 
@@ -401,8 +355,7 @@ BEGIN
     v_pur_balance := COALESCE(v_pur_balance, 0);
 
     -- See matching comment in deduct_tokens: this branch is load-bearing for
-    -- paid users whose billing-cycle sub has lapsed and as a fallback if
-    -- ensure_free_tier_fresh silently bailed. Do not remove.
+    -- paid users whose billing-cycle subscription balance has lapsed.
     IF v_sub_expires IS NOT NULL AND v_sub_expires < now() THEN
         v_sub_balance := 0;
     END IF;

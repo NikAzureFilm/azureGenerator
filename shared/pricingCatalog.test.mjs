@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  FREE_DAILY_TOKENS,
+  FREE_STARTER_TOKENS,
   PLAN_CATALOG,
   PLAN_ORDER,
   TOKEN_PACK_CATALOG,
@@ -16,7 +16,7 @@ assert.equal(TOKEN_USD_VALUE, 0.03);
 
 assert.deepEqual(PLAN_ORDER, ['free', 'standard', 'pro']);
 
-assert.equal(FREE_DAILY_TOKENS, 50);
+assert.equal(FREE_STARTER_TOKENS, 100);
 assert.equal(PLAN_CATALOG.free.monthlyPriceCents, 0);
 assert.equal(PLAN_CATALOG.free.tokenAmount, null);
 

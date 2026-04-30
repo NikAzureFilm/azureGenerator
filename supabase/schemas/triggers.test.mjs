@@ -16,6 +16,12 @@ const handleNewUserSql = handleNewUserMatch[0];
 
 assert.match(
   handleNewUserSql,
-  /VALUES \(NEW\.id, 'purchased'::public\.token_source_type, 3000\);/,
-  'new users receive an initial 3000 purchased-token balance',
+  /VALUES \(NEW\.id, 'purchased'::public\.token_source_type, 100\);/,
+  'new users receive an initial 100 purchased-token starter grant',
+);
+
+assert.doesNotMatch(
+  handleNewUserSql,
+  /'subscription'::public\.token_source_type,\s+\d+,\s+now\(\) \+ interval '1 day'/,
+  'new users do not receive recurring free subscription tokens',
 );

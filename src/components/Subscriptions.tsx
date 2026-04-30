@@ -28,7 +28,7 @@ import {
   type PlanLevel,
 } from '@/config/plan-features';
 import {
-  FREE_DAILY_TOKENS,
+  FREE_STARTER_TOKENS,
   getAnnualDiscountPercent,
 } from '@shared/pricingCatalog';
 
@@ -105,10 +105,10 @@ function buildTier(
 }
 
 function creditsLines(tier: SubscriptionTier): string[] {
-  const daily = `${FREE_DAILY_TOKENS.toLocaleString()} free tokens per day`;
-  if (tier.level === 'free') return [daily];
+  const starter = `${FREE_STARTER_TOKENS.toLocaleString()} free starter tokens`;
+  if (tier.level === 'free') return [starter];
   const amount = tier.tokenAmount?.toLocaleString() ?? '';
-  return [daily, `${amount} tokens per month`];
+  return [`${amount} tokens per month`];
 }
 
 export function Subscriptions() {

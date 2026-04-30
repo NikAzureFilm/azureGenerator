@@ -341,7 +341,7 @@ export default function SettingsView() {
                 {freeTokens > 0 && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-adam-neutral-200">
-                      Daily free tokens
+                      Free tokens
                     </span>
                     <span className="text-xs tabular-nums text-adam-neutral-50">
                       {freeTokens.toLocaleString()}
@@ -351,7 +351,7 @@ export default function SettingsView() {
                 {purchasedTokens > 0 && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-adam-neutral-200">
-                      Purchased tokens
+                      {level === 'free' ? 'Starter tokens' : 'Purchased tokens'}
                     </span>
                     <span className="text-xs tabular-nums text-adam-neutral-50">
                       {purchasedTokens.toLocaleString()}

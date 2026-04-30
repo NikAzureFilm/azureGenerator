@@ -25,7 +25,7 @@ import {
   PLAN_ORDER,
   type PlanLevel,
 } from '@/config/plan-features';
-import { FREE_DAILY_TOKENS } from '@shared/pricingCatalog';
+import { FREE_STARTER_TOKENS } from '@shared/pricingCatalog';
 
 interface UpgradeModalProps {
   open: boolean;
@@ -51,7 +51,7 @@ function findMonthly(
 }
 
 function creditsBadge(level: PlanLevel, product: BillingProduct | undefined) {
-  if (level === 'free') return `${FREE_DAILY_TOKENS.toLocaleString()} / day`;
+  if (level === 'free') return `${FREE_STARTER_TOKENS.toLocaleString()} once`;
   const amount = product?.tokenAmount ?? 0;
   return `${amount.toLocaleString()} / mo`;
 }

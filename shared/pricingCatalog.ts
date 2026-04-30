@@ -1,4 +1,4 @@
-export const FREE_DAILY_TOKENS = 50;
+export const FREE_STARTER_TOKENS = 100;
 
 export type PlanLevel = 'free' | 'standard' | 'pro';
 export type PaidPlanLevel = Exclude<PlanLevel, 'free'>;

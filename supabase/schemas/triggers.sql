@@ -68,13 +68,9 @@ BEGIN
     )
   );
 
-  -- Initialize subscription token balance (free tier: 50 tokens, 1-day expiry)
-  INSERT INTO public.token_balances (user_id, source, balance, expires_at)
-  VALUES (NEW.id, 'subscription'::public.token_source_type, 50, now() + interval '1 day');
-
-  -- Initialize purchased token balance (starter grant)
+  -- Initialize one-time starter token balance
   INSERT INTO public.token_balances (user_id, source, balance)
-  VALUES (NEW.id, 'purchased'::public.token_source_type, 3000);
+  VALUES (NEW.id, 'purchased'::public.token_source_type, 100);
 
   RETURN NEW;
 END;

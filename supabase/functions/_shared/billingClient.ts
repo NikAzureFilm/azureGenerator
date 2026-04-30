@@ -70,6 +70,8 @@ export type BillingProduct = {
   active: boolean;
 };
 
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+
 const isBillingServiceConfigured = (): boolean =>
   !!Deno.env.get('BILLING_SERVICE_URL') &&
   !!Deno.env.get('BILLING_SERVICE_KEY');
@@ -160,6 +162,14 @@ const readBalances = async (userId: string) => {
     .eq('user_id', userId);
   if (error) throw error;
 
+  const { data: subscriptions, error: subscriptionError } = await supabase
+    .from('subscriptions')
+    .select('status')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (subscriptionError) throw subscriptionError;
+
   const bySource = new Map((data ?? []).map((row) => [row.source, row]));
   const subscriptionRow = bySource.get('subscription');
   const subscriptionExpired =
@@ -169,8 +179,11 @@ const readBalances = async (userId: string) => {
     ? 0
     : (subscriptionRow?.balance ?? 0);
   const purchased = bySource.get('purchased')?.balance ?? 0;
+  const isPaidSubscriptionActive = ACTIVE_SUBSCRIPTION_STATUSES.has(
+    subscriptions?.[0]?.status ?? '',
+  );
 
-  return { supabase, subscription, purchased };
+  return { supabase, subscription, purchased, isPaidSubscriptionActive };
 };
 
 const consumeFromSupabase = async (
@@ -249,14 +262,24 @@ const refundToSupabase = async (body: RefundBody): Promise<RefundResult> => {
     throw new Error('userId is required for Supabase billing fallback');
   }
 
-  const { supabase, subscription, purchased } = await readBalances(body.userId);
-  const subscriptionBalance = subscription + body.tokens;
+  const { supabase, subscription, purchased, isPaidSubscriptionActive } =
+    await readBalances(body.userId);
+  const refundSource = isPaidSubscriptionActive ? 'subscription' : 'purchased';
+  const subscriptionBalance = isPaidSubscriptionActive
+    ? subscription + body.tokens
+    : subscription;
+  const purchasedBalance = isPaidSubscriptionActive
+    ? purchased
+    : purchased + body.tokens;
 
   const { error: upsertError } = await supabase.from('token_balances').upsert(
     {
       user_id: body.userId,
-      source: 'subscription',
-      balance: subscriptionBalance,
+      source: refundSource,
+      balance:
+        refundSource === 'subscription'
+          ? subscriptionBalance
+          : purchasedBalance,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'user_id,source' },
@@ -269,21 +292,21 @@ const refundToSupabase = async (body: RefundBody): Promise<RefundResult> => {
       user_id: body.userId,
       operation: 'refund',
       amount: body.tokens,
-      source: 'subscription',
+      source: refundSource,
       reference_id: body.referenceId ?? null,
       subscription_balance_after: subscriptionBalance,
-      purchased_balance_after: purchased,
+      purchased_balance_after: purchasedBalance,
     });
   if (transactionError) throw transactionError;
 
   return {
     ok: true,
     tokensRefunded: body.tokens,
-    source: 'subscription',
+    source: refundSource,
     freeBalance: 0,
     subscriptionBalance,
-    purchasedBalance: purchased,
-    totalBalance: subscriptionBalance + purchased,
+    purchasedBalance,
+    totalBalance: subscriptionBalance + purchasedBalance,
   };
 };
 

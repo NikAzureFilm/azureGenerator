@@ -113,7 +113,7 @@ export function CreditsButton() {
 
   const isFree = level === 'free';
   const headerLabel = isFree
-    ? 'Daily credits'
+    ? 'Credits'
     : periodEnd
       ? `Renews ${periodEnd}`
       : 'Current credits';
@@ -238,7 +238,7 @@ export function CreditsButton() {
                 )}
                 {freeTokens > 0 && (
                   <div className="flex items-center justify-between">
-                    <span>Daily free credits</span>
+                    <span>Free credits</span>
                     <span className="tabular-nums">
                       {formatFull(freeTokens)}
                     </span>
@@ -246,7 +246,7 @@ export function CreditsButton() {
                 )}
                 {purchasedTokens > 0 && (
                   <div className="flex items-center justify-between">
-                    <span>Add-on credits</span>
+                    <span>{isFree ? 'Starter credits' : 'Add-on credits'}</span>
                     <span className="tabular-nums">
                       {formatFull(purchasedTokens)}
                     </span>
