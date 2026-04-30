@@ -7,12 +7,14 @@ assert.deepEqual(
 );
 
 assert.equal(CREATION_MODE_OPTIONS[0].title, 'CAD Engineering');
+assert.equal(CREATION_MODE_OPTIONS[0].imageSrc, '/creation-mode-cad.png');
 assert.equal(
   CREATION_MODE_OPTIONS[0].description,
   'Precise parts, mechanisms, practical engineering',
 );
 
 assert.equal(CREATION_MODE_OPTIONS[1].title, 'Mesh Generation');
+assert.equal(CREATION_MODE_OPTIONS[1].imageSrc, '/creation-mode-mesh.png');
 assert.equal(
   CREATION_MODE_OPTIONS[1].description,
   'Figurines, organic shapes, sculpts',
