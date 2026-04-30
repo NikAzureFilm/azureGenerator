@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as AvatarPrimitive from '@radix-ui/react-avatar';
 
+import { AVATAR_FALLBACK_CLASSNAME } from '@/components/ui/avatarFallbackStyles';
 import { cn } from '@/lib/utils';
 
 // Gradient palette for avatar fallbacks (created once at module load)
@@ -80,10 +81,7 @@ const AvatarFallback = React.forwardRef<
       style={{
         background: gradient,
       }}
-      className={cn(
-        'flex h-full w-full items-center justify-center rounded-full text-xs text-transparent',
-        className,
-      )}
+      className={cn(AVATAR_FALLBACK_CLASSNAME, className)}
       {...props}
     >
       {children}

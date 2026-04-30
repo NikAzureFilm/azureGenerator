@@ -10,20 +10,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
-
-const DEFAULT_PARAMETRIC_MODEL: Model = 'openai/gpt-5.5';
-
-function normalizeParametricChatModel(model: Model | undefined): Model {
-  if (!model || model === 'fast' || model === 'quality' || model === 'ultra') {
-    return DEFAULT_PARAMETRIC_MODEL;
-  }
-
-  if (model.startsWith('google/gemini-3.1-pro')) {
-    return DEFAULT_PARAMETRIC_MODEL;
-  }
-
-  return model;
-}
+import { normalizeParametricChatModel } from '@/lib/parametricModels';
 
 function messageSentConversationUpdate(
   newMessage: Message,

@@ -2,7 +2,9 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Message, Model, Parameter } from '@shared/types';
 import { ModelConfig } from '../types/misc.ts';
-import { FEATURE_COSTS, getCreativeModelTokenCost } from '@shared/tokenCosts';
+import { getCreativeModelTokenCost } from '@shared/tokenCosts';
+import { PARAMETRIC_MODELS } from './parametricModels';
+export { PARAMETRIC_MODELS };
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -235,30 +237,6 @@ export function getInitials(fullName: string | null) {
   }
   return 'U';
 }
-
-export const PARAMETRIC_MODELS: ModelConfig[] = [
-  {
-    id: 'openai/gpt-5.5',
-    name: 'Premium',
-    description: 'Most powerful OpenAI model with adaptive reasoning',
-    provider: 'OpenAI',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametricCadPro.tokens,
-  },
-  {
-    id: 'google/gemini-3.1-pro-preview',
-    name: 'Lite',
-    description: 'Temporarily unavailable for CAD code generation',
-    provider: 'Google',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    disabled: true,
-    tokenCost: FEATURE_COSTS.parametricCadLite.tokens,
-  },
-];
 
 export const CREATIVE_MODELS: ModelConfig[] = [
   {
