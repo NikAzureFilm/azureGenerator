@@ -13,6 +13,8 @@ const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
 
+const GEMINI_FLASH_IMAGE_MODEL = 'gemini-2.5-flash-image';
+
 // Shared 3D model generation instructions for consistency across all image generation services
 export const INSTRUCTIONS_3D =
   'You are generating a fully textured and rendered 3D model. Output one centered 3D model or multiple centered objects, no text. Plain white background (or an empty background which provides optimal contrast with the textures of the 3D model), neutral lighting, and a soft shadow directly under the 3D model. Keep the entire object fully in-frame with 5–10% padding; no cropping. Make sure the description strongly impacts the form and shape of the 3D Model not just the surface texture';
@@ -464,17 +466,17 @@ export const generateImageWithFlux = async (
 };
 */
 /**
- * Generates an image using Gemini 3.1 Flash Image Preview directly via Google GenAI.
+ * Generates an image using Nano Banana directly via Google GenAI.
  * Best for initial text-to-image generation for 3D models.
  */
 export const generateImageWithGeminiFlash = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
 ): Promise<Buffer> => {
-  debugLog('Generating image with gemini-3.1-flash-image-preview');
+  debugLog(`Generating image with ${GEMINI_FLASH_IMAGE_MODEL}`);
 
   const result = await googleGenAI.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
+    model: GEMINI_FLASH_IMAGE_MODEL,
     contents: [{ text: prompt }],
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
@@ -482,7 +484,7 @@ export const generateImageWithGeminiFlash = async (
   });
 
   if (!result.candidates?.[0]?.content?.parts) {
-    throw new Error('No result from Gemini 3.1 Flash Image Preview');
+    throw new Error('No result from Nano Banana');
   }
 
   let generatedImageData: string | undefined;
@@ -493,17 +495,17 @@ export const generateImageWithGeminiFlash = async (
   }
 
   if (!generatedImageData) {
-    throw new Error('No image data from Gemini 3.1 Flash Image Preview');
+    throw new Error('No image data from Nano Banana');
   }
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
-  debugLog('Successfully generated image with gemini-3.1-flash-image-preview');
+  debugLog(`Successfully generated image with ${GEMINI_FLASH_IMAGE_MODEL}`);
 
   return imageBytes;
 };
 
 /**
- * Edits an image using Gemini 3.1 Flash Image Preview directly via Google GenAI.
+ * Edits an image using Nano Banana directly via Google GenAI.
  * Best for editing existing images or uploaded images for 3D model generation.
  */
 export const generateImageWithGeminiFlashEdit = async (
@@ -511,7 +513,7 @@ export const generateImageWithGeminiFlashEdit = async (
   prompt: string,
   imageUrl: string,
 ): Promise<Buffer> => {
-  debugLog('Editing image with gemini-3.1-flash-image-preview');
+  debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
   debugLog('Input image URL:', imageUrl);
   debugLog('Prompt:', prompt);
 
@@ -530,7 +532,7 @@ export const generateImageWithGeminiFlashEdit = async (
     );
 
     const result = await googleGenAI.models.generateContent({
-      model: 'gemini-3.1-flash-image-preview',
+      model: GEMINI_FLASH_IMAGE_MODEL,
       contents: [
         { text: prompt },
         {
@@ -546,7 +548,7 @@ export const generateImageWithGeminiFlashEdit = async (
     });
 
     if (!result.candidates?.[0]?.content?.parts) {
-      throw new Error('No result from Gemini 3.1 Flash Image Preview edit');
+      throw new Error('No result from Nano Banana edit');
     }
 
     let generatedImageData: string | undefined;
@@ -557,11 +559,11 @@ export const generateImageWithGeminiFlashEdit = async (
     }
 
     if (!generatedImageData) {
-      throw new Error('No image data from Gemini 3.1 Flash Image Preview edit');
+      throw new Error('No image data from Nano Banana edit');
     }
 
     const imageBytes = Buffer.from(generatedImageData, 'base64');
-    debugLog('Successfully edited image with gemini-3.1-flash-image-preview');
+    debugLog(`Successfully edited image with ${GEMINI_FLASH_IMAGE_MODEL}`);
 
     return imageBytes;
   } catch (error) {

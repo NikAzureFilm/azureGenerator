@@ -19,6 +19,7 @@ import * as Sentry from '@sentry/react';
 import { useSendContentMutation } from '@/services/messageService';
 import { useProfile } from '@/services/profileService';
 import { BrandLogo } from '@/components/BrandLogo';
+import { CreationModeCards } from '@/components/CreationModeCards';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   type ImageGenerationModel,
@@ -224,7 +225,26 @@ export function PromptView() {
           </div>
         )}
 
-        <main className="flex h-full w-full flex-col items-center justify-center px-4 md:px-8">
+        <main
+          className={cn(
+            'flex h-full w-full flex-col items-center overflow-y-auto px-4 pb-8 md:px-8',
+            user
+              ? 'justify-start pt-8 desktop:justify-center'
+              : 'justify-start pt-20 desktop:justify-center desktop:py-8',
+          )}
+        >
+          <div
+            className={cn(
+              'mb-8 w-full max-w-5xl',
+              'motion-safe:transition-opacity motion-safe:duration-700 motion-safe:ease-out',
+              isLoaded ? 'opacity-100' : 'opacity-0',
+            )}
+          >
+            <CreationModeCards
+              selectedType={type}
+              onTypeChange={handleTypeChange}
+            />
+          </div>
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center">
             <BrandLogo
               variant="wordmark"
