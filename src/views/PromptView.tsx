@@ -7,7 +7,12 @@ import { supabase } from '@/lib/supabase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
-import { Content, Conversation, Model } from '@shared/types';
+import {
+  Content,
+  Conversation,
+  DEFAULT_CREATIVE_MODEL,
+  Model,
+} from '@shared/types';
 import { MessageItem } from '../types/misc.ts';
 import { LimitReachedMessage } from '@/components/LimitReachedMessage';
 import { LowPromptsWarningMessage } from '@/components/LowPromptsWarningMessage';
@@ -53,7 +58,7 @@ export function PromptView() {
     setType(newType);
     // Reset model to the default for the new type
     if (newType === 'creative') {
-      setModel('quality');
+      setModel(DEFAULT_CREATIVE_MODEL);
     } else {
       setModel('openai/gpt-5.5');
     }

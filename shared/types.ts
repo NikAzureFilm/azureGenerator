@@ -2,6 +2,7 @@ import { Database } from './database.ts';
 import type { ImageGenerationModel } from './imageGeneration.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
+export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
 
 export type MultiviewSlot = 'front' | 'left' | 'back' | 'right';
 

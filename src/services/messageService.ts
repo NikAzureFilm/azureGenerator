@@ -1,6 +1,12 @@
 import { useConversation } from '@/contexts/ConversationContext';
 import { supabase } from '@/lib/supabase';
-import { Content, Conversation, Message, Model } from '@shared/types';
+import {
+  Content,
+  Conversation,
+  DEFAULT_CREATIVE_MODEL,
+  Message,
+  Model,
+} from '@shared/types';
 import { HistoryConversation } from '../types/misc.ts';
 import {
   QueryClient,
@@ -636,7 +642,10 @@ export function useSendContentMutation({
 
       if (conversation.type === 'creative') {
         await sendToCreativeChat({
-          model: content.model ?? conversation.settings?.model ?? 'quality',
+          model:
+            content.model ??
+            conversation.settings?.model ??
+            DEFAULT_CREATIVE_MODEL,
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -737,7 +746,7 @@ export function useEditMessageMutation({
 
       if (conversation.type === 'creative') {
         sendToCreativeChat({
-          model: conversation.settings?.model ?? 'quality',
+          model: conversation.settings?.model ?? DEFAULT_CREATIVE_MODEL,
           messageId: userMessage.id,
           conversationId: conversation.id,
         });

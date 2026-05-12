@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Content, Message, Model } from '@shared/types';
+import { Content, DEFAULT_CREATIVE_MODEL, Message, Model } from '@shared/types';
 import TextAreaChat from '@/components/TextAreaChat';
 import { SuggestionPills } from '@/components/chat/SuggestionPills';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -86,7 +86,9 @@ export function ChatSection({
 
   const model =
     conversation.settings?.model ??
-    (conversation.type === 'parametric' ? 'openai/gpt-5.5' : 'quality');
+    (conversation.type === 'parametric'
+      ? 'openai/gpt-5.5'
+      : DEFAULT_CREATIVE_MODEL);
   const imageGenerationModel = normalizeImageGenerationModel(
     conversation.settings?.imageGenerationModel,
   );

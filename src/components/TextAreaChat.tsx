@@ -19,7 +19,6 @@ import {
   Ruler,
   X,
   Sparkles,
-  ChevronDown,
 } from 'lucide-react';
 import {
   cn,
@@ -27,7 +26,13 @@ import {
   PARAMETRIC_MODELS,
   parametricModelSupportsVision,
 } from '@/lib/utils';
-import { Content, CreativeModel, MeshFileType, Model } from '@shared/types';
+import {
+  Content,
+  CreativeModel,
+  DEFAULT_CREATIVE_MODEL,
+  MeshFileType,
+  Model,
+} from '@shared/types';
 import {
   MultiviewComposer,
   MultiviewSlotMap,
@@ -784,8 +789,8 @@ function TextAreaChat({
   useEffect(() => {
     // Multiview manages its own 4-slot state, don't force-switch models on it.
     if (type === 'creative' && !isMultiview && images.length > 1) {
-      if (model !== 'quality') {
-        setModel('quality');
+      if (model !== DEFAULT_CREATIVE_MODEL) {
+        setModel(DEFAULT_CREATIVE_MODEL);
       }
     }
   }, [images, setModel, model, type, isMultiview]);
@@ -1873,28 +1878,21 @@ function TextAreaChat({
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="outline"
-                        className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark data-[state=open]:bg-adam-bg-secondary-dark"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 rounded-lg border border-[#2a2a2a] bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark data-[state=open]:bg-adam-bg-secondary-dark"
                         disabled={disabled || isGeneratingInputImage}
                         onClick={(e) => e.stopPropagation()}
+                        aria-label="Add reference image"
                       >
                         {isGeneratingInputImage ? (
                           <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
                         ) : (
                           <ImagePlus className="h-4 w-4" />
                         )}
-                        <span className="hidden whitespace-nowrap text-xs sm:inline">
-                          Add Reference Image
-                        </span>
-                        <span className="whitespace-nowrap text-xs sm:hidden">
-                          Add Ref
-                        </span>
-                        <ChevronDown className="h-3.5 w-3.5 opacity-70" />
                       </Button>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    Upload or generate a reference image
-                  </TooltipContent>
+                  <TooltipContent>Add reference image</TooltipContent>
                 </Tooltip>
                 <DropdownMenuContent
                   align="start"

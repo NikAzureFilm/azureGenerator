@@ -3,7 +3,7 @@ import { ImageGallery } from './ImageGallery';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import { useConversation } from '@/contexts/ConversationContext';
 import { CreativeLoadingBar } from './CreativeLoadingBar';
-import { CreativeModel } from '@shared/types';
+import { CreativeModel, DEFAULT_CREATIVE_MODEL } from '@shared/types';
 
 interface CreativePreviewSectionProps {
   isLoading: boolean;
@@ -23,7 +23,7 @@ export function CreativePreviewSection({
             modelName={
               (message?.content.model ??
                 conversation.settings?.model ??
-                'quality') as CreativeModel
+                DEFAULT_CREATIVE_MODEL) as CreativeModel
             }
           />
         </div>
