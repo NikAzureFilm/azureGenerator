@@ -19,6 +19,7 @@ import {
   Ruler,
   X,
   Sparkles,
+  ChevronDown,
 } from 'lucide-react';
 import {
   cn,
@@ -58,6 +59,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
@@ -83,10 +90,13 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationProvider,
   getImageGenerationTokenCost,
-  IMAGE_GENERATION_MODELS,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
+import {
+  buildReferenceImageAccept,
+  shouldShowReferenceImageControl,
+} from '@/utils/inputImageControls';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -469,25 +479,6 @@ const VALID_IMAGE_FORMATS = [
 ];
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D asset';
-
-function SelectedImageGenerationLabel({
-  value,
-}: {
-  value: ImageGenerationModel;
-}) {
-  const selected =
-    IMAGE_GENERATION_MODELS.find((model) => model.id === value) ??
-    IMAGE_GENERATION_MODELS[0];
-
-  return (
-    <>
-      <span className="hidden text-xs xl:inline">{selected.name}</span>
-      <span className="hidden rounded bg-adam-neutral-800 px-1 text-[10px] text-adam-text-secondary xl:inline">
-        {formatTokenCost(getImageGenerationTokenCost(value))}
-      </span>
-    </>
-  );
-}
 
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
@@ -1220,6 +1211,20 @@ function TextAreaChat({
     }
   };
 
+  const openReferenceFilePicker = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = buildReferenceImageAccept({
+      type,
+      imageFormats: VALID_IMAGE_FORMATS,
+      creativeMeshExtensions: SUPPORTED_MESH_EXTENSIONS,
+    });
+    input.onchange = (event) => {
+      handleItemsChange(event as unknown as ChangeEvent<HTMLInputElement>);
+    };
+    input.click();
+  };
+
   const handleMeshRemoved = async () => {
     if (mesh?.source === 'upload') {
       try {
@@ -1857,83 +1862,72 @@ function TextAreaChat({
         </div>
         <div className="flex items-center justify-between border-t border-[#2a2a2a] p-3">
           <div className="flex items-center gap-1">
-            {!isMultiview &&
-              (type !== 'parametric' ||
-                parametricModelSupportsVision(model)) && (
-                <div
-                  className={cn(
-                    'transition-all duration-300 ease-out',
-                    'pointer-events-auto scale-100 opacity-100',
-                  )}
-                >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+            {shouldShowReferenceImageControl({
+              type,
+              isMultiview,
+              parametricSupportsVision: parametricModelSupportsVision(model),
+            }) && (
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
                       <Button
                         variant="outline"
-                        className="flex h-8 w-8 items-center gap-2 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const input = document.createElement('input');
-                          input.type = 'file';
-                          input.accept = `${VALID_IMAGE_FORMATS.join(', ')}, ${
-                            type === 'creative'
-                              ? SUPPORTED_MESH_EXTENSIONS.join(', ')
-                              : '.stl'
-                          }`;
-                          input.onchange = (event) => {
-                            handleItemsChange(
-                              event as unknown as ChangeEvent<HTMLInputElement>,
-                            );
-                          };
-                          input.click();
-                        }}
-                        disabled={disabled}
+                        className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark data-[state=open]:bg-adam-bg-secondary-dark"
+                        disabled={disabled || isGeneratingInputImage}
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <ImagePlus className="h-5 w-5" />
+                        {isGeneratingInputImage ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
+                        ) : (
+                          <ImagePlus className="h-4 w-4" />
+                        )}
+                        <span className="hidden whitespace-nowrap text-xs sm:inline">
+                          Add Reference Image
+                        </span>
+                        <span className="whitespace-nowrap text-xs sm:hidden">
+                          Add Ref
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 opacity-70" />
                       </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Upload image</TooltipContent>
-                  </Tooltip>
-                </div>
-              )}
-
-            {type === 'creative' && !isMultiview && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 px-2 text-sm text-adam-text-secondary hover:bg-adam-bg-secondary-dark"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openImageCreator();
-                    }}
-                    disabled={disabled || isLoading || isGeneratingInputImage}
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Upload or generate a reference image
+                  </TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent
+                  align="start"
+                  side="top"
+                  className="w-56 p-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <DropdownMenuItem
+                    className="gap-2 rounded-md text-adam-text-primary hover:cursor-pointer"
+                    onSelect={() => openReferenceFilePicker()}
                   >
-                    {isGeneratingInputImage ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
-                    ) : (
-                      <Sparkles className="h-4 w-4" />
-                    )}
-                    <span className="hidden text-xs lg:inline">Image</span>
-                    <SelectedImageGenerationLabel
-                      value={selectedImageGenerationModel}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Generate input image with{' '}
-                  {
-                    IMAGE_GENERATION_MODELS.find(
-                      (item) => item.id === selectedImageGenerationModel,
-                    )?.name
-                  }{' '}
-                  (
-                  {formatTokenCost(
-                    getImageGenerationTokenCost(selectedImageGenerationModel),
+                    <ImagePlus className="h-4 w-4 text-adam-text-secondary" />
+                    <span>Upload</span>
+                  </DropdownMenuItem>
+                  {type === 'creative' && (
+                    <DropdownMenuItem
+                      className="gap-2 rounded-md text-adam-text-primary hover:cursor-pointer"
+                      disabled={isLoading || isGeneratingInputImage}
+                      onSelect={() => openImageCreator()}
+                    >
+                      <Sparkles className="h-4 w-4 text-adam-blue" />
+                      <span>Generiraj</span>
+                      <span className="ml-auto rounded-md bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
+                        {formatTokenCost(
+                          getImageGenerationTokenCost(
+                            selectedImageGenerationModel,
+                          ),
+                        )}
+                      </span>
+                    </DropdownMenuItem>
                   )}
-                  )
-                </TooltipContent>
-              </Tooltip>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
 
             {/* CAD / Mesh segmented control */}
