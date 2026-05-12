@@ -247,16 +247,11 @@ const QuadsButton = ({
     </button>
   );
 
-  // Component abstraction instead of nested ternaries
-  if (showFullLabels) {
-    return buttonContent;
-  }
-
   return (
     <Tooltip>
       <TooltipTrigger asChild>{buttonContent}</TooltipTrigger>
       <TooltipContent>
-        {isQuadsEnabled ? 'Quad topology enabled' : 'Enable quad topology'}
+        {isQuadsEnabled ? 'Quad topology enabled' : 'Switch to quad topology'}
       </TooltipContent>
     </Tooltip>
   );
@@ -445,18 +440,6 @@ const PolygonButton = ({
     </PopoverContent>
   );
 
-  // Component abstraction instead of nested ternaries
-  if (showFullLabels) {
-    return (
-      <div className="flex items-center gap-1">
-        <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
-          <PopoverTrigger asChild>{buttonContent}</PopoverTrigger>
-          {popoverContent}
-        </Popover>
-      </div>
-    );
-  }
-
   return (
     <div className="flex items-center gap-1">
       <Tooltip>
@@ -468,7 +451,7 @@ const PolygonButton = ({
             </Popover>
           </div>
         </TooltipTrigger>
-        <TooltipContent>Adjust poly count</TooltipContent>
+        <TooltipContent>Adjust polygon count</TooltipContent>
       </Tooltip>
     </div>
   );
