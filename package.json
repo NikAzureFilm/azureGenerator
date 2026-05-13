@@ -31,6 +31,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "vercel-build": "npm run build && node scripts/prepare-vercel-static.mjs",
     "lint": "eslint . --ignore-pattern 'supabase/**'",
     "typecheck": "tsc -b --noEmit",
     "lint:supabase": "deno lint supabase",
