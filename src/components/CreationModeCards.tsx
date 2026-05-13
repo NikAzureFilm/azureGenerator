@@ -71,6 +71,7 @@ export function CreationModeCards({
               <CreationModePreview
                 alt={`${option.title} preview`}
                 src={option.imageSrc}
+                webpSrc={option.imageWebpSrc}
                 selected={isSelected}
               />
             </div>
@@ -85,10 +86,12 @@ function CreationModePreview({
   alt,
   selected,
   src,
+  webpSrc,
 }: {
   alt: string;
   selected: boolean;
   src: string;
+  webpSrc: string;
 }) {
   return (
     <div
@@ -97,12 +100,20 @@ function CreationModePreview({
         selected ? 'border-adam-blue/40' : 'border-white/10',
       )}
     >
-      <img
-        src={src}
-        alt={alt}
-        className="h-full w-full object-contain object-center"
-        draggable={false}
-      />
+      <picture className="block h-full w-full">
+        <source srcSet={webpSrc} type="image/webp" />
+        <img
+          src={src}
+          alt={alt}
+          width={1086}
+          height={362}
+          loading="eager"
+          decoding="async"
+          fetchPriority="high"
+          className="h-full w-full object-contain object-center"
+          draggable={false}
+        />
+      </picture>
     </div>
   );
 }
