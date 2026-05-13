@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useParams } from '@tanstack/react-router';
 import CreativeShareView from './CreativeShareView';
 import ParametricShareView from './ParametricShareView';
 import { Loader2 } from 'lucide-react';
@@ -10,7 +10,7 @@ import { Conversation, Message } from '@shared/types';
 import { CurrentMessageContext } from '@/contexts/CurrentMessageContext';
 
 export default function ShareView() {
-  const { id: conversationId } = useParams();
+  const { id: conversationId } = useParams({ from: '/_layout/share/$id' });
   const [currentMessage, setCurrentMessage] = useState<Message | null>(null);
 
   const { data: conversation, isLoading: isConversationLoading } = useQuery({

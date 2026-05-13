@@ -1,6 +1,6 @@
 export const FREE_STARTER_TOKENS = 100;
 
-export type PlanLevel = 'free' | 'standard' | 'pro';
+export type PlanLevel = 'free' | 'standard' | 'pro' | 'max';
 export type PaidPlanLevel = Exclude<PlanLevel, 'free'>;
 
 export type PlanCatalogEntry = {
@@ -41,9 +41,18 @@ export const PLAN_CATALOG = {
     tokenAmount: 5000,
     popular: true,
   },
+  max: {
+    level: 'max',
+    displayName: 'Max',
+    description: 'For teams and heavy workloads',
+    monthlyPriceCents: 150000,
+    yearlyPriceCents: 1080000,
+    tokenAmount: 50000,
+    popular: false,
+  },
 } as const satisfies Record<PlanLevel, PlanCatalogEntry>;
 
-export const PLAN_ORDER: PlanLevel[] = ['free', 'standard', 'pro'];
+export const PLAN_ORDER: PlanLevel[] = ['free', 'standard', 'pro', 'max'];
 
 export type TokenPackCatalogEntry = {
   lookupKey: string;

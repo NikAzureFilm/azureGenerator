@@ -1,11 +1,14 @@
 import {
   PLAN_CATALOG,
+  PLAN_ORDER,
   TOKEN_PACK_CATALOG,
   type PaidPlanLevel,
 } from '../../shared/pricingCatalog.ts';
 import type { BillingProduct } from '@/hooks/useBillingProducts';
 
-const paidPlanLevels: PaidPlanLevel[] = ['standard', 'pro'];
+const paidPlanLevels = PLAN_ORDER.filter(
+  (level): level is PaidPlanLevel => level !== 'free',
+);
 
 export function getFallbackSubscriptionProducts(): BillingProduct[] {
   return paidPlanLevels.flatMap((level) => {
@@ -21,7 +24,7 @@ export function getFallbackSubscriptionProducts(): BillingProduct[] {
         stripePriceId: '',
         productType: 'subscription' as const,
         subscriptionLevel: level,
-        tokenAmount: plan.tokenAmount,
+        tokenAmount: plan.tokenAmount ?? 0,
         name: `${plan.displayName} Monthly`,
         priceCents: monthlyPriceCents,
         interval: 'month',
@@ -33,7 +36,7 @@ export function getFallbackSubscriptionProducts(): BillingProduct[] {
         stripePriceId: '',
         productType: 'subscription' as const,
         subscriptionLevel: level,
-        tokenAmount: plan.tokenAmount,
+        tokenAmount: plan.tokenAmount ?? 0,
         name: `${plan.displayName} Annual`,
         priceCents: yearlyPriceCents,
         interval: 'year',

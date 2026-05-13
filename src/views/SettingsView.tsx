@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { getLevel, useAuth } from '@/contexts/AuthContext';
 import { Loader2, Sparkles } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import {
   useManageSubscription,
   useTokenPackPurchase,
@@ -17,6 +17,7 @@ import * as Sentry from '@sentry/react';
 import { useProfile, useUpdateProfile } from '@/services/profileService';
 import { AvatarUpdateDialog } from '@/components/auth/AvatarUpdateDialog';
 import { useTokenPacks } from '@/hooks/useTokenPacks';
+import { PLAN_DISPLAY_NAMES } from '@/config/plan-features';
 
 function formatPeriodEnd(iso: string | null | undefined): string | null {
   if (!iso) return null;
@@ -136,12 +137,7 @@ export default function SettingsView() {
       },
     });
 
-  const tierLabel =
-    level === 'free'
-      ? 'AzureFilm Generator Free'
-      : level === 'standard'
-        ? 'AzureFilm Generator Standard'
-        : 'AzureFilm Generator Pro';
+  const tierLabel = `AzureFilm Generator ${PLAN_DISPLAY_NAMES[level]}`;
 
   const tierAccent =
     level === 'free'
@@ -295,7 +291,9 @@ export default function SettingsView() {
                       tierAccent,
                     )}
                   >
-                    {level === 'pro' && <Sparkles className="h-3 w-3" />}
+                    {(level === 'pro' || level === 'max') && (
+                      <Sparkles className="h-3 w-3" />
+                    )}
                     {tierLabel}
                   </span>
                   {periodEnd && (
@@ -305,26 +303,32 @@ export default function SettingsView() {
                   )}
                 </div>
 
-                {level !== 'free' ? (
+                <div className="flex flex-shrink-0 items-center gap-2">
                   <Button
                     onClick={() => handleManageSubscription()}
-                    className="flex-shrink-0 rounded-full font-light"
+                    className="rounded-full font-light"
                     variant="dark"
                     disabled={isManageLoading}
                   >
                     {isManageLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
+                    ) : level !== 'free' ? (
                       'Manage'
+                    ) : (
+                      'Manage billing'
                     )}
                   </Button>
-                ) : (
-                  <Link to="/subscription" className="flex-shrink-0">
-                    <Button className="rounded-full font-light" variant="light">
-                      Upgrade
-                    </Button>
-                  </Link>
-                )}
+                  {level === 'free' && (
+                    <Link to="/subscription">
+                      <Button
+                        className="rounded-full font-light"
+                        variant="light"
+                      >
+                        Upgrade
+                      </Button>
+                    </Link>
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-col gap-2">

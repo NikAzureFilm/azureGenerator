@@ -7,7 +7,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { UserMessage } from '@/components/chat/UserMessage';
 import { ShareContent } from '@/components/ui/ShareContent';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { useConversation } from '@/contexts/ConversationContext';
@@ -224,7 +224,7 @@ export function ChatSection({
               size="icon"
               className="h-8 w-8 bg-transparent p-0 hover:bg-transparent"
               onClick={() => {
-                navigate('/');
+                navigate({ to: '/' });
               }}
               aria-label="New Creation"
             >

@@ -32,7 +32,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import { GoodEarth } from '../icons/ui/GoodEarth';
 
 interface ConversationCardProps {
@@ -55,7 +55,7 @@ export function ConversationCard({
 }: ConversationCardProps) {
   return (
     <div className="group relative">
-      <Link to={`/editor/${conversation.id}`}>
+      <Link to="/editor/$id" params={{ id: conversation.id }}>
         <Button
           variant="outline"
           className="flex h-auto w-full items-start justify-between rounded-xl border-[0px] bg-adam-background-2 transition-colors duration-200 ease-out hover:bg-adam-neutral-950"

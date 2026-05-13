@@ -4,12 +4,13 @@
 
 import {
   PLAN_CATALOG,
+  PLAN_ORDER,
   TOKEN_PACK_CATALOG,
   type PaidPlanLevel,
 } from '../../../shared/pricingCatalog.ts';
 import { getServiceRoleSupabaseClient } from './supabaseClient.ts';
 
-export type SubscriptionLevel = 'standard' | 'pro';
+export type SubscriptionLevel = PaidPlanLevel;
 
 export type BillingStatus = {
   user: {
@@ -79,20 +80,24 @@ const isBillingServiceConfigured = (): boolean =>
 const isLocalBillingBypassEnabled = (): boolean =>
   Deno.env.get('ENVIRONMENT') === 'local' && !isBillingServiceConfigured();
 
+const LOCAL_SUBSCRIPTION_LEVEL: PaidPlanLevel = 'max';
+const LOCAL_SUBSCRIPTION_TOKENS =
+  PLAN_CATALOG[LOCAL_SUBSCRIPTION_LEVEL].tokenAmount ?? 0;
+
 const localStatus = (): BillingStatus => ({
   user: {
     hasTrialed: false,
   },
   subscription: {
-    level: 'pro',
+    level: LOCAL_SUBSCRIPTION_LEVEL,
     status: 'local',
     currentPeriodEnd: null,
   },
   tokens: {
     free: 0,
-    subscription: PLAN_CATALOG.pro.tokenAmount,
+    subscription: LOCAL_SUBSCRIPTION_TOKENS,
     purchased: 0,
-    total: PLAN_CATALOG.pro.tokenAmount,
+    total: LOCAL_SUBSCRIPTION_TOKENS,
   },
 });
 
@@ -100,13 +105,17 @@ const localConsume = (tokens: number): ConsumeSuccess => ({
   ok: true,
   tokensDeducted: tokens,
   freeBalance: 0,
-  subscriptionBalance: Math.max(PLAN_CATALOG.pro.tokenAmount - tokens, 0),
+  subscriptionBalance: Math.max(LOCAL_SUBSCRIPTION_TOKENS - tokens, 0),
   purchasedBalance: 0,
-  totalBalance: Math.max(PLAN_CATALOG.pro.tokenAmount - tokens, 0),
+  totalBalance: Math.max(LOCAL_SUBSCRIPTION_TOKENS - tokens, 0),
 });
 
+const paidPlanLevels = PLAN_ORDER.filter(
+  (level): level is PaidPlanLevel => level !== 'free',
+);
+
 const localProducts = (): BillingProduct[] => [
-  ...(['standard', 'pro'] as PaidPlanLevel[]).flatMap((level) => {
+  ...paidPlanLevels.flatMap((level) => {
     const plan = PLAN_CATALOG[level];
     return [
       {
@@ -115,7 +124,7 @@ const localProducts = (): BillingProduct[] => [
         stripePriceId: `local-${level}-monthly`,
         productType: 'subscription' as const,
         subscriptionLevel: level,
-        tokenAmount: plan.tokenAmount,
+        tokenAmount: plan.tokenAmount ?? 0,
         name: `${plan.displayName} Monthly`,
         priceCents: plan.monthlyPriceCents,
         interval: 'month',
@@ -127,7 +136,7 @@ const localProducts = (): BillingProduct[] => [
         stripePriceId: `local-${level}-yearly`,
         productType: 'subscription' as const,
         subscriptionLevel: level,
-        tokenAmount: plan.tokenAmount,
+        tokenAmount: plan.tokenAmount ?? 0,
         name: `${plan.displayName} Annual`,
         priceCents: plan.yearlyPriceCents ?? plan.monthlyPriceCents * 12,
         interval: 'year',
@@ -320,6 +329,11 @@ export class BillingClientError extends Error {
   }
 }
 
+const devCheckoutError = () =>
+  new BillingClientError('billing bypassed in local dev mode', 503, {
+    reason: 'bypassed',
+  });
+
 const baseUrl = (): string => {
   const url = Deno.env.get('BILLING_SERVICE_URL');
   if (!url) throw new Error('BILLING_SERVICE_URL is not set');
@@ -431,26 +445,46 @@ export const billing = {
           tokensRefunded: body.tokens,
           source: 'subscription' as const,
           freeBalance: 0,
-          subscriptionBalance: PLAN_CATALOG.pro.tokenAmount,
+          subscriptionBalance: LOCAL_SUBSCRIPTION_TOKENS,
           purchasedBalance: 0,
-          totalBalance: PLAN_CATALOG.pro.tokenAmount,
+          totalBalance: LOCAL_SUBSCRIPTION_TOKENS,
         })
       : !isBillingServiceConfigured()
         ? refundToSupabase(body)
         : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
 
-  createCheckout: (email: string, body: CheckoutBody) =>
-    call<{ url: string }>('POST', `/v1/users/${enc(email)}/checkout`, body),
+  createCheckout: (email: string, body: CheckoutBody) => {
+    if (isLocalBillingBypassEnabled()) {
+      return Promise.reject(devCheckoutError());
+    }
+    return call<{ url: string }>(
+      'POST',
+      `/v1/users/${enc(email)}/checkout`,
+      body,
+    );
+  },
 
-  createPortal: (email: string, body: { returnUrl: string }) =>
-    call<{ url: string }>('POST', `/v1/users/${enc(email)}/portal`, body),
+  createPortal: (email: string, body: { returnUrl: string }) => {
+    if (isLocalBillingBypassEnabled()) {
+      return Promise.reject(devCheckoutError());
+    }
+    return call<{ url: string }>(
+      'POST',
+      `/v1/users/${enc(email)}/portal`,
+      body,
+    );
+  },
 
-  cancelSubscription: (email: string, body: CancelSubscriptionBody = {}) =>
-    call<CancelSubscriptionResult>(
+  cancelSubscription: (email: string, body: CancelSubscriptionBody = {}) => {
+    if (isLocalBillingBypassEnabled()) {
+      return Promise.resolve<CancelSubscriptionResult>({ canceled: true });
+    }
+    return call<CancelSubscriptionResult>(
       'POST',
       `/v1/users/${enc(email)}/cancel-subscription`,
       body,
-    ),
+    );
+  },
 
   getProductsByType: (type: 'subscription' | 'pack') =>
     isLocalBillingBypassEnabled()

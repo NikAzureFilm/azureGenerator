@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import { BrandLogo } from '@/components/BrandLogo';
 
 export function ResetPasswordView() {

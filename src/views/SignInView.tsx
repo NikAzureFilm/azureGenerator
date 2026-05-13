@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from '@tanstack/react-router';
 import { ArrowLeft, Loader2, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,17 @@ import { GoogleIcon } from '@/components/icons/CompanyIcons';
 import { validateRedirectUrl } from '@/lib/utils';
 import { BrandLogo } from '@/components/BrandLogo';
 import { authRedirectUrl } from '@/lib/authRedirect';
+
+function getRedirectNavigationOptions(path: string) {
+  const url = new URL(path, window.location.origin);
+  const search = Object.fromEntries(url.searchParams.entries());
+
+  return {
+    to: url.pathname,
+    search,
+    hash: url.hash ? url.hash.slice(1) : undefined,
+  };
+}
 
 export function SignInView() {
   const [email, setEmail] = useState('');
@@ -40,14 +51,14 @@ export function SignInView() {
   const { toast } = useToast();
 
   // Get and validate redirect parameter from URL
-  const searchParams = new URLSearchParams(location.search);
+  const searchParams = new URLSearchParams(location.searchStr);
   const rawRedirectPath = searchParams.get('redirect');
   const redirectPath = validateRedirectUrl(rawRedirectPath);
 
   // Redirect to home if already authenticated
   useEffect(() => {
     if (!authLoading && session && user) {
-      navigate('/', { replace: true });
+      navigate({ to: '/', replace: true });
     }
   }, [session, user, authLoading, navigate]);
 
@@ -82,7 +93,7 @@ export function SignInView() {
     try {
       await signIn(email, password);
       // Navigate to validated redirect path
-      navigate(redirectPath);
+      navigate(getRedirectNavigationOptions(redirectPath));
     } catch (err) {
       const error = err as AuthError;
       const message =
@@ -130,7 +141,7 @@ export function SignInView() {
     setError(null);
     try {
       await verifyOtp(email, otp);
-      navigate(redirectPath);
+      navigate(getRedirectNavigationOptions(redirectPath));
     } catch (err) {
       const error = err as AuthError;
       setError(error.message);

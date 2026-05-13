@@ -1,10 +1,11 @@
 import { Subscriptions } from '@/components/Subscriptions';
 import { TrialDialog } from '@/components/auth/TrialDialog';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation } from '@tanstack/react-router';
 import { useState } from 'react';
 
 export function SubscriptionView() {
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.searchStr);
   const isTrial = searchParams.has('trial');
   const [open, setOpen] = useState(isTrial);
   return (

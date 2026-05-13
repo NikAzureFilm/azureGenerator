@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import {
   Clock,
   MessageSquare,
@@ -209,7 +209,7 @@ export function VisualCard({
       ref={cardRef}
       className="group relative overflow-hidden rounded-xl border-2 border-adam-neutral-700 bg-adam-background-2 transition-all duration-200 hover:border-adam-blue hover:shadow-[0_0_20px_rgba(15,95,244,0.3)]"
     >
-      <Link to={`/editor/${conversation.id}`}>
+      <Link to="/editor/$id" params={{ id: conversation.id }}>
         <div className="relative aspect-square w-full overflow-hidden bg-gradient-to-br from-adam-background-1 to-adam-background-2">
           {!isVisible ? (
             <div className="flex h-full w-full items-center justify-center">

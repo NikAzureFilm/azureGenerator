@@ -23,7 +23,7 @@ export const PLAN_FEATURES: Record<PlanLevel, PlanCopy> = {
     description: PLAN_CATALOG.standard.description,
     features: [
       'All AI features',
-      'Tokens shared between CADAM and the Onshape extension',
+      'Tokens shared across CADAM, Onshape, and Fusion',
     ],
   },
   pro: {
@@ -31,7 +31,15 @@ export const PLAN_FEATURES: Record<PlanLevel, PlanCopy> = {
     features: [
       'All AI features',
       'Priority support',
-      'Tokens shared between CADAM and the Onshape extension',
+      'Tokens shared across CADAM, Onshape, and Fusion',
+    ],
+  },
+  max: {
+    description: 'For teams and heavy workloads',
+    features: [
+      'All AI features',
+      'Priority support',
+      'Tokens shared across CADAM, Onshape, and Fusion',
     ],
   },
 };
@@ -40,6 +48,7 @@ export const PLAN_DISPLAY_NAMES: Record<PlanLevel, string> = {
   free: PLAN_CATALOG.free.displayName,
   standard: PLAN_CATALOG.standard.displayName,
   pro: PLAN_CATALOG.pro.displayName,
+  max: PLAN_CATALOG.max.displayName,
 };
 
 export { PLAN_ORDER };

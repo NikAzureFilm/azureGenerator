@@ -43,8 +43,20 @@
       "destination": "/assets/:path*"
     },
     {
+      "source": "/libraries/:path*",
+      "destination": "/libraries/:path*"
+    },
+    {
+      "source": "/Geist-Regular.ttf",
+      "destination": "/Geist-Regular.ttf"
+    },
+    {
+      "source": "/city.hdr",
+      "destination": "/city.hdr"
+    },
+    {
       "source": "/:path*",
-      "destination": "/index.html"
+      "destination": "/_shell.html"
     }
   ],
   "trailingSlash": false

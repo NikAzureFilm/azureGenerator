@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation } from '@tanstack/react-router';
 import { PanelLeft } from 'lucide-react';
 
 import { Sidebar } from './Sidebar';
@@ -8,18 +8,31 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { Loader2 } from 'lucide-react';
+import { LayoutContext } from '@/contexts/LayoutContext';
 
 export function Layout() {
   const { user, isLoading } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(
-    localStorage.getItem('sidebarOpen') !== 'false',
-  );
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [hasLoadedSidebarPreference, setHasLoadedSidebarPreference] =
+    useState(false);
 
   useEffect(() => {
-    localStorage.setItem('sidebarOpen', isSidebarOpen.toString());
-  }, [isSidebarOpen]);
+    const storedSidebarPreference = localStorage.getItem('sidebarOpen');
+
+    if (storedSidebarPreference !== null) {
+      setIsSidebarOpen(storedSidebarPreference !== 'false');
+    }
+
+    setHasLoadedSidebarPreference(true);
+  }, []);
+
+  useEffect(() => {
+    if (hasLoadedSidebarPreference) {
+      localStorage.setItem('sidebarOpen', isSidebarOpen.toString());
+    }
+  }, [hasLoadedSidebarPreference, isSidebarOpen]);
 
   if (isLoading) {
     return (
@@ -36,7 +49,9 @@ export function Layout() {
           isSidebarOpen={isSidebarOpen}
           setIsSidebarOpen={setIsSidebarOpen}
         />
-        <Outlet context={{ isSidebarOpen }} />
+        <LayoutContext.Provider value={{ isSidebarOpen }}>
+          <Outlet />
+        </LayoutContext.Provider>
       </div>
     );
   }
@@ -82,7 +97,9 @@ export function Layout() {
             </Button>
           )}
           <div className="h-full bg-adam-bg-dark">
-            <Outlet context={{ isSidebarOpen }} />
+            <LayoutContext.Provider value={{ isSidebarOpen }}>
+              <Outlet />
+            </LayoutContext.Provider>
           </div>
         </div>
       </div>
