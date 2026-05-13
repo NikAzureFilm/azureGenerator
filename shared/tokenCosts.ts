@@ -16,6 +16,12 @@ export const FEATURE_COSTS = {
     tokens: 10,
     description: 'Text assistant generation.',
   },
+  promptGeneration: {
+    id: 'prompt-generation',
+    label: 'Prompt helper',
+    tokens: 10,
+    description: 'Generate or enhance a modeling prompt.',
+  },
   parametric: {
     id: 'parametric',
     label: 'Parametric CAD generation',

@@ -90,7 +90,7 @@ import {
 import { useMeshFiles } from '@/contexts/MeshFilesContext';
 import { AnimatePresence, motion } from 'framer-motion';
 import { BrandLogo } from '@/components/BrandLogo';
-import { formatTokenCost } from '@shared/tokenCosts';
+import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationProvider,
@@ -1843,7 +1843,8 @@ function TextAreaChat({
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                {input.trim() ? 'Enhance Prompt' : 'Generate Prompt'}
+                {input.trim() ? 'Enhance Prompt' : 'Generate Prompt'} (
+                {formatTokenCost(FEATURE_COSTS.promptGeneration.tokens)})
               </TooltipContent>
             </Tooltip>
           )}

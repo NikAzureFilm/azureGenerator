@@ -7,11 +7,14 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import 'jsr:@std/dotenv/load';
 import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
+import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const PROMPT_GENERATOR_MODEL = 'openai/gpt-5.5';
 const PROMPT_GENERATOR_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
+const PROMPT_GENERATOR_TOKEN_COST = FEATURE_COSTS.promptGeneration.tokens;
 
 type OpenRouterMessageContent =
   | string
@@ -154,6 +157,56 @@ Deno.serve(async (req) => {
   try {
     if (!OPENROUTER_API_KEY.trim()) {
       throw new Error('OPENROUTER_API_KEY is not configured');
+    }
+
+    if (!userData.user.email) {
+      return new Response(
+        JSON.stringify({ error: { message: 'User email missing' } }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    try {
+      const consumeResult = await billing.consume(userData.user.email, {
+        tokens: PROMPT_GENERATOR_TOKEN_COST,
+        operation: 'chat',
+        referenceId: crypto.randomUUID(),
+        userId: userData.user.id,
+      });
+      if (!consumeResult.ok) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'insufficient_tokens',
+              code: 'insufficient_tokens',
+              tokensRequired: consumeResult.tokensRequired,
+              tokensAvailable: consumeResult.tokensAvailable,
+            },
+          }),
+          {
+            status: 402,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+    } catch (err) {
+      const status = err instanceof BillingClientError ? err.status : 502;
+      console.error('Error consuming prompt generator tokens:', err);
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'billing_unavailable',
+            code: 'billing_unavailable',
+          },
+        }),
+        {
+          status,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     let systemPrompt: string;

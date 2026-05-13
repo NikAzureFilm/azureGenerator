@@ -54,6 +54,7 @@ assert.deepEqual(
   ),
   {
     chat: 10,
+    promptGeneration: 10,
     parametric: 35,
     parametricCadPro: 75,
     parametricCadLite: 20,
