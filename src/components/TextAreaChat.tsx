@@ -1898,7 +1898,7 @@ function TextAreaChat({
                       onSelect={() => openImageCreator()}
                     >
                       <Sparkles className="h-4 w-4 text-adam-blue" />
-                      <span>Generiraj</span>
+                      <span>Generate</span>
                       <span className="ml-auto rounded-md bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
                         {formatTokenCost(
                           getImageGenerationTokenCost(
