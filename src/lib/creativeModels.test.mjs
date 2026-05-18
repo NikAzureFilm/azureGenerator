@@ -30,6 +30,10 @@ const textAreaChatSource = readFileSync(
   fileURLToPath(new URL('../components/TextAreaChat.tsx', import.meta.url)),
   'utf8',
 );
+const multiviewComposerSource = readFileSync(
+  fileURLToPath(new URL('../components/MultiviewComposer.tsx', import.meta.url)),
+  'utf8',
+);
 const chatSectionSource = readFileSync(
   fileURLToPath(new URL('../components/chat/ChatSection.tsx', import.meta.url)),
   'utf8',
@@ -56,6 +60,8 @@ assert.equal(
   textAreaChatSource.includes('const MULTIVIEW_ENABLED = true'),
   true,
 );
+assert.equal(multiviewComposerSource.includes("mode: 'multiview'"), false);
+assert.equal(multiviewComposerSource.includes("mode: 'input'"), true);
 assert.equal(chatSectionSource.includes('normalizeCreativeModel'), true);
 assert.equal(messageServiceSource.includes('normalizeCreativeModel'), true);
 assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), true);

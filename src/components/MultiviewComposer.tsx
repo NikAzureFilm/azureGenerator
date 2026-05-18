@@ -34,6 +34,15 @@ const SLOT_LABEL: Record<MultiviewSlot, string> = {
   right: 'Right',
 };
 
+const VIEW_PROMPT_GUIDANCE: Record<MultiviewSlot, string> = {
+  front:
+    'Show the object from the front, facing the camera head-on at eye level.',
+  left: 'Show the object from its left side profile, 90 degrees counter-clockwise from the front.',
+  back: 'Show the object from the back, 180 degrees from the front.',
+  right:
+    'Show the object from its right side profile, 90 degrees clockwise from the front.',
+};
+
 const VALID_IMAGE_FORMATS = [
   'image/jpeg',
   'image/jpg',
@@ -252,15 +261,18 @@ export function MultiviewComposer({
     updateSlot(targetSlot, { isBusy: true, kind: 'generated' });
     try {
       const refImageIds = references.map((ref) => ref.id);
+      const generationPrompt = [trimmedPrompt, VIEW_PROMPT_GUIDANCE[targetSlot]]
+        .filter(Boolean)
+        .join(' ');
       const { data, error } = await supabase.functions.invoke('generate-view', {
         method: 'POST',
         body: {
           conversationId,
           view: targetSlot,
-          prompt: trimmedPrompt || undefined,
+          prompt: generationPrompt,
           refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
           provider: getImageGenerationProvider(imageGenerationModel),
-          mode: 'multiview',
+          mode: 'input',
         },
       });
       if (error) throw error;
