@@ -246,20 +246,6 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     timeEstimate: '5-6 minutes',
     tokenCost: getCreativeModelTokenCost('ultra'),
   },
-  {
-    id: 'quality',
-    name: 'Draft',
-    description: 'Rough quality for quick iterations',
-    timeEstimate: '~45 seconds',
-    tokenCost: getCreativeModelTokenCost('quality'),
-  },
-  {
-    id: 'fast',
-    name: 'Textureless',
-    description: 'Faster, with simpler, textureless output.',
-    timeEstimate: '60-90 seconds',
-    tokenCost: getCreativeModelTokenCost('fast'),
-  },
 ];
 
 // Whether the selected parametric model can accept image / STL-render inputs.

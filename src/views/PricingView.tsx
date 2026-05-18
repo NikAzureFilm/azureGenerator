@@ -23,12 +23,7 @@ const FEATURE_ROWS = [
   },
   {
     group: '3D generation',
-    rows: [
-      FEATURE_COSTS.fastMesh,
-      FEATURE_COSTS.qualityMesh,
-      FEATURE_COSTS.ultraMesh,
-      FEATURE_COSTS.upscaleMesh,
-    ],
+    rows: [FEATURE_COSTS.ultraMesh, FEATURE_COSTS.upscaleMesh],
   },
 ];
 

@@ -3,9 +3,9 @@ import { supabase } from '@/lib/supabase';
 import {
   Content,
   Conversation,
-  DEFAULT_CREATIVE_MODEL,
   Message,
   Model,
+  normalizeCreativeModel,
 } from '@shared/types';
 import { HistoryConversation } from '../types/misc.ts';
 import {
@@ -642,10 +642,9 @@ export function useSendContentMutation({
 
       if (conversation.type === 'creative') {
         await sendToCreativeChat({
-          model:
-            content.model ??
-            conversation.settings?.model ??
-            DEFAULT_CREATIVE_MODEL,
+          model: normalizeCreativeModel(
+            content.model ?? conversation.settings?.model,
+          ),
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -746,7 +745,7 @@ export function useEditMessageMutation({
 
       if (conversation.type === 'creative') {
         sendToCreativeChat({
-          model: conversation.settings?.model ?? DEFAULT_CREATIVE_MODEL,
+          model: normalizeCreativeModel(conversation.settings?.model),
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -798,7 +797,7 @@ export function useRetryMessageMutation({
       const runtimeModel =
         conversation.type === 'parametric'
           ? normalizeParametricChatModel(model)
-          : model;
+          : normalizeCreativeModel(model);
 
       await updateConversationAsync({
         ...conversation,

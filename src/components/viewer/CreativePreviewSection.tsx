@@ -3,7 +3,7 @@ import { ImageGallery } from './ImageGallery';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import { useConversation } from '@/contexts/ConversationContext';
 import { CreativeLoadingBar } from './CreativeLoadingBar';
-import { CreativeModel, DEFAULT_CREATIVE_MODEL } from '@shared/types';
+import { normalizeCreativeModel } from '@shared/types';
 
 interface CreativePreviewSectionProps {
   isLoading: boolean;
@@ -20,11 +20,9 @@ export function CreativePreviewSection({
       {isLoading ? (
         <div className="flex h-full w-full items-center justify-center">
           <CreativeLoadingBar
-            modelName={
-              (message?.content.model ??
-                conversation.settings?.model ??
-                DEFAULT_CREATIVE_MODEL) as CreativeModel
-            }
+            modelName={normalizeCreativeModel(
+              message?.content.model ?? conversation.settings?.model,
+            )}
           />
         </div>
       ) : (

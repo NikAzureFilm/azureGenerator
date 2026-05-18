@@ -1,8 +1,12 @@
-import { Database } from './database.ts';
+import type { Database } from './database.ts';
 import type { ImageGenerationModel } from './imageGeneration.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
 export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
+
+export function normalizeCreativeModel(model: unknown): CreativeModel {
+  return model === 'ultra' ? 'ultra' : DEFAULT_CREATIVE_MODEL;
+}
 
 export type MultiviewSlot = 'front' | 'left' | 'back' | 'right';
 
