@@ -86,7 +86,7 @@ export const FEATURE_COSTS = {
   ultraMesh: {
     id: 'ultra-mesh',
     label: 'Max quality mesh',
-    tokens: 122,
+    tokens: 32,
     description: 'Higher quality textured 3D mesh generation.',
   },
   multiviewMesh: {

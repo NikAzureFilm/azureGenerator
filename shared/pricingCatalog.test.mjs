@@ -70,7 +70,7 @@ assert.deepEqual(
     multiviewNanoBananaView: 7,
     fastMesh: 41,
     qualityMesh: 34,
-    ultraMesh: 122,
+    ultraMesh: 32,
     multiviewMesh: 28,
     upscaleMesh: 76,
   },
