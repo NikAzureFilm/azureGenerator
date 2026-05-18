@@ -308,8 +308,6 @@ Deno.serve(async (request) => {
 
     meshStatus = 'success';
 
-    // No manual cleanup needed - multiview images auto-expire
-
     debugLog('=== WEBHOOK SUCCESS ===');
     debugLog('Successfully processed mesh:', {
       id,

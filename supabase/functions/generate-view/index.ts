@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
       refImageId,
       refImageIds,
       provider,
-      mode = 'multiview',
+      mode = 'input',
     }: {
       prompt?: string;
       view?: ViewLabel;
@@ -151,6 +151,18 @@ Deno.serve(async (req) => {
       );
     }
 
+    if (mode === 'multiview') {
+      return new Response(
+        JSON.stringify({
+          error: { message: 'Multiview generation is currently disabled' },
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
     const userPrompt = (prompt ?? '').trim();
     if (!userPrompt && referenceIds.length === 0) {
       return new Response(
@@ -165,9 +177,7 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
-    const shouldUseOpenAi =
-      provider === 'openai' ||
-      (!provider && mode === 'multiview' && view === 'front');
+    const shouldUseOpenAi = provider === 'openai';
     const builtPrompt = buildPrompt(
       view,
       userPrompt,
@@ -175,9 +185,7 @@ Deno.serve(async (req) => {
       mode,
     );
     const tokenCost = shouldUseOpenAi
-      ? mode === 'input'
-        ? FEATURE_COSTS.generatedInputImage.tokens
-        : FEATURE_COSTS.multiviewFrontImage.tokens
+      ? FEATURE_COSTS.generatedInputImage.tokens
       : getImageGenerationTokenCost('nano-banana-2');
 
     if (!userData.user.email) {

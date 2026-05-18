@@ -11,7 +11,7 @@ import {
   INSTRUCTIONS_3D as instructions3D,
   type GptImageQuality,
 } from '../_shared/imageGen.ts';
-import { Model, MeshFileType, MultiviewImages } from '@shared/types.ts';
+import { Model, MeshFileType } from '@shared/types.ts';
 import {
   getImageGenerationProvider,
   normalizeImageGenerationModel,
@@ -51,6 +51,7 @@ const debugLog = (...args: unknown[]) => {
 const QUALITY_CAPTION_TIMEOUT_MS = 10000;
 const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
 const QUALITY_MASK_TIMEOUT_MS = 10000;
+const PIXAL3D_ENDPOINT = 'fal-ai/pixal3d';
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -195,23 +196,6 @@ async function getPriorImageCallId(
     .limit(1);
 
   return data?.[0]?.image_generation_call_id ?? null;
-}
-
-async function getSignedImageUrl(
-  supabaseClient: SupabaseClient,
-  userId: string,
-  conversationId: string,
-  imageId: string,
-): Promise<string> {
-  const { data, error } = await supabaseClient.storage
-    .from('images')
-    .createSignedUrl(`${userId}/${conversationId}/${imageId}`, 60 * 60);
-  if (error || !data?.signedUrl) {
-    throw new Error(
-      `Failed to sign image ${imageId}: ${error?.message ?? 'unknown error'}`,
-    );
-  }
-  return reformatSignedUrl(data.signedUrl);
 }
 
 // Unified mesh-image generation. Every mesh mode goes through this helper:
@@ -616,7 +600,6 @@ Deno.serve(async (req) => {
       action,
       meshId: upscaleMeshId,
       parentMessageId,
-      multiviewImages,
       imageGenerationModel,
     }: {
       images?: string[];
@@ -630,20 +613,28 @@ Deno.serve(async (req) => {
       action?: 'upscale';
       meshId?: string;
       parentMessageId?: string;
-      multiviewImages?: MultiviewImages;
       imageGenerationModel?: ImageGenerationModel;
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
 
+    if (model === 'multiview') {
+      return new Response(
+        JSON.stringify({
+          error: { message: 'Multiview generation is currently disabled' },
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
     const meshTokenCost =
       action === 'upscale'
         ? FEATURE_COSTS.upscaleMesh.tokens
         : getCreativeModelTokenCost(
-            model === 'fast' ||
-              model === 'quality' ||
-              model === 'ultra' ||
-              model === 'multiview'
+            model === 'fast' || model === 'quality' || model === 'ultra'
               ? model
               : 'quality',
           );
@@ -959,16 +950,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    const hasMultiviewSlots =
-      model === 'multiview' &&
-      multiviewImages &&
-      Object.values(multiviewImages).some((v) => typeof v === 'string' && v);
-
     if (
       (!images || !Array.isArray(images) || images.length === 0) &&
       !text &&
-      !mesh &&
-      !hasMultiviewSlots
+      !mesh
     ) {
       logError(new Error('Images or text not found'), {
         functionName: 'mesh',
@@ -980,7 +965,6 @@ Deno.serve(async (req) => {
           imagesLength: images?.length,
           hasText: !!text,
           hasMesh: !!mesh,
-          hasMultiviewSlots,
         },
       });
       return new Response(
@@ -994,10 +978,7 @@ Deno.serve(async (req) => {
 
     // Determine file type based on model, topology, and user preference
     let fileType: MeshFileType;
-    if (
-      (model === 'quality' || model === 'ultra') &&
-      meshTopology === 'quads'
-    ) {
+    if (model === 'quality' && meshTopology === 'quads') {
       // For quad topology, allow user to choose format (default to FBX for better quad support)
       fileType = preferredFormat || 'fbx';
     } else {
@@ -1017,7 +998,6 @@ Deno.serve(async (req) => {
           ...(images && images.length > 0 && { images: images }),
           ...(mesh && { mesh: mesh }),
           ...(model && { model: model }),
-          ...(multiviewImages && { multiviewImages }),
           ...(imageGenerationModel && { imageGenerationModel }),
         },
       })
@@ -1045,9 +1025,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Skip Flux-based preview for quality and multiview models — they produce
-    // their own Hunyuan preview from an already-prepared seed image.
-    if (model !== 'quality' && model !== 'multiview') {
+    // Skip Flux-based preview for quality; it produces its own Hunyuan preview
+    // from an already-prepared seed image.
+    if (model !== 'quality') {
       EdgeRuntime.waitUntil(
         submitPreviewJob(
           supabaseClient,
@@ -1079,7 +1059,6 @@ Deno.serve(async (req) => {
         model ?? 'quality',
         meshTopology,
         polygonCount,
-        multiviewImages,
         imageGenerationModel,
       ),
     );
@@ -1126,12 +1105,15 @@ async function submitMeshJob(
   model: Model,
   meshTopology: 'quads' | 'polys' | undefined,
   polygonCount: number | undefined,
-  multiviewImages: MultiviewImages | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
   // debugLog('submitMeshJob model === ultra:', model === 'ultra');
+
+  if (model === 'multiview') {
+    throw new Error('Multiview generation is currently disabled');
+  }
 
   const supabaseHost =
     (Deno.env.get('ENVIRONMENT') === 'local'
@@ -1213,9 +1195,6 @@ async function submitMeshJob(
     if (model === 'ultra') {
       // Ultra model handles image generation differently, skip to model-specific logic
       debugLog('Skipping initial image generation for ultra model');
-    } else if (model === 'multiview') {
-      // Multiview uses pre-labeled slot images supplied by the user
-      debugLog('Skipping initial image generation for multiview model');
     } else if (text && text.trim() !== '') {
       // Generate images for standard and textureless models
       if (model === 'quality') {
@@ -1402,12 +1381,8 @@ async function submitMeshJob(
     }
 
     // Only validate imageInputs for models that rely on the shared image pipeline.
-    // Ultra generates its own image; multiview reads pre-labeled slots directly.
-    if (
-      imageInputs.length === 0 &&
-      model !== 'ultra' &&
-      model !== 'multiview'
-    ) {
+    // Ultra generates its own image.
+    if (imageInputs.length === 0 && model !== 'ultra') {
       throw new Error('No valid images for 3D generation');
     }
 
@@ -1415,7 +1390,7 @@ async function submitMeshJob(
     debugLog('model value:', model);
 
     if (model === 'ultra') {
-      debugLog('=== ENTERING ULTRA MODEL PATH (MESHY V6 PREVIEW) ===');
+      debugLog('=== ENTERING ULTRA MODEL PATH (PIXAL3D) ===');
 
       // Check if this is first generation or conversational edit by looking for COMPLETED meshes (not images)
       // This properly handles branching - a branch won't have completed meshes
@@ -1527,7 +1502,7 @@ async function submitMeshJob(
         })
         .eq('id', imageData.id);
 
-      // Get signed URL for the base image to send to Meshy
+      // Get signed URL for the base image to send to Pixal3D
       const { data: imageSignedUrl, error: imageSignedUrlError } =
         await supabaseClient.storage
           .from('images')
@@ -1542,126 +1517,41 @@ async function submitMeshJob(
 
       const baseImageUrl = reformatSignedUrl(imageSignedUrl.signedUrl);
 
-      // Configure Meshy parameters
-      // Topology: default to triangle (Meshy standard), but respect quad if requested
-      const meshyTopology = meshTopology === 'quads' ? 'quad' : 'triangle';
+      const decimationTarget = polygonCount
+        ? Math.max(1000, Math.min(300000, polygonCount))
+        : 200000;
 
-      // Polycount: default 30000, clamp between 200 and 300000 (Meshy v6 API limit)
-      const safePolycount = polygonCount
-        ? Math.max(200, Math.min(300000, polygonCount))
-        : 30000;
-
-      debugLog('Submitting to Meshy v6 Preview', {
-        topology: meshyTopology,
-        polycount: safePolycount,
-      });
-
-      const meshyInput = {
+      const pixal3dInput = {
         image_url: baseImageUrl,
-        topology: meshyTopology as 'quad' | 'triangle',
-        target_polycount: safePolycount,
-        symmetry_mode: 'auto' as const,
-        should_remesh: true,
-        should_texture: true,
-        enable_pbr: true, // Max quality feature
+        resolution: 1024 as const,
+        texture_size: 2048 as const,
+        remesh: true,
+        decimation_target: decimationTarget,
       };
 
-      await fal.queue.submit('fal-ai/meshy/v6-preview/image-to-3d', {
-        input: meshyInput,
-        webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
+      debugLog('Submitting to Pixal3D', {
+        decimationTarget,
+        resolution: pixal3dInput.resolution,
+        textureSize: pixal3dInput.texture_size,
       });
 
-      debugLog('Successfully submitted to Meshy v6 Preview');
+      const pixal3dSubmission = await fal.queue.submit(PIXAL3D_ENDPOINT, {
+        input: pixal3dInput,
+        webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
+      });
+      await recordFalQueueRequest(
+        supabaseClient,
+        meshId,
+        PIXAL3D_ENDPOINT,
+        pixal3dSubmission,
+      );
+
+      debugLog('Successfully submitted to Pixal3D');
 
       // Create preview using the base image
       await createHunyuanPreview(
         baseImageUrl,
-        'ultra meshy v6 preview',
-        userId,
-        conversationId,
-        meshId,
-        supabaseHost,
-      );
-    } else if (model === 'multiview') {
-      debugLog('=== ENTERING MULTIVIEW MODEL PATH (TRIPO H3.1 MULTIVIEW) ===');
-
-      // Resolve each populated slot to a signed URL, preserving
-      // [front, left, back, right] order as required by the Tripo API.
-      const slotOrder = ['front', 'left', 'back', 'right'] as const;
-      const slotUrls: string[] = [];
-      for (const slot of slotOrder) {
-        const imageId = multiviewImages?.[slot];
-        if (!imageId) continue;
-        const signed = await getSignedImageUrl(
-          supabaseClient,
-          userId,
-          conversationId,
-          imageId,
-        );
-        slotUrls.push(signed);
-      }
-
-      if (slotUrls.length === 0) {
-        throw new Error('No multiview slots provided');
-      }
-
-      const frontUrl = multiviewImages?.front
-        ? await getSignedImageUrl(
-            supabaseClient,
-            userId,
-            conversationId,
-            multiviewImages.front,
-          )
-        : slotUrls[0];
-
-      const tripoMultiviewInput: {
-        image_urls: string[];
-        pbr: boolean;
-        texture: boolean;
-        quad?: boolean;
-        face_limit?: number;
-      } = {
-        image_urls: slotUrls,
-        pbr: true,
-        texture: true,
-      };
-
-      if (meshTopology === 'quads') {
-        tripoMultiviewInput.quad = true;
-      }
-      if (polygonCount !== undefined) {
-        tripoMultiviewInput.face_limit = polygonCount;
-      }
-
-      debugLog('Submitting to Tripo H3.1 multiview', {
-        views: slotUrls.length,
-        quad: tripoMultiviewInput.quad,
-        face_limit: tripoMultiviewInput.face_limit,
-      });
-
-      try {
-        await fal.queue.submit('tripo3d/h3.1/multiview-to-3d', {
-          input: tripoMultiviewInput,
-          webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
-        });
-        debugLog('Successfully submitted to Tripo H3.1 multiview');
-      } catch (submitError) {
-        const errObj = submitError as { body?: unknown; status?: number };
-        console.error('Tripo H3.1 multiview submit failed:', {
-          message:
-            submitError instanceof Error
-              ? submitError.message
-              : String(submitError),
-          status: errObj?.status,
-          body: errObj?.body,
-          input: tripoMultiviewInput,
-        });
-        throw submitError;
-      }
-
-      await createHunyuanPreview(
-        frontUrl,
-        'multiview tripo h3.1 front preview',
+        'ultra Pixal3D seed image',
         userId,
         conversationId,
         meshId,

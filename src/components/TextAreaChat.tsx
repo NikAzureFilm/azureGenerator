@@ -124,6 +124,8 @@ interface TextAreaChatProps {
   };
 }
 
+const MULTIVIEW_ENABLED = false;
+
 // SVG Icon component for the quads/polys toggle
 const QuadsPolysSvg = ({ color = '#D7D7D7' }: { color?: string }) => (
   <svg
@@ -541,9 +543,17 @@ function TextAreaChat({
 
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
-  const isMultiview = type === 'creative' && model === 'multiview';
+  const isMultiview =
+    MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
+
+  useEffect(() => {
+    if (type === 'creative' && model === 'multiview') {
+      setModel(DEFAULT_CREATIVE_MODEL);
+      setMultiviewSlots({});
+    }
+  }, [model, setModel, type]);
 
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {

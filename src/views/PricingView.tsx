@@ -19,8 +19,6 @@ const FEATURE_ROWS = [
     rows: [
       FEATURE_COSTS.generatedInputImage,
       FEATURE_COSTS.generatedInputImageNanoBanana,
-      FEATURE_COSTS.multiviewFrontImage,
-      FEATURE_COSTS.multiviewNanoBananaView,
     ],
   },
   {
@@ -29,7 +27,6 @@ const FEATURE_ROWS = [
       FEATURE_COSTS.fastMesh,
       FEATURE_COSTS.qualityMesh,
       FEATURE_COSTS.ultraMesh,
-      FEATURE_COSTS.multiviewMesh,
       FEATURE_COSTS.upscaleMesh,
     ],
   },
