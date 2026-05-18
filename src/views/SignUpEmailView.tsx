@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from '@tanstack/react-router';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,12 @@ import { useMutation } from '@tanstack/react-query';
 import { GoogleIcon } from '@/components/icons/CompanyIcons';
 import { validateRedirectUrl } from '@/lib/utils';
 import { BrandLogo } from '@/components/BrandLogo';
+
+function getAppRedirectUrl(path: string) {
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+  return `${window.location.origin}${basePath}${path}`;
+}
 
 export function SignUpEmailView() {
   const [name, setName] = useState('');
@@ -24,14 +30,14 @@ export function SignUpEmailView() {
   const { signUp, session, user, isLoading: authLoading } = useAuth();
 
   // Get and validate redirect parameter from URL
-  const searchParams = new URLSearchParams(location.search);
+  const searchParams = new URLSearchParams(location.searchStr);
   const rawRedirectPath = searchParams.get('redirect');
   const redirectPath = validateRedirectUrl(rawRedirectPath);
 
   // Redirect to home if already authenticated
   useEffect(() => {
     if (!authLoading && session && user) {
-      navigate('/', { replace: true });
+      navigate({ to: '/', replace: true });
     }
   }, [session, user, authLoading, navigate]);
 
@@ -41,8 +47,8 @@ export function SignUpEmailView() {
         // Use Supabase's built-in redirectTo parameter with validated URL
         const redirectTo =
           redirectPath !== '/'
-            ? `${window.location.origin}${redirectPath}`
-            : `${window.location.origin}/`;
+            ? getAppRedirectUrl(redirectPath)
+            : getAppRedirectUrl('/');
 
         await supabase.auth.signInWithOAuth({
           provider: 'google',
@@ -91,7 +97,10 @@ export function SignUpEmailView() {
         description:
           'Please check your email to verify your account before signing in.',
       });
-      navigate('/confirm-email', { state: { email } });
+      sessionStorage.setItem('pendingSignupEmail', email);
+      navigate({
+        to: '/confirm-email',
+      });
     } catch (error) {
       console.error(error);
       toast({

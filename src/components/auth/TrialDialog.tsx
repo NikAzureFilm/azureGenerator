@@ -6,7 +6,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { Check } from 'lucide-react';
 import FreeTrialButton from '@/components/ui/FreeTrialButton';
@@ -38,7 +38,7 @@ export function TrialDialog({
 
   const handleSubscribe = () => {
     if (!user) {
-      navigate('/signin');
+      navigate({ to: '/signin' });
       return;
     }
     if (!proMonthly) return;

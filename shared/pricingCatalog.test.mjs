@@ -14,7 +14,7 @@ import {
 
 assert.equal(TOKEN_USD_VALUE, 0.03);
 
-assert.deepEqual(PLAN_ORDER, ['free', 'standard', 'pro']);
+assert.deepEqual(PLAN_ORDER, ['free', 'standard', 'pro', 'max']);
 
 assert.equal(FREE_STARTER_TOKENS, 100);
 assert.equal(PLAN_CATALOG.free.monthlyPriceCents, 0);
@@ -28,8 +28,13 @@ assert.equal(PLAN_CATALOG.pro.monthlyPriceCents, 15000);
 assert.equal(PLAN_CATALOG.pro.yearlyPriceCents, 108000);
 assert.equal(PLAN_CATALOG.pro.tokenAmount, 5000);
 
+assert.equal(PLAN_CATALOG.max.monthlyPriceCents, 150000);
+assert.equal(PLAN_CATALOG.max.yearlyPriceCents, 1080000);
+assert.equal(PLAN_CATALOG.max.tokenAmount, 50000);
+
 assert.equal(getAnnualDiscountPercent('standard'), 40);
 assert.equal(getAnnualDiscountPercent('pro'), 40);
+assert.equal(getAnnualDiscountPercent('max'), 40);
 
 assert.deepEqual(
   TOKEN_PACK_CATALOG.map((pack) => [

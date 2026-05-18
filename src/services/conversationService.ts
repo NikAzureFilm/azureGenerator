@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Conversation, Content } from '@shared/types';
 import { supabase } from '@/lib/supabase';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useParams } from '@tanstack/react-router';
 
 const defaultConversation: Conversation = {
   id: '',
@@ -17,7 +17,9 @@ const defaultConversation: Conversation = {
 };
 
 export function useConversation() {
-  const { id: conversationId } = useParams();
+  const { id: conversationId } = useParams({
+    from: '/_layout/_auth/editor/$id',
+  });
   const { user } = useAuth();
   const queryClient = useQueryClient();
 

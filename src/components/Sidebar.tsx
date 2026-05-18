@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from '@tanstack/react-router';
 import {
   Menu,
   Plus,
@@ -50,6 +50,13 @@ interface SidebarProps {
   setIsSidebarOpen: (open: boolean) => void;
 }
 
+type SidebarPath =
+  | '/'
+  | '/history'
+  | '/subscription'
+  | '/pricing'
+  | '/admin/pricing';
+
 function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -79,17 +86,17 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const handleSignOut = async () => {
     try {
       await signOut();
-      navigate('/signin');
+      navigate({ to: '/signin' });
     } catch (error) {
       console.error('Error signing out:', error);
     }
   };
 
-  const sidebarNavigate = (path: string) => {
+  const sidebarNavigate = (path: SidebarPath) => {
     if (isMobile) {
       setIsSidebarOpen(false); // setIsSidebarOpen is actually setOpen from Sheet component
     }
-    navigate(path);
+    navigate({ to: path });
   };
 
   const renderUserSectionTrigger = () => {
@@ -136,23 +143,22 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
             </Tooltip>
           )}
         >
-          <Link to="/">
-            <div
-              className="flex cursor-pointer items-center space-x-2"
-              onClick={() => sidebarNavigate('/')}
-            >
-              {isSidebarOpen ? (
-                <div className="flex w-full items-center">
-                  <BrandLogo
-                    variant="wordmark"
-                    className="mx-auto h-8 w-[168px]"
-                  />
-                </div>
-              ) : (
-                <BrandLogo variant="mark" className="h-8 w-8 min-w-8" />
-              )}
-            </div>
-          </Link>
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-center space-x-2"
+            onClick={() => sidebarNavigate('/')}
+          >
+            {isSidebarOpen ? (
+              <div className="flex w-full items-center">
+                <BrandLogo
+                  variant="wordmark"
+                  className="mx-auto h-8 w-[168px]"
+                />
+              </div>
+            ) : (
+              <BrandLogo variant="mark" className="h-8 w-8 min-w-8" />
+            )}
+          </button>
         </ConditionalWrapper>
       </div>
 
@@ -200,7 +206,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
               {
                 icon: LayoutGrid,
                 label: 'Creations',
-                href: '/history',
+                href: '/history' as const,
                 description: 'View past creations',
                 submenu: recentConversations,
               },
@@ -220,20 +226,18 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                     </Tooltip>
                   )}
                 >
-                  <Link to={href}>
-                    <Button
-                      variant={
-                        isSidebarOpen ? 'adam_dark' : 'adam_dark_collapsed'
-                      }
-                      onClick={() => sidebarNavigate(href)}
-                      className={`${isSidebarOpen ? 'w-full justify-start' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
-                    >
-                      <Icon
-                        className={`${isSidebarOpen ? 'mr-2' : ''} h-[22px] w-[22px] min-w-[22px]`}
-                      />
-                      {isSidebarOpen && label}
-                    </Button>
-                  </Link>
+                  <Button
+                    variant={
+                      isSidebarOpen ? 'adam_dark' : 'adam_dark_collapsed'
+                    }
+                    onClick={() => sidebarNavigate(href)}
+                    className={`${isSidebarOpen ? 'w-full justify-start' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
+                  >
+                    <Icon
+                      className={`${isSidebarOpen ? 'mr-2' : ''} h-[22px] w-[22px] min-w-[22px]`}
+                    />
+                    {isSidebarOpen && label}
+                  </Button>
                 </ConditionalWrapper>
                 {isSidebarOpen && submenu && (
                   <ul className="ml-7 flex list-none flex-col gap-1 border-l border-adam-neutral-500 px-2">
@@ -246,7 +250,8 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                       ) => {
                         return (
                           <Link
-                            to={`/editor/${conversation.id}`}
+                            to="/editor/$id"
+                            params={{ id: conversation.id }}
                             key={conversation.id}
                             onClick={() => {
                               if (isMobile) {

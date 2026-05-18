@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Zap } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 
 import { Button } from '@/components/ui/button';
 import { UpgradeModal } from '@/components/UpgradeModal';

@@ -1,14 +1,15 @@
 import { Button } from '@/components/ui/button';
-import { useNavigate, useRouteError } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import * as Sentry from '@sentry/react';
 import { useEffect } from 'react';
 
-export function ErrorView() {
-  const error = useRouteError();
+export function ErrorView({ error }: { error?: unknown }) {
   const navigate = useNavigate();
 
   useEffect(() => {
-    Sentry.captureException(error);
+    if (error) {
+      Sentry.captureException(error);
+    }
   }, [error]);
 
   return (
@@ -21,7 +22,7 @@ export function ErrorView() {
         <br />
         Please feel free to reach out to us so that we can resolve this issue.
       </p>
-      <Button onClick={() => navigate('/')}>Go to Home</Button>
+      <Button onClick={() => navigate({ to: '/' })}>Go to Home</Button>
     </div>
   );
 }

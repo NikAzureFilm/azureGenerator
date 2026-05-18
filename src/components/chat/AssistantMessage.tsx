@@ -25,7 +25,7 @@ import {
   getBackupModel,
   PARAMETRIC_MODELS,
 } from '@/lib/utils';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import { TrialDialog } from '@/components/auth/TrialDialog';
 import { getLevel, useAuth } from '@/contexts/AuthContext';
 import { ImageViewer } from '@/components/ImageViewer';
@@ -669,7 +669,7 @@ function MeshLimitReachedMessage() {
     );
   }
 
-  if (level === 'pro') {
+  if (level === 'pro' || level === 'max') {
     return (
       <span>
         You have reached the limit of 1500 generations per month. Let us know if

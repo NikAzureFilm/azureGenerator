@@ -37,16 +37,14 @@ const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 // doesn't need this constraint. Keep this list scoped — adding a model that
 // doesn't actually have mixed-provider tool support just narrows routing for
 // no reason.
-const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([
-  'deepseek/deepseek-v4-pro',
-]);
+const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([]);
 
 // Models whose OpenRouter input modality is text-only. We strip image blocks
 // from these requests because OpenRouter rejects image content for text-only
 // models and the whole turn fails. Authoritative server-side — must mirror
 // `supportsVision: false` entries in PARAMETRIC_MODELS (src/lib/utils.ts) but
 // is not derived from the client to avoid stale-client/direct-API bypass.
-const TEXT_ONLY_MODELS = new Set<string>(['deepseek/deepseek-v4-pro']);
+const TEXT_ONLY_MODELS = new Set<string>([]);
 
 // Helper to stream updated assistant message rows.
 // Silently noop if the controller is already closed (e.g. the client

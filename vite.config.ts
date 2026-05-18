@@ -1,4 +1,5 @@
 import { sentryVitePlugin } from '@sentry/vite-plugin';
+import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
@@ -6,6 +7,15 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   base: '/',
   plugins: [
+    tanstackStart({
+      router: {
+        basepath: '/',
+      },
+      spa: {
+        enabled: true,
+        maskPath: '/',
+      },
+    }),
     react(),
     sentryVitePlugin({
       org: 'adamcad',
@@ -26,13 +36,33 @@ export default defineConfig({
 
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom', 'lucide-react'],
+        manualChunks(id) {
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-dom/') ||
+            id.includes('/node_modules/@tanstack/react-router/') ||
+            id.includes('/node_modules/@tanstack/react-start/') ||
+            id.includes('/node_modules/lucide-react/')
+          ) {
+            return 'vendor';
+          }
         },
       },
     },
 
     sourcemap: true,
+  },
+  environments: {
+    client: {
+      build: {
+        outDir: 'dist',
+      },
+    },
+    server: {
+      build: {
+        outDir: 'dist/server',
+      },
+    },
   },
   preview: {
     port: 4173,

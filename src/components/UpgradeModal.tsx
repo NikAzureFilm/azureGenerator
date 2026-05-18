@@ -95,7 +95,7 @@ export function UpgradeModal({ open, onOpenChange }: UpgradeModalProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {PLAN_ORDER.map((level) => {
             const product =
               level === 'free' ? undefined : findMonthly(products, level);

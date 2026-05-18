@@ -12,29 +12,6 @@ $$;
 
 CREATE OR REPLACE TRIGGER "update_leaf_trigger" AFTER INSERT ON "public"."messages" FOR EACH ROW EXECUTE FUNCTION "public"."update_conversation_leaf"();
 
--- Mesh token refund triggers
--- Tokens are deducted before mesh creation now, refunded on failure
-
--- Function to handle mesh status updates (refund tokens on failure)
-CREATE OR REPLACE FUNCTION handle_mesh_status_update()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- If mesh status changed to 'failure', refund the tokens
-    IF OLD.status != 'failure' AND NEW.status = 'failure' THEN
-        PERFORM public.refund_tokens(NEW.user_id, 'mesh'::public.token_operation_type, NEW.id::text);
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Create trigger for mesh status updates
-CREATE OR REPLACE TRIGGER mesh_status_update_trigger
-    AFTER UPDATE ON public.meshes
-    FOR EACH ROW
-    WHEN (OLD.status IS DISTINCT FROM NEW.status)
-    EXECUTE FUNCTION handle_mesh_status_update();
-
 -- Previews updated_at trigger
 -- Function to update the updated_at column
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -67,11 +44,9 @@ BEGIN
       split_part(NEW.email, '@', 1)
     )
   );
-
   -- Initialize one-time starter token balance
   INSERT INTO public.token_balances (user_id, source, balance)
   VALUES (NEW.id, 'purchased'::public.token_source_type, 100);
-
   RETURN NEW;
 END;
 $$;

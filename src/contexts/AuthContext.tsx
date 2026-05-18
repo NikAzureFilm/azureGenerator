@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 
-export type SubscriptionLevel = 'standard' | 'pro';
+export type SubscriptionLevel = 'standard' | 'pro' | 'max';
 export type PlanLevel = SubscriptionLevel | 'free';
 
 export type BillingStatus = {

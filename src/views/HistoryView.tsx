@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import { MessageSquare, Plus, LayoutGrid, List } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -378,7 +378,7 @@ export function HistoryView() {
                     <p className="mb-4 text-sm">
                       Start a new chat to begin generating 3D models
                     </p>
-                    <Button onClick={() => navigate('/')}>
+                    <Button onClick={() => navigate({ to: '/' })}>
                       Start New Chat
                     </Button>
                   </>
@@ -469,7 +469,7 @@ export function HistoryView() {
       <button
         type="button"
         aria-label="Create new item"
-        onClick={() => navigate('/')}
+        onClick={() => navigate({ to: '/' })}
         className="fixed bottom-8 right-8 flex h-14 w-14 items-center justify-center rounded-full bg-adam-neutral-100 text-adam-neutral-950 shadow-[0_4px_32px_rgba(0,0,0,0.48)] md:hidden"
       >
         <Plus className="h-10 w-10 stroke-[2px]" />

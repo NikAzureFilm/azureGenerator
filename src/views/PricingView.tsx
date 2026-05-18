@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import { ArrowRight, CircleDollarSign } from 'lucide-react';
 import { FEATURE_COSTS, formatTokenCost } from '@shared/tokenCosts';
 import { Button } from '@/components/ui/button';

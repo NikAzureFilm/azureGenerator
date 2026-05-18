@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import { Check, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -139,14 +139,14 @@ export function Subscriptions() {
 
   const handleSubscribe = (priceId: string) => {
     if (!user) {
-      navigate('/signin');
+      navigate({ to: '/signin' });
       return;
     }
     handleSubscribeMutation({ priceId, source: 'subscriptions' });
   };
 
   const renderTiers = (tiers: SubscriptionTier[]) => (
-    <div className="flex flex-col items-center gap-4 px-4 md:flex-row md:items-stretch md:justify-center md:px-8">
+    <div className="mx-auto grid max-w-[340px] grid-cols-1 justify-items-center gap-4 px-4 sm:max-w-[640px] sm:grid-cols-2 md:px-8 xl:max-w-none xl:grid-cols-4">
       {tiers.map((tier) => (
         <SubscriptionCard
           key={tier.level}
@@ -164,7 +164,7 @@ export function Subscriptions() {
   return (
     <div className="min-h-screen w-full bg-adam-bg-secondary-dark">
       <div className="flex min-h-screen w-full flex-col items-center justify-center py-12">
-        <div className="w-full max-w-5xl">
+        <div className="w-full max-w-6xl">
           <div className="mb-8 px-8 text-center">
             <h1 className="mb-2 font-kumbh-sans text-3xl font-light text-white">
               Choose a plan that works for you
@@ -204,6 +204,22 @@ export function Subscriptions() {
               {renderTiers(monthlyTiers)}
             </TabsContent>
           </Tabs>
+
+          {user && (
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={() => handleManageSubscription()}
+                disabled={isManageLoading || isSubscribeLoading}
+                className="inline-flex items-center gap-1.5 text-xs text-adam-neutral-300 underline-offset-4 hover:text-adam-neutral-100 hover:underline disabled:opacity-60"
+              >
+                {isManageLoading && (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                )}
+                Manage billing
+              </button>
+            </div>
+          )}
 
           {/* Token Packs */}
           {tokenPacks.length > 0 && (

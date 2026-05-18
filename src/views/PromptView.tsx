@@ -1,4 +1,4 @@
-import { useNavigate, Link, useOutletContext } from 'react-router-dom';
+import { useNavigate, Link } from '@tanstack/react-router';
 import { ArrowUpRight, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -29,6 +29,28 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
+import { useLayoutContext } from '@/contexts/LayoutContext';
+
+const PROMO_PILLS = [
+  {
+    href: 'https://azurefilm.com/',
+    event: 'azurefilm_banner_click',
+    prefix: 'Need filament for your print?',
+    label: 'Shop AzureFilm',
+  },
+  {
+    href: 'https://cad.onshape.com/appstore/apps/Design%20&%20Documentation/690a8dc864e816c112aa66a0',
+    event: 'onshape_banner_click',
+    prefix: 'Try our',
+    label: 'Onshape extension',
+  },
+  {
+    href: 'https://fusion.adam.new/install',
+    event: 'fusion_banner_click',
+    prefix: 'Try our',
+    label: 'Fusion extension',
+  },
+] as const;
 
 export function PromptView() {
   const navigate = useNavigate();
@@ -36,7 +58,7 @@ export function PromptView() {
   const { user, billing, isLoading } = useAuth();
   const totalTokens = billing?.tokens.total ?? 0;
   const { data: profile, isLoading: isProfileLoading } = useProfile();
-  const { isSidebarOpen } = useOutletContext<{ isSidebarOpen: boolean }>();
+  const { isSidebarOpen } = useLayoutContext();
   const queryClient = useQueryClient();
 
   const firstName = useMemo(() => {
@@ -185,7 +207,7 @@ export function PromptView() {
           console.error('Error generating title:', error);
         });
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
-      navigate(`/editor/${data.conversationId}`);
+      navigate({ to: '/editor/$id', params: { id: data.conversationId } });
     },
     onError: (error) => {
       Sentry.captureException(error);
@@ -218,12 +240,15 @@ export function PromptView() {
           <div className="fixed right-4 top-4 z-10 flex flex-row gap-2">
             <Button
               variant="light"
-              onClick={() => navigate('/signup')}
+              onClick={() => navigate({ to: '/signup' })}
               className="w-auto"
             >
               Sign Up
             </Button>
-            <Button onClick={() => navigate('/signin')} className="w-auto">
+            <Button
+              onClick={() => navigate({ to: '/signin' })}
+              className="w-auto"
+            >
               <LogIn className="mr-2 h-4 w-4" />
               Sign In
             </Button>
@@ -283,7 +308,7 @@ export function PromptView() {
                   }}
                   onFocus={() => {
                     if (!user) {
-                      navigate('/signin');
+                      navigate({ to: '/signin' });
                       return;
                     }
                   }}
@@ -317,31 +342,32 @@ export function PromptView() {
                 )}
               </div>
               {!isLoading && user && !limitReached && !lowPrompts && (
-                <div className="flex justify-center">
-                  <a
-                    href="https://azurefilm.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => {
-                      try {
-                        posthog.capture('onshape_banner_click', {
-                          location: 'prompt_view',
-                        });
-                      } catch {
-                        // Analytics failures (e.g. blocked by ad-blocker)
-                        // must never block the link's navigation.
-                      }
-                    }}
-                    className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-adam-text-secondary transition-colors hover:border-adam-blue/40 hover:bg-adam-blue/10 hover:text-adam-text-primary"
-                  >
-                    <span>
-                      Need filament for your print?{' '}
-                      <span className="font-medium text-adam-blue">
-                        Shop AzureFilm
+                <div className="flex flex-wrap justify-center gap-2">
+                  {PROMO_PILLS.map(({ href, event, prefix, label }) => (
+                    <a
+                      key={event}
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => {
+                        try {
+                          posthog.capture(event, { location: 'prompt_view' });
+                        } catch {
+                          // Analytics failures (e.g. blocked by ad-blocker)
+                          // must never block the link's navigation.
+                        }
+                      }}
+                      className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-adam-text-secondary transition-colors hover:border-adam-blue/40 hover:bg-adam-blue/10 hover:text-adam-text-primary"
+                    >
+                      <span>
+                        {prefix}{' '}
+                        <span className="font-medium text-adam-blue">
+                          {label}
+                        </span>
                       </span>
-                    </span>
-                    <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-                  </a>
+                      <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                    </a>
+                  ))}
                 </div>
               )}
               {!user && (

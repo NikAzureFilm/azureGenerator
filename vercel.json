@@ -1,4 +1,8 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "dist",
   "headers": [
     {
       "source": "/creation-mode-cad.webp",
@@ -43,8 +47,20 @@
       "destination": "/assets/:path*"
     },
     {
+      "source": "/libraries/:path*",
+      "destination": "/libraries/:path*"
+    },
+    {
+      "source": "/Geist-Regular.ttf",
+      "destination": "/Geist-Regular.ttf"
+    },
+    {
+      "source": "/city.hdr",
+      "destination": "/city.hdr"
+    },
+    {
       "source": "/:path*",
-      "destination": "/index.html"
+      "destination": "/_shell.html"
     }
   ],
   "trailingSlash": false
