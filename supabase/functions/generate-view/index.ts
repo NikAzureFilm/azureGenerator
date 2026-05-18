@@ -151,18 +151,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (mode === 'multiview') {
-      return new Response(
-        JSON.stringify({
-          error: { message: 'Multiview generation is currently disabled' },
-        }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
     const userPrompt = (prompt ?? '').trim();
     if (!userPrompt && referenceIds.length === 0) {
       return new Response(

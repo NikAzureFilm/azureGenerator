@@ -12,6 +12,12 @@ const meshFunctionSource = readFileSync(
   ),
   'utf8',
 );
+const generateViewFunctionSource = readFileSync(
+  fileURLToPath(
+    new URL('../../supabase/functions/generate-view/index.ts', import.meta.url),
+  ),
+  'utf8',
+);
 const sharedTypesSource = readFileSync(
   fileURLToPath(new URL('../../shared/types.ts', import.meta.url)),
   'utf8',
@@ -62,6 +68,12 @@ assert.equal(meshFunctionSource.includes('left_image_url'), true);
 assert.equal(meshFunctionSource.includes('right_image_url'), true);
 assert.equal(
   meshFunctionSource.includes('Multiview generation is currently disabled'),
+  false,
+);
+assert.equal(
+  generateViewFunctionSource.includes(
+    'Multiview generation is currently disabled',
+  ),
   false,
 );
 assert.equal(
