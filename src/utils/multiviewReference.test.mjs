@@ -22,7 +22,7 @@ assert.equal(
     targetSlot: 'left',
     prompt: '',
   }),
-  'Generate a left profile of the same object.',
+  'Generate a left-side orthographic view of this 3D object.',
 );
 
 assert.equal(
@@ -30,5 +30,5 @@ assert.equal(
     targetSlot: 'left',
     prompt: 'orange dragon with teal wings',
   }),
-  'orange dragon with teal wings Generate a left profile of the same object.',
+  'orange dragon with teal wings Generate a left-side orthographic view of this 3D object.',
 );

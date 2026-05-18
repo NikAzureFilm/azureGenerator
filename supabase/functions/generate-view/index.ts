@@ -251,12 +251,18 @@ Deno.serve(async (req) => {
       contentType = result.contentType;
     } else {
       if (primaryRefImageId) {
-        const refPath = `${userId}/${conversationId}/${primaryRefImageId}`;
-        const { data: signedRef, error: signedRefError } =
+        const refPaths = referenceIds.map(
+          (refId) => `${userId}/${conversationId}/${refId}`,
+        );
+        const { data: signedRefs, error: signedRefError } =
           await serviceClient.storage
             .from('images')
-            .createSignedUrl(refPath, 60 * 60);
-        if (signedRefError || !signedRef?.signedUrl) {
+            .createSignedUrls(refPaths, 60 * 60);
+        const signedRefUrls =
+          signedRefs
+            ?.filter((signedRef) => !signedRef.error && signedRef.signedUrl)
+            .map((signedRef) => reformatSignedUrl(signedRef.signedUrl)) ?? [];
+        if (signedRefError || signedRefUrls.length === 0) {
           throw new Error(
             `Failed to sign reference image: ${signedRefError?.message ?? 'unknown'}`,
           );
@@ -264,7 +270,7 @@ Deno.serve(async (req) => {
         imageBytes = await generateImageWithGeminiFlashEdit(
           googleGenAI,
           builtPrompt,
-          reformatSignedUrl(signedRef.signedUrl),
+          signedRefUrls,
         );
       } else {
         imageBytes = await generateImageWithGeminiFlash(

@@ -13,10 +13,10 @@ export type MultiviewReferenceSlotMap = Partial<
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
 const VIEW_GENERATION_PROMPT: Record<MultiviewSlot, string> = {
-  front: 'Generate a front view of the same object.',
-  left: 'Generate a left profile of the same object.',
-  back: 'Generate a back view of the same object.',
-  right: 'Generate a right profile of the same object.',
+  front: 'Generate a front orthographic view of this 3D object.',
+  left: 'Generate a left-side orthographic view of this 3D object.',
+  back: 'Generate a back orthographic view of this 3D object.',
+  right: 'Generate a right-side orthographic view of this 3D object.',
 };
 
 export function getMultiviewGenerationReferenceIds({

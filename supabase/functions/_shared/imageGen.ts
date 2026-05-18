@@ -14,6 +14,8 @@ const debugLog = (...args: unknown[]) => {
 };
 
 const GEMINI_FLASH_IMAGE_MODEL = 'gemini-2.5-flash-image';
+const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5.5';
+const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
 // Shared 3D model generation instructions for consistency across all image generation services
 export const INSTRUCTIONS_3D =
@@ -164,37 +166,31 @@ export const generateImageWithGptImage2 = async (
   const shouldEncodeReference = !priorImageCallId && images.length > 0;
 
   if (shouldEncodeReference) {
-    const latestImageId = images[images.length - 1];
-    const { data: imageData } = await supabaseClient.storage
-      .from('images')
-      .download(`${userId}/${conversationId}/${latestImageId}`);
+    for (const imageId of images) {
+      const { data: imageData } = await supabaseClient.storage
+        .from('images')
+        .download(`${userId}/${conversationId}/${imageId}`);
 
-    if (!imageData) {
-      throw new Error(`Failed to download image ${latestImageId}`);
+      if (!imageData) {
+        throw new Error(`Failed to download image ${imageId}`);
+      }
+
+      const imageArrayBuffer = await imageData.arrayBuffer();
+      const imageBuffer = Buffer.from(imageArrayBuffer);
+      const base64Image = imageBuffer.toString('base64');
+      const mimeType = detectImageMediaType(imageBuffer, imageData.type);
+
+      content.push({
+        type: 'input_image',
+        image_url: `data:${mimeType};base64,${base64Image}`,
+        detail: 'auto',
+      });
     }
-
-    const imageArrayBuffer = await imageData.arrayBuffer();
-    const base64Image = Buffer.from(imageArrayBuffer).toString('base64');
-    const mimeType =
-      imageData.type && imageData.type.startsWith('image/')
-        ? imageData.type
-        : 'image/png';
-
-    content.push({
-      type: 'input_image',
-      image_url: `data:${mimeType};base64,${base64Image}`,
-      detail: 'auto',
-    });
   }
 
   const input: Array<
     | { role: 'user'; content: typeof content }
-    | {
-        type: 'image_generation_call';
-        id: string;
-        result: string | null;
-        status: 'completed';
-      }
+    | { type: 'image_generation_call'; id: string }
   > = [];
 
   // Prior assistant-side image_generation_call must precede the new user
@@ -203,23 +199,20 @@ export const generateImageWithGptImage2 = async (
     input.push({
       type: 'image_generation_call',
       id: priorImageCallId,
-      result: null,
-      status: 'completed',
     });
   }
 
   input.push({ role: 'user', content });
 
-  // gpt-5.4 is the canonical orchestrator for the Responses API
-  // image_generation tool per OpenAI's docs; gpt-image-2 is the actual
-  // image model invoked via the tool.
+  // Use a text-capable GPT-5 model as the Responses API orchestrator; the
+  // hosted image_generation tool invokes gpt-image-2 for the actual image.
   const response = await openAI.responses.create({
-    model: 'gpt-5.4',
+    model: OPENAI_IMAGE_ORCHESTRATOR_MODEL,
     input,
     tools: [
       {
         type: 'image_generation',
-        model: 'gpt-image-2',
+        model: OPENAI_IMAGE_MODEL,
         quality,
         size: '1024x1024',
         output_format: 'jpeg',
@@ -265,30 +258,32 @@ export const generateImageWithGeminiMultiTurn = async (
     imagesCount: images.length,
   });
 
-  let imagePart: { inlineData: { mimeType: string; data: string } } | undefined;
+  const imageParts: {
+    inlineData: { mimeType: string; data: string };
+  }[] = [];
 
-  // If there are images, use the latest one as context for the multi-turn edit
   if (images.length > 0) {
-    const latestImageId = images[images.length - 1]; // Use the last image for continuity
-    const { data: imageData } = await supabaseClient.storage
-      .from('images')
-      .download(`${userId}/${conversationId}/${latestImageId}`);
+    for (const imageId of images) {
+      const { data: imageData } = await supabaseClient.storage
+        .from('images')
+        .download(`${userId}/${conversationId}/${imageId}`);
 
-    if (!imageData) {
-      throw new Error(`Failed to download image ${latestImageId}`);
+      if (!imageData) {
+        throw new Error(`Failed to download image ${imageId}`);
+      }
+
+      const imageArrayBuffer = await imageData.arrayBuffer();
+      const buffer = Buffer.from(imageArrayBuffer);
+      const base64Image = buffer.toString('base64');
+      const mimeType = detectImageMediaType(buffer, imageData.type);
+
+      imageParts.push({
+        inlineData: {
+          mimeType,
+          data: base64Image,
+        },
+      });
     }
-
-    const imageArrayBuffer = await imageData.arrayBuffer();
-    const buffer = Buffer.from(imageArrayBuffer);
-    const base64Image = buffer.toString('base64');
-    const mimeType = detectImageMediaType(buffer, imageData.type);
-
-    imagePart = {
-      inlineData: {
-        mimeType,
-        data: base64Image,
-      },
-    };
   }
 
   // Initialize chat with the new Gemini 3 Pro Image Preview model
@@ -305,9 +300,7 @@ export const generateImageWithGeminiMultiTurn = async (
     text?: string;
     inlineData?: { mimeType: string; data: string };
   }[] = [{ text: prompt || 'Generate an image' }];
-  if (imagePart) {
-    messageContent.push(imagePart);
-  }
+  messageContent.push(...imageParts);
 
   debugLog('Sending message to Gemini Multi-Turn Chat');
   const response = await chat.sendMessage({
@@ -511,37 +504,45 @@ export const generateImageWithGeminiFlash = async (
 export const generateImageWithGeminiFlashEdit = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
-  imageUrl: string,
+  imageUrls: string | string[],
 ): Promise<Buffer> => {
   debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
-  debugLog('Input image URL:', imageUrl);
+  const normalizedImageUrls = Array.isArray(imageUrls)
+    ? imageUrls
+    : [imageUrls];
+  debugLog('Input image URLs:', normalizedImageUrls);
   debugLog('Prompt:', prompt);
 
   try {
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-      throw new Error(`Failed to fetch input image: ${imageResponse.status}`);
-    }
+    const imageParts = await Promise.all(
+      normalizedImageUrls.map(async (imageUrl) => {
+        const imageResponse = await fetch(imageUrl);
+        if (!imageResponse.ok) {
+          throw new Error(
+            `Failed to fetch input image: ${imageResponse.status}`,
+          );
+        }
 
-    const imageArrayBuffer = await imageResponse.arrayBuffer();
-    const imageBuffer = Buffer.from(imageArrayBuffer);
-    const base64Image = imageBuffer.toString('base64');
-    const mimeType = detectImageMediaType(
-      imageBuffer,
-      imageResponse.headers.get('Content-Type'),
-    );
+        const imageArrayBuffer = await imageResponse.arrayBuffer();
+        const imageBuffer = Buffer.from(imageArrayBuffer);
+        const base64Image = imageBuffer.toString('base64');
+        const mimeType = detectImageMediaType(
+          imageBuffer,
+          imageResponse.headers.get('Content-Type'),
+        );
 
-    const result = await googleGenAI.models.generateContent({
-      model: GEMINI_FLASH_IMAGE_MODEL,
-      contents: [
-        { text: prompt },
-        {
+        return {
           inlineData: {
             mimeType,
             data: base64Image,
           },
-        },
-      ],
+        };
+      }),
+    );
+
+    const result = await googleGenAI.models.generateContent({
+      model: GEMINI_FLASH_IMAGE_MODEL,
+      contents: [{ text: prompt }, ...imageParts],
       config: {
         responseModalities: [Modality.TEXT, Modality.IMAGE],
       },
