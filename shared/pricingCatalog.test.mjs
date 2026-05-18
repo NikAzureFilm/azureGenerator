@@ -70,10 +70,19 @@ assert.deepEqual(
     multiviewNanoBananaView: 7,
     fastMesh: 41,
     qualityMesh: 34,
-    ultraMesh: 32,
+    ultraMesh: 50,
     multiviewMesh: 28,
     upscaleMesh: 76,
   },
+);
+
+assert.ok(
+  FEATURE_COSTS.ultraMesh.tokens > FEATURE_COSTS.fastMesh.tokens,
+  'Max quality mesh should cost more than textureless mesh',
+);
+assert.ok(
+  FEATURE_COSTS.ultraMesh.tokens > FEATURE_COSTS.qualityMesh.tokens,
+  'Max quality mesh should cost more than draft mesh',
 );
 
 assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 75);
