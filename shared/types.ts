@@ -5,7 +5,7 @@ export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
 export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
 
 export function normalizeCreativeModel(model: unknown): CreativeModel {
-  return model === 'ultra' ? 'ultra' : DEFAULT_CREATIVE_MODEL;
+  return model === 'multiview' ? 'multiview' : DEFAULT_CREATIVE_MODEL;
 }
 
 export type MultiviewSlot = 'front' | 'left' | 'back' | 'right';

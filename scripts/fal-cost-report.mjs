@@ -9,7 +9,6 @@ export const FAL_ENDPOINTS = [
   'fal-ai/pixal3d',
   'fal-ai/sam-3/3d-objects',
   'tripo3d/tripo/v2.5/image-to-3d',
-  'tripo3d/tripo/v2.5/multiview-to-3d',
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
   'fal-ai/hunyuan3d/v2/mini/turbo',
   'fal-ai/moondream3-preview/caption',
@@ -23,7 +22,6 @@ const DEFAULT_UNIT_PRICES = new Map(
     ['fal-ai/pixal3d', 0.06, 'units'],
     ['fal-ai/sam-3/3d-objects', 0.02, 'units'],
     ['tripo3d/tripo/v2.5/image-to-3d', 0.00007, 'compute seconds'],
-    ['tripo3d/tripo/v2.5/multiview-to-3d', 0.2, 'generations'],
     ['fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', 0.015, 'units'],
     ['fal-ai/hunyuan3d/v2/mini/turbo', 0.08, 'generations'],
     ['fal-ai/moondream3-preview/caption', 1, 'units'],
@@ -55,7 +53,7 @@ const CONFIGURED_TOKENS = {
   fastMesh: 41,
   qualityMesh: 34,
   ultraMesh: 60,
-  multiviewMesh: 28,
+  multiviewMesh: 61,
   upscaleMesh: 76,
 };
 
@@ -175,9 +173,10 @@ const FEATURE_BREAKDOWNS = [
     label: 'Multiview mesh',
     components: [
       {
-        name: 'Tripo v2.5 multiview textureless mesh',
-        endpoint: 'tripo3d/tripo/v2.5/multiview-to-3d',
-        fixedCostUsd: 0.2,
+        name: 'Hunyuan 3D v3.1 Pro multiview mesh',
+        endpoint: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
+        fixedCostUsd: 0.525,
+        note: 'base Pro image-to-3D plus multiview input surcharge',
       },
       {
         name: 'Hunyuan mini preview',

@@ -79,7 +79,7 @@ assert.deepEqual(
     fastMesh: 41,
     qualityMesh: 34,
     ultraMesh: 60,
-    multiviewMesh: 28,
+    multiviewMesh: 61,
     upscaleMesh: 76,
   },
 );

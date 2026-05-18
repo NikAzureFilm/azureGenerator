@@ -100,8 +100,8 @@ export const FEATURE_COSTS = {
   multiviewMesh: {
     id: 'multiview-mesh',
     label: 'Multiview mesh',
-    tokens: 28,
-    description: 'Four-view 3D mesh generation.',
+    tokens: 61,
+    description: 'Hunyuan Pro four-view 3D mesh generation.',
   },
   upscaleMesh: {
     id: 'upscale-mesh',

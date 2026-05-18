@@ -246,6 +246,13 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     timeEstimate: '5-6 minutes',
     tokenCost: getCreativeModelTokenCost('ultra'),
   },
+  {
+    id: 'multiview',
+    name: 'Multiview',
+    description: 'Four reference angles for consistent shape',
+    timeEstimate: '6-8 minutes',
+    tokenCost: getCreativeModelTokenCost('multiview'),
+  },
 ];
 
 // Whether the selected parametric model can accept image / STL-render inputs.

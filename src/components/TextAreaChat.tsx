@@ -124,7 +124,7 @@ interface TextAreaChatProps {
   };
 }
 
-const MULTIVIEW_ENABLED = false;
+const MULTIVIEW_ENABLED = true;
 
 // SVG Icon component for the quads/polys toggle
 const QuadsPolysSvg = ({ color = '#D7D7D7' }: { color?: string }) => (
@@ -549,7 +549,7 @@ function TextAreaChat({
     normalizeImageGenerationModel(imageGenerationModel);
 
   useEffect(() => {
-    if (type === 'creative' && model === 'multiview') {
+    if (!MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview') {
       setModel(DEFAULT_CREATIVE_MODEL);
       setMultiviewSlots({});
     }

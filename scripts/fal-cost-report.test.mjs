@@ -18,6 +18,10 @@ assert.equal(tokensForCostUsd(0.07), 7);
 assert.equal(tokensForCostUsd(0.071), 8);
 assert.ok(FAL_ENDPOINTS.includes('fal-ai/pixal3d'));
 assert.ok(FAL_ENDPOINTS.includes('fal-ai/hunyuan-3d/v3.1/pro/image-to-3d'));
+assert.equal(
+  FAL_ENDPOINTS.includes('tripo3d/tripo/v2.5/multiview-to-3d'),
+  false,
+);
 
 const unitPrices = new Map(
   [
@@ -45,6 +49,7 @@ const byId = new Map(rows.map((row) => [row.id, row]));
 assert.equal(byId.get('fastMesh')?.suggestedTokens, 41);
 assert.equal(byId.get('qualityMesh')?.suggestedTokens, 34);
 assert.equal(byId.get('ultraMesh')?.suggestedTokens, 60);
+assert.equal(byId.get('multiviewMesh')?.suggestedTokens, 61);
 assert.equal(byId.get('upscaleMesh')?.suggestedTokens, 76);
 assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 22);
 

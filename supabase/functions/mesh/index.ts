@@ -11,7 +11,7 @@ import {
   INSTRUCTIONS_3D as instructions3D,
   type GptImageQuality,
 } from '../_shared/imageGen.ts';
-import { Model, MeshFileType } from '@shared/types.ts';
+import { Model, MeshFileType, type MultiviewImages } from '@shared/types.ts';
 import {
   getImageGenerationProvider,
   normalizeImageGenerationModel,
@@ -52,6 +52,9 @@ const QUALITY_CAPTION_TIMEOUT_MS = 10000;
 const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
 const QUALITY_MASK_TIMEOUT_MS = 10000;
 const PIXAL3D_ENDPOINT = 'fal-ai/pixal3d';
+const HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT =
+  'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d';
+const MULTIVIEW_SLOTS = ['front', 'left', 'back', 'right'] as const;
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -601,6 +604,7 @@ Deno.serve(async (req) => {
       meshId: upscaleMeshId,
       parentMessageId,
       imageGenerationModel,
+      multiviewImages,
     }: {
       images?: string[];
       mesh?: string;
@@ -614,27 +618,19 @@ Deno.serve(async (req) => {
       meshId?: string;
       parentMessageId?: string;
       imageGenerationModel?: ImageGenerationModel;
+      multiviewImages?: MultiviewImages;
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
-
-    if (model === 'multiview') {
-      return new Response(
-        JSON.stringify({
-          error: { message: 'Multiview generation is currently disabled' },
-        }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
 
     const meshTokenCost =
       action === 'upscale'
         ? FEATURE_COSTS.upscaleMesh.tokens
         : getCreativeModelTokenCost(
-            model === 'fast' || model === 'quality' || model === 'ultra'
+            model === 'fast' ||
+              model === 'quality' ||
+              model === 'ultra' ||
+              model === 'multiview'
               ? model
               : 'quality',
           );
@@ -950,10 +946,16 @@ Deno.serve(async (req) => {
       );
     }
 
+    const hasMultiviewImages =
+      model === 'multiview' &&
+      !!multiviewImages?.front &&
+      typeof multiviewImages.front === 'string';
+
     if (
       (!images || !Array.isArray(images) || images.length === 0) &&
       !text &&
-      !mesh
+      !mesh &&
+      !hasMultiviewImages
     ) {
       logError(new Error('Images or text not found'), {
         functionName: 'mesh',
@@ -965,6 +967,7 @@ Deno.serve(async (req) => {
           imagesLength: images?.length,
           hasText: !!text,
           hasMesh: !!mesh,
+          hasMultiviewImages,
         },
       });
       return new Response(
@@ -986,11 +989,18 @@ Deno.serve(async (req) => {
       fileType = 'glb';
     }
 
+    const meshImageIds =
+      model === 'multiview' && multiviewImages
+        ? MULTIVIEW_SLOTS.map((slot) => multiviewImages[slot]).filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          )
+        : (images ?? []);
+
     const { data: meshData, error: meshError } = await supabaseClient
       .from('meshes')
       .insert({
         user_id: userData.user.id,
-        images: images ?? null,
+        images: meshImageIds.length > 0 ? meshImageIds : null,
         conversation_id: conversationId,
         file_type: fileType,
         prompt: {
@@ -999,6 +1009,7 @@ Deno.serve(async (req) => {
           ...(mesh && { mesh: mesh }),
           ...(model && { model: model }),
           ...(imageGenerationModel && { imageGenerationModel }),
+          ...(multiviewImages && { multiviewImages }),
         },
       })
       .select()
@@ -1027,7 +1038,7 @@ Deno.serve(async (req) => {
 
     // Skip Flux-based preview for quality; it produces its own Hunyuan preview
     // from an already-prepared seed image.
-    if (model !== 'quality') {
+    if (model !== 'quality' && model !== 'multiview') {
       EdgeRuntime.waitUntil(
         submitPreviewJob(
           supabaseClient,
@@ -1060,6 +1071,7 @@ Deno.serve(async (req) => {
         meshTopology,
         polygonCount,
         imageGenerationModel,
+        multiviewImages,
       ),
     );
 
@@ -1106,14 +1118,11 @@ async function submitMeshJob(
   meshTopology: 'quads' | 'polys' | undefined,
   polygonCount: number | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
+  multiviewImages: MultiviewImages | undefined,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
   // debugLog('submitMeshJob model === ultra:', model === 'ultra');
-
-  if (model === 'multiview') {
-    throw new Error('Multiview generation is currently disabled');
-  }
 
   const supabaseHost =
     (Deno.env.get('ENVIRONMENT') === 'local'
@@ -1131,6 +1140,95 @@ async function submitMeshJob(
   let imageInputs: string[] = [];
 
   try {
+    if (model === 'multiview') {
+      debugLog('=== ENTERING MULTIVIEW MODEL PATH (HUNYUAN 3D V3.1 PRO) ===');
+
+      if (!multiviewImages?.front) {
+        throw new Error('Front view is required for multiview mesh generation');
+      }
+
+      const availableSlots = MULTIVIEW_SLOTS.filter((slot) => {
+        const imageId = multiviewImages[slot];
+        return typeof imageId === 'string' && imageId.length > 0;
+      });
+
+      const imageFiles = availableSlots.map((slot) => {
+        const imageId = multiviewImages[slot];
+        return `${userId}/${conversationId}/${imageId}`;
+      });
+
+      const { data: imageSignedUrls, error: imageSignedUrlsError } =
+        await supabaseClient.storage
+          .from('images')
+          .createSignedUrls(imageFiles, 60 * 60);
+
+      if (imageSignedUrlsError) {
+        throw new Error(imageSignedUrlsError.message);
+      }
+
+      const signedUrlBySlot: Partial<
+        Record<(typeof MULTIVIEW_SLOTS)[number], string>
+      > = {};
+      availableSlots.forEach((slot, index) => {
+        const signedUrl = imageSignedUrls?.[index];
+        if (!signedUrl?.error && signedUrl?.signedUrl) {
+          signedUrlBySlot[slot] = reformatSignedUrl(signedUrl.signedUrl);
+        }
+      });
+
+      if (!signedUrlBySlot.front) {
+        throw new Error('No valid front image found for multiview generation');
+      }
+
+      const faceCount = polygonCount
+        ? Math.max(40000, Math.min(1500000, polygonCount))
+        : 500000;
+      const hunyuanInput = {
+        input_image_url: signedUrlBySlot.front,
+        ...(signedUrlBySlot.back && {
+          back_image_url: signedUrlBySlot.back,
+        }),
+        ...(signedUrlBySlot.left && {
+          left_image_url: signedUrlBySlot.left,
+        }),
+        ...(signedUrlBySlot.right && {
+          right_image_url: signedUrlBySlot.right,
+        }),
+        generate_type: 'Normal' as const,
+        enable_pbr: false,
+        face_count: faceCount,
+      };
+
+      debugLog('Submitting multiview mesh to Hunyuan 3D v3.1 Pro', {
+        slots: availableSlots,
+        faceCount,
+      });
+
+      const hunyuanSubmission = await fal.queue.submit(
+        HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT,
+        {
+          input: hunyuanInput,
+          webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
+        },
+      );
+      await recordFalQueueRequest(
+        supabaseClient,
+        meshId,
+        HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT,
+        hunyuanSubmission,
+      );
+
+      await createHunyuanPreview(
+        signedUrlBySlot.front,
+        'multiview front image',
+        userId,
+        conversationId,
+        meshId,
+        supabaseHost,
+      );
+      return;
+    }
+
     // Collect all available images from different sources
     let meshImages: string[] = [];
 
@@ -1382,7 +1480,11 @@ async function submitMeshJob(
 
     // Only validate imageInputs for models that rely on the shared image pipeline.
     // Ultra generates its own image.
-    if (imageInputs.length === 0 && model !== 'ultra') {
+    if (
+      imageInputs.length === 0 &&
+      model !== 'ultra' &&
+      model !== 'multiview'
+    ) {
       throw new Error('No valid images for 3D generation');
     }
 
@@ -1835,6 +1937,7 @@ Output:`;
       model,
       hasText: !!text,
       hasImages: !!(images && images.length > 0),
+      hasMultiviewImages: !!multiviewImages?.front,
       imageInputsLength: imageInputs.length,
       supabaseHost,
     });
