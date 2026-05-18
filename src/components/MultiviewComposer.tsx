@@ -24,6 +24,10 @@ import {
   ImageGenerateDialog,
   type ImageGenerateReference,
 } from '@/components/ImageGenerateDialog';
+import {
+  buildMultiviewGenerationPrompt,
+  getMultiviewGenerationReferenceIds,
+} from '@/utils/multiviewReference';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
@@ -32,15 +36,6 @@ const SLOT_LABEL: Record<MultiviewSlot, string> = {
   left: 'Left',
   back: 'Back',
   right: 'Right',
-};
-
-const VIEW_PROMPT_GUIDANCE: Record<MultiviewSlot, string> = {
-  front:
-    'Show the object from the front, facing the camera head-on at eye level.',
-  left: 'Show the object from its left side profile, 90 degrees counter-clockwise from the front.',
-  back: 'Show the object from the back, 180 degrees from the front.',
-  right:
-    'Show the object from its right side profile, 90 degrees clockwise from the front.',
 };
 
 const VALID_IMAGE_FORMATS = [
@@ -173,7 +168,10 @@ export function MultiviewComposer({
       setDialogState({
         targetSlot: slot,
         references: buildReferencesForSlot(slot),
-        prompt: prompt.trim(),
+        prompt: buildMultiviewGenerationPrompt({
+          targetSlot: slot,
+          prompt,
+        }),
       });
     },
     [buildReferencesForSlot, prompt],
@@ -260,10 +258,19 @@ export function MultiviewComposer({
     setIsGeneratingDialog(true);
     updateSlot(targetSlot, { isBusy: true, kind: 'generated' });
     try {
-      const refImageIds = references.map((ref) => ref.id);
-      const generationPrompt = [trimmedPrompt, VIEW_PROMPT_GUIDANCE[targetSlot]]
-        .filter(Boolean)
-        .join(' ');
+      const refImageIds =
+        references.length > 0
+          ? references.map((ref) => ref.id)
+          : getMultiviewGenerationReferenceIds({
+              slots,
+              targetSlot,
+            });
+      const generationPrompt =
+        trimmedPrompt ||
+        buildMultiviewGenerationPrompt({
+          targetSlot,
+          prompt: '',
+        });
       const { data, error } = await supabase.functions.invoke('generate-view', {
         method: 'POST',
         body: {
@@ -300,7 +307,14 @@ export function MultiviewComposer({
     } finally {
       setIsGeneratingDialog(false);
     }
-  }, [dialogState, conversationId, imageGenerationModel, updateSlot, toast]);
+  }, [
+    dialogState,
+    conversationId,
+    imageGenerationModel,
+    slots,
+    updateSlot,
+    toast,
+  ]);
 
   const handleRemove = useCallback(
     async (slot: MultiviewSlot) => {
