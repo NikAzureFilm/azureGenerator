@@ -965,7 +965,14 @@ export const processUserModelForPrint = async (
     binary: true,
   } as STLExporterOptionsBinary);
 
-  const blob = new Blob([result], { type: 'application/octet-stream' });
+  const stlBytes =
+    result instanceof DataView ? new Uint8Array(result.byteLength) : result;
+  if (result instanceof DataView) {
+    stlBytes.set(
+      new Uint8Array(result.buffer, result.byteOffset, result.byteLength),
+    );
+  }
+  const blob = new Blob([stlBytes], { type: 'application/octet-stream' });
   const file = new File([blob], `${generateFilename()}_PRINTABLE.stl`, {
     type: 'application/octet-stream',
   });

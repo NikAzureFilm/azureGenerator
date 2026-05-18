@@ -245,7 +245,9 @@ Deno.serve(async (req) => {
         builtPrompt,
         referenceIds,
         null,
-        'high',
+        // Supabase Edge Functions have a 150s idle timeout. High quality
+        // gpt-image-2 calls can exceed that for synchronous view generation.
+        'low',
       );
       imageBytes = result.imageBytes;
       contentType = result.contentType;

@@ -92,6 +92,10 @@ assert.equal(
   false,
 );
 assert.equal(
+  generateViewFunctionSource.includes("'low',"),
+  true,
+);
+assert.equal(
   imageGenSource.includes("tool_choice: { type: 'image_generation' }"),
   true,
 );
