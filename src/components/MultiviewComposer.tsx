@@ -337,7 +337,7 @@ export function MultiviewComposer({
   );
 
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-2 p-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-adam-text-secondary">
           Multiview · 4 angles
@@ -348,7 +348,7 @@ export function MultiviewComposer({
             : 'Add Front first — it becomes the reference for the others'}
         </span>
       </div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-4 gap-1.5">
         {SLOT_ORDER.map((slot) => (
           <MultiviewSlotCard
             key={slot}
@@ -419,7 +419,7 @@ function MultiviewSlotCard({
   return (
     <div
       className={cn(
-        'group relative flex aspect-square w-full flex-col overflow-hidden rounded-lg border-2 transition-colors',
+        'group relative flex h-28 w-full flex-col overflow-hidden rounded-lg border-2 transition-colors sm:h-32',
         hasImage
           ? isReference
             ? 'border-adam-blue/60 bg-adam-neutral-900'
