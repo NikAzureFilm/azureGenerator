@@ -1,0 +1,55 @@
+import assert from 'node:assert/strict';
+import {
+  buildFeatureCostRows,
+  FAL_ENDPOINTS,
+  TOKEN_INTERNAL_USD_COST,
+  TOKEN_USD_VALUE,
+  tokensForCostUsd,
+} from './fal-cost-report.mjs';
+import {
+  FEATURE_COSTS,
+  TOKEN_INTERNAL_USD_COST as SHARED_TOKEN_INTERNAL_USD_COST,
+  TOKEN_USD_VALUE as SHARED_TOKEN_USD_VALUE,
+} from '../shared/tokenCosts.ts';
+
+assert.equal(TOKEN_INTERNAL_USD_COST, SHARED_TOKEN_INTERNAL_USD_COST);
+assert.equal(TOKEN_USD_VALUE, SHARED_TOKEN_USD_VALUE);
+assert.equal(tokensForCostUsd(0.07), 7);
+assert.equal(tokensForCostUsd(0.071), 8);
+assert.ok(FAL_ENDPOINTS.includes('fal-ai/pixal3d'));
+assert.ok(FAL_ENDPOINTS.includes('fal-ai/hunyuan-3d/v3.1/pro/image-to-3d'));
+
+const unitPrices = new Map(
+  [
+    ['fal-ai/pixal3d', 0.06],
+    ['fal-ai/sam-3/3d-objects', 0.02],
+    ['fal-ai/sam-3/image', 0.005],
+    ['fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', 0.015],
+    ['fal-ai/hunyuan3d/v2/mini/turbo', 0.08],
+    ['fal-ai/flux-pro/kontext/max/multi', 0.08],
+    ['fal-ai/flux-pro/v1.1', 0.04],
+  ].map(([endpointId, unitPrice]) => [
+    endpointId,
+    {
+      endpoint_id: endpointId,
+      unit_price: unitPrice,
+      unit: 'units',
+      currency: 'USD',
+    },
+  ]),
+);
+
+const rows = buildFeatureCostRows(unitPrices);
+const byId = new Map(rows.map((row) => [row.id, row]));
+
+assert.equal(byId.get('fastMesh')?.suggestedTokens, 41);
+assert.equal(byId.get('qualityMesh')?.suggestedTokens, 34);
+assert.equal(byId.get('ultraMesh')?.suggestedTokens, 60);
+assert.equal(byId.get('upscaleMesh')?.suggestedTokens, 76);
+assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 22);
+
+for (const [key, feature] of Object.entries(FEATURE_COSTS)) {
+  const row = byId.get(key);
+  assert.ok(row, `missing CLI row for ${key}`);
+  assert.equal(row.configuredTokens, feature.tokens, key);
+}

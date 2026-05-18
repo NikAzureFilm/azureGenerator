@@ -8,11 +8,19 @@ import {
 } from './pricingCatalog.ts';
 import {
   FEATURE_COSTS,
+  TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE,
   getParametricModelTokenCost,
+  tokensForProviderCost,
 } from './tokenCosts.ts';
 
+assert.equal(TOKEN_INTERNAL_USD_COST, 0.01);
 assert.equal(TOKEN_USD_VALUE, 0.03);
+assert.equal(TOKEN_USD_VALUE / TOKEN_INTERNAL_USD_COST, 3);
+assert.equal(tokensForProviderCost(0), 0);
+assert.equal(tokensForProviderCost(0.07), 7);
+assert.equal(tokensForProviderCost(0.3), 30);
+assert.equal(tokensForProviderCost(0.301), 31);
 
 assert.deepEqual(PLAN_ORDER, ['free', 'standard', 'pro', 'max']);
 
@@ -70,7 +78,7 @@ assert.deepEqual(
     multiviewNanoBananaView: 7,
     fastMesh: 41,
     qualityMesh: 34,
-    ultraMesh: 50,
+    ultraMesh: 60,
     multiviewMesh: 28,
     upscaleMesh: 76,
   },

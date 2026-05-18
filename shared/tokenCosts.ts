@@ -1,6 +1,14 @@
 import type { CreativeModel } from './types.ts';
 
+export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
+
+export function tokensForProviderCost(providerCostUsd: number): number {
+  return Math.max(
+    0,
+    Math.ceil(providerCostUsd / TOKEN_INTERNAL_USD_COST - 1e-9),
+  );
+}
 
 export type PublicFeatureCost = {
   id: string;
@@ -86,7 +94,7 @@ export const FEATURE_COSTS = {
   ultraMesh: {
     id: 'ultra-mesh',
     label: 'Max quality mesh',
-    tokens: 50,
+    tokens: 60,
     description: 'Higher quality textured 3D mesh generation.',
   },
   multiviewMesh: {
