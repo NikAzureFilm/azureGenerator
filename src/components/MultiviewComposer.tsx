@@ -26,6 +26,7 @@ import {
 } from '@/components/ImageGenerateDialog';
 import {
   buildMultiviewGenerationPrompt,
+  getMultiviewGenerationMode,
   getMultiviewGenerationReferenceIds,
 } from '@/utils/multiviewReference';
 
@@ -279,7 +280,7 @@ export function MultiviewComposer({
           prompt: generationPrompt,
           refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
           provider: getImageGenerationProvider(imageGenerationModel),
-          mode: 'input',
+          mode: getMultiviewGenerationMode(),
         },
       });
       if (error) throw error;

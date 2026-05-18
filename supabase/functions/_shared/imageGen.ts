@@ -220,6 +220,7 @@ export const generateImageWithGptImage2 = async (
         moderation: 'low',
       },
     ],
+    tool_choice: { type: 'image_generation' },
   });
 
   const imageCalls = response.output.flatMap((item) =>

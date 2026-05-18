@@ -45,6 +45,10 @@ export function buildMultiviewGenerationPrompt({
     .join(' ');
 }
 
+export function getMultiviewGenerationMode(): 'multiview' {
+  return 'multiview';
+}
+
 export function getMultiviewGenerationReference({
   slots,
   sourceReferenceId,

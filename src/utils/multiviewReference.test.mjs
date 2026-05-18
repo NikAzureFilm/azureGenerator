@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   buildMultiviewGenerationPrompt,
+  getMultiviewGenerationMode,
   getMultiviewGenerationReferenceIds,
 } from './multiviewReference.ts';
 
@@ -32,3 +33,5 @@ assert.equal(
   }),
   'orange dragon with teal wings Generate a left-side orthographic view of this 3D object.',
 );
+
+assert.equal(getMultiviewGenerationMode(), 'multiview');

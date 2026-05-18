@@ -18,6 +18,12 @@ const generateViewFunctionSource = readFileSync(
   ),
   'utf8',
 );
+const imageGenSource = readFileSync(
+  fileURLToPath(
+    new URL('../../supabase/functions/_shared/imageGen.ts', import.meta.url),
+  ),
+  'utf8',
+);
 const sharedTypesSource = readFileSync(
   fileURLToPath(new URL('../../shared/types.ts', import.meta.url)),
   'utf8',
@@ -60,8 +66,11 @@ assert.equal(
   textAreaChatSource.includes('const MULTIVIEW_ENABLED = true'),
   true,
 );
-assert.equal(multiviewComposerSource.includes("mode: 'multiview'"), false);
-assert.equal(multiviewComposerSource.includes("mode: 'input'"), true);
+assert.equal(
+  multiviewComposerSource.includes('getMultiviewGenerationMode()'),
+  true,
+);
+assert.equal(multiviewComposerSource.includes("mode: 'input'"), false);
 assert.equal(chatSectionSource.includes('normalizeCreativeModel'), true);
 assert.equal(messageServiceSource.includes('normalizeCreativeModel'), true);
 assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), true);
@@ -81,6 +90,10 @@ assert.equal(
     'Multiview generation is currently disabled',
   ),
   false,
+);
+assert.equal(
+  imageGenSource.includes("tool_choice: { type: 'image_generation' }"),
+  true,
 );
 assert.equal(
   meshFunctionSource.includes("'fal-ai/meshy/v6-preview/image-to-3d'"),
