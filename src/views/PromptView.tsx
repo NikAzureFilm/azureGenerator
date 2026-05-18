@@ -38,18 +38,6 @@ const PROMO_PILLS = [
     prefix: 'Need filament for your print?',
     label: 'Shop AzureFilm',
   },
-  {
-    href: 'https://cad.onshape.com/appstore/apps/Design%20&%20Documentation/690a8dc864e816c112aa66a0',
-    event: 'onshape_banner_click',
-    prefix: 'Try our',
-    label: 'Onshape extension',
-  },
-  {
-    href: 'https://fusion.adam.new/install',
-    event: 'fusion_banner_click',
-    prefix: 'Try our',
-    label: 'Fusion extension',
-  },
 ] as const;
 
 export function PromptView() {
