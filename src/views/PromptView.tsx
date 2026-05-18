@@ -245,7 +245,7 @@ export function PromptView() {
 
         <main
           className={cn(
-            'flex h-full w-full flex-col items-center overflow-y-auto px-4 pb-8 md:px-8',
+            'flex h-full w-full flex-col items-center overflow-y-auto px-4 pb-4 md:px-8',
             user
               ? 'justify-start pt-8 desktop:justify-center'
               : 'justify-start pt-20 desktop:justify-center desktop:py-8',
@@ -284,7 +284,7 @@ export function PromptView() {
             />
           </div>
           <div className="flex w-full flex-col items-center">
-            <div className="w-full max-w-3xl space-y-4 pb-12">
+            <div className="w-full max-w-3xl space-y-3 pb-2">
               <SelectedItemsContext.Provider
                 value={{ images, setImages, mesh, setMesh }}
               >
