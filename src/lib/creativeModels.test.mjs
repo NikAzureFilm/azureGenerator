@@ -96,6 +96,14 @@ assert.equal(
   true,
 );
 assert.equal(
+  generateViewFunctionSource.includes('isOpenAiSafetyRejection'),
+  true,
+);
+assert.equal(
+  generateViewFunctionSource.includes('falling back to Nano Banana'),
+  true,
+);
+assert.equal(
   imageGenSource.includes("tool_choice: { type: 'image_generation' }"),
   true,
 );

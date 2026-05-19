@@ -69,6 +69,11 @@ const buildPrompt = (
   return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}. ${viewDirective}`;
 };
 
+const isOpenAiSafetyRejection = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /request was rejected by the safety system/i.test(message);
+};
+
 Deno.serve(async (req) => {
   try {
     if (req.method === 'OPTIONS') {
@@ -234,24 +239,7 @@ Deno.serve(async (req) => {
       mode,
     });
 
-    let imageBytes: Buffer;
-    let contentType: string | undefined;
-    if (shouldUseOpenAi) {
-      const result = await generateImageWithGptImage2(
-        serviceClient,
-        openAI,
-        userId,
-        conversationId,
-        builtPrompt,
-        referenceIds,
-        null,
-        // Supabase Edge Functions have a 150s idle timeout. High quality
-        // gpt-image-2 calls can exceed that for synchronous view generation.
-        'low',
-      );
-      imageBytes = result.imageBytes;
-      contentType = result.contentType;
-    } else {
+    const generateWithNanoBanana = async (): Promise<Buffer> => {
       if (primaryRefImageId) {
         const refPaths = referenceIds.map(
           (refId) => `${userId}/${conversationId}/${refId}`,
@@ -269,17 +257,44 @@ Deno.serve(async (req) => {
             `Failed to sign reference image: ${signedRefError?.message ?? 'unknown'}`,
           );
         }
-        imageBytes = await generateImageWithGeminiFlashEdit(
+        return await generateImageWithGeminiFlashEdit(
           googleGenAI,
           builtPrompt,
           signedRefUrls,
         );
-      } else {
-        imageBytes = await generateImageWithGeminiFlash(
-          googleGenAI,
-          builtPrompt,
-        );
       }
+
+      return await generateImageWithGeminiFlash(googleGenAI, builtPrompt);
+    };
+
+    let imageBytes: Buffer;
+    let contentType: string | undefined;
+    if (shouldUseOpenAi) {
+      try {
+        const result = await generateImageWithGptImage2(
+          serviceClient,
+          openAI,
+          userId,
+          conversationId,
+          builtPrompt,
+          referenceIds,
+          null,
+          // Supabase Edge Functions have a 150s idle timeout. High quality
+          // gpt-image-2 calls can exceed that for synchronous view generation.
+          'low',
+        );
+        imageBytes = result.imageBytes;
+        contentType = result.contentType;
+      } catch (error) {
+        if (!isOpenAiSafetyRejection(error)) throw error;
+
+        console.warn(
+          'OpenAI image generation rejected by safety system; falling back to Nano Banana.',
+        );
+        imageBytes = await generateWithNanoBanana();
+      }
+    } else {
+      imageBytes = await generateWithNanoBanana();
     }
 
     const imageId = crypto.randomUUID();
