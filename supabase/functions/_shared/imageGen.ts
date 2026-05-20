@@ -14,7 +14,7 @@ const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
 
-const GEMINI_FLASH_IMAGE_MODEL = 'gemini-2.5-flash-image';
+const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5.5';
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 

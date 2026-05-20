@@ -8,8 +8,8 @@ const imageGenSource = readFileSync(
 
 assert.match(
   imageGenSource,
-  /const GEMINI_FLASH_IMAGE_MODEL = 'gemini-2\.5-flash-image';/,
-  'Lite image generation uses the documented Nano Banana model id',
+  /const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3\.1-flash-image-preview';/,
+  'Lite image generation uses the available Gemini 3.1 Flash Image model',
 );
 assert.match(
   imageGenSource,
@@ -23,8 +23,8 @@ assert.match(
 );
 assert.doesNotMatch(
   imageGenSource,
-  /gemini-3\.1-flash-image-preview/,
-  'Lite image generation does not call an unavailable Gemini 3.1 image model',
+  /const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3-flash-image';/,
+  'Lite image generation does not call the unavailable gemini-3-flash-image model id',
 );
 assert.doesNotMatch(
   imageGenSource,
