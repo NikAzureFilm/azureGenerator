@@ -22,6 +22,12 @@ assert.match(
   'global image enforcement should reject flat 2D images',
 );
 
+assert.match(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /convert the subject into one standalone physical 3D object asset/i,
+  'global image enforcement should convert non-object image requests into standalone 3D object assets',
+);
+
 assert.equal(
   enforce3DObjectPrompt('Generate a Charizard.'),
   `${THREE_D_OBJECT_PROMPT_ENFORCEMENT} User request: Generate a Charizard.`,

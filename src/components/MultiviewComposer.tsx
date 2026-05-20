@@ -376,14 +376,14 @@ export function MultiviewComposer({
           open={dialogState !== null}
           onOpenChange={handleDialogOpenChange}
           title={`Generate ${SLOT_LABEL[dialogState.targetSlot]} view`}
-          description="Reference images from the other filled views are pre-selected. Add or remove references as needed."
+          description="The Object Agent keeps this angle matched to the same centered 3D object. Other filled views are pre-selected as references."
           references={dialogState.references}
           onAddReferenceFile={handleAddDialogReference}
           onRemoveReference={handleRemoveDialogReference}
           isUploadingReference={isUploadingDialogRef}
           prompt={dialogState.prompt}
           onPromptChange={handleDialogPromptChange}
-          promptPlaceholder="Describe the object (optional if references are provided)"
+          promptPlaceholder="Describe the 3D object (optional if references are provided)"
           model={imageGenerationModel}
           onModelChange={(next) => onImageGenerationModelChange?.(next)}
           isGenerating={isGeneratingDialog}

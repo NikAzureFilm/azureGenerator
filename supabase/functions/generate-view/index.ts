@@ -18,6 +18,12 @@ import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 import { getImageGenerationTokenCost } from '../../../shared/imageGeneration.ts';
 import { Buffer } from 'node:buffer';
 import OpenAI from 'npm:openai@^6.34.0';
+import {
+  buildImageGenerationPrompt,
+  VIEW_DIRECTIVE,
+  type ImageGenerationMode,
+  type ViewLabel,
+} from '../_shared/viewPrompt.ts';
 
 initSentry();
 
@@ -35,51 +41,6 @@ const googleGenAI = new GoogleGenAI({
 const openAI = new OpenAI({
   apiKey: Deno.env.get('OPENAI_API_KEY')?.trim() ?? '',
 });
-
-type ViewLabel = 'front' | 'left' | 'back' | 'right';
-
-const VIEW_DIRECTIVE: Record<ViewLabel, string> = {
-  front:
-    'Camera directly in front of the object at eye level. The object faces the camera head-on. Do not show the left or right side profile.',
-  left: 'Camera directly to the left side of the object: rotate 90 degrees counter-clockwise from the front view around the vertical axis. Show the true left-side profile silhouette. If a right-side profile reference is attached, use it only for identity and proportions; do not duplicate or mirror it.',
-  back: 'Camera directly behind the object, 180 degrees from front. Show the true back of the object.',
-  right:
-    'Camera directly to the right side of the object: rotate 90 degrees clockwise from the front view around the vertical axis. Show the true right-side profile silhouette, the opposite side of the object from the left profile. If a left-side profile reference is attached, use it only for identity and proportions; do not duplicate or mirror it.',
-};
-
-const BASE_INSTRUCTIONS =
-  'Output a single centered object on a plain white background with neutral lighting and a soft shadow directly underneath. Keep the whole object in-frame with 5-10% padding, no cropping, no text.';
-
-const buildReferenceContext = (referenceLabels: string[]): string => {
-  const cleanedLabels = referenceLabels
-    .map((label) => label.trim())
-    .filter(Boolean);
-
-  if (cleanedLabels.length === 0) return '';
-
-  return `Reference images are attached in this order: ${cleanedLabels.join(', ')}.`;
-};
-
-const buildPrompt = (
-  view: ViewLabel,
-  userPrompt: string,
-  hasRef: boolean,
-  mode: 'input' | 'multiview',
-  referenceLabels: string[],
-): string => {
-  if (mode === 'input') {
-    if (hasRef) {
-      return `${BASE_INSTRUCTIONS} Re-render the reference as a clean 3D-ready input image. Preserve the main object's identity, proportions, colors, and materials. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
-    }
-    return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}.`;
-  }
-  const viewDirective = VIEW_DIRECTIVE[view];
-  const referenceContext = buildReferenceContext(referenceLabels);
-  if (hasRef) {
-    return `${BASE_INSTRUCTIONS} ${referenceContext} Re-render the SAME object shown in the reference image from a different angle: ${viewDirective} Preserve the object's identity, geometry, proportions, colors, and materials exactly. Only the viewing angle changes. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
-  }
-  return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}. ${viewDirective}`;
-};
 
 const isOpenAiSafetyRejection = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
@@ -137,7 +98,7 @@ Deno.serve(async (req) => {
       refImageIds?: string[];
       refImageLabels?: string[];
       provider?: 'openai' | 'nano-banana';
-      mode?: 'input' | 'multiview';
+      mode?: ImageGenerationMode;
     } = await req.json();
 
     const referenceIds: string[] = (() => {
@@ -185,13 +146,13 @@ Deno.serve(async (req) => {
 
     const userId = userData.user.id;
     const shouldUseOpenAi = provider === 'openai';
-    const builtPrompt = buildPrompt(
+    const builtPrompt = buildImageGenerationPrompt({
       view,
       userPrompt,
-      referenceIds.length > 0,
+      hasReference: referenceIds.length > 0,
       mode,
-      Array.isArray(refImageLabels) ? refImageLabels : [],
-    );
+      referenceLabels: Array.isArray(refImageLabels) ? refImageLabels : [],
+    });
     const tokenCost = shouldUseOpenAi
       ? FEATURE_COSTS.generatedInputImage.tokens
       : getImageGenerationTokenCost('nano-banana-2');

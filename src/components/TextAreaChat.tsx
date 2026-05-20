@@ -468,7 +468,7 @@ const VALID_IMAGE_FORMATS = [
   'image/webp',
 ];
 
-const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D asset';
+const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D object asset';
 
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
@@ -1513,7 +1513,7 @@ function TextAreaChat({
         open={isImageCreatorOpen}
         onOpenChange={setIsImageCreatorOpen}
         title="Create input image"
-        description="Generate a 3D-ready reference image from a prompt and an optional reference image."
+        description="The Object Agent creates a clean 3D object reference from your current brief and optional image."
         references={
           imageCreatorRef
             ? [
