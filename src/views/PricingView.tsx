@@ -40,9 +40,9 @@ export function PricingView() {
               Pricing
             </h1>
             <p className="mt-3 text-sm leading-6 text-adam-text-secondary">
-              CADAM uses tokens for image generation, CAD generation, and 3D
-              mesh creation. The table below shows the token cost before you run
-              each workflow.
+              Tokens are used for image generation, CAD generation, and 3D mesh
+              creation. The table below shows the token cost before you run each
+              workflow.
             </p>
           </div>
           <Button asChild className="w-fit rounded-lg">
