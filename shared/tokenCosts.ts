@@ -144,6 +144,7 @@ export function getParametricModelTokenCost(model: string): number {
     case 'openai/gpt-5.5':
       return FEATURE_COSTS.parametricCadPro.tokens;
     case 'google/gemini-3.1-pro-preview':
+    case 'google/gemini-3.5-flash':
       return FEATURE_COSTS.parametricCadLite.tokens;
     case 'anthropic/claude-opus-4.7':
       return FEATURE_COSTS.parametricCadReasoning.tokens;

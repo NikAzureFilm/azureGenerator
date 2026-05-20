@@ -8,12 +8,21 @@ import {
 const liteModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.1-pro-preview',
 );
+const flashModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'google/gemini-3.5-flash',
+);
 
 assert.ok(liteModel);
 assert.notEqual(liteModel.disabled, true);
+assert.ok(flashModel);
+assert.notEqual(flashModel.disabled, true);
 assert.equal(
   normalizeParametricChatModel('google/gemini-3.1-pro-preview'),
   'google/gemini-3.1-pro-preview',
+);
+assert.equal(
+  normalizeParametricChatModel('google/gemini-3.5-flash'),
+  'google/gemini-3.5-flash',
 );
 assert.equal(normalizeParametricChatModel(undefined), DEFAULT_PARAMETRIC_MODEL);
 assert.equal(normalizeParametricChatModel('quality'), DEFAULT_PARAMETRIC_MODEL);

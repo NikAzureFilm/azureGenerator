@@ -24,6 +24,16 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsVision: true,
     tokenCost: FEATURE_COSTS.parametricCadLite.tokens,
   },
+  {
+    id: 'google/gemini-3.5-flash',
+    name: 'Flash',
+    description: 'Fast, lower-cost CAD generation with Gemini 3.5 Flash',
+    provider: 'Google',
+    supportsTools: true,
+    supportsThinking: true,
+    supportsVision: true,
+    tokenCost: FEATURE_COSTS.parametricCadLite.tokens,
+  },
 ];
 
 export function normalizeParametricChatModel(

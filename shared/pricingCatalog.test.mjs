@@ -95,5 +95,6 @@ assert.ok(
 
 assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 75);
 assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 20);
+assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 20);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
 assert.equal(getParametricModelTokenCost('legacy-model'), 35);
