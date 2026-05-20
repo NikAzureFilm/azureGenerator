@@ -40,21 +40,32 @@ type ViewLabel = 'front' | 'left' | 'back' | 'right';
 
 const VIEW_DIRECTIVE: Record<ViewLabel, string> = {
   front:
-    'Camera directly in front of the object at eye level. The object faces the camera head-on.',
-  left: 'Camera directly to the left side of the object (90° counter-clockwise from front). Show the profile of its left side.',
-  back: 'Camera directly behind the object (180° from front). Show the back of the object.',
+    'Camera directly in front of the object at eye level. The object faces the camera head-on. Do not show the left or right side profile.',
+  left: 'Camera directly to the left side of the object: rotate 90 degrees counter-clockwise from the front view around the vertical axis. Show the true left-side profile silhouette. If a right-side profile reference is attached, use it only for identity and proportions; do not duplicate or mirror it.',
+  back: 'Camera directly behind the object, 180 degrees from front. Show the true back of the object.',
   right:
-    'Camera directly to the right side of the object (90° clockwise from front). Show the profile of its right side.',
+    'Camera directly to the right side of the object: rotate 90 degrees clockwise from the front view around the vertical axis. Show the true right-side profile silhouette, the opposite side of the object from the left profile. If a left-side profile reference is attached, use it only for identity and proportions; do not duplicate or mirror it.',
 };
 
 const BASE_INSTRUCTIONS =
-  'Output a single centered object on a plain white background with neutral lighting and a soft shadow directly underneath. Keep the whole object in-frame with 5–10% padding, no cropping, no text.';
+  'Output a single centered object on a plain white background with neutral lighting and a soft shadow directly underneath. Keep the whole object in-frame with 5-10% padding, no cropping, no text.';
+
+const buildReferenceContext = (referenceLabels: string[]): string => {
+  const cleanedLabels = referenceLabels
+    .map((label) => label.trim())
+    .filter(Boolean);
+
+  if (cleanedLabels.length === 0) return '';
+
+  return `Reference images are attached in this order: ${cleanedLabels.join(', ')}.`;
+};
 
 const buildPrompt = (
   view: ViewLabel,
   userPrompt: string,
   hasRef: boolean,
   mode: 'input' | 'multiview',
+  referenceLabels: string[],
 ): string => {
   if (mode === 'input') {
     if (hasRef) {
@@ -63,8 +74,9 @@ const buildPrompt = (
     return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}.`;
   }
   const viewDirective = VIEW_DIRECTIVE[view];
+  const referenceContext = buildReferenceContext(referenceLabels);
   if (hasRef) {
-    return `${BASE_INSTRUCTIONS} Re-render the SAME object shown in the reference image from a different angle: ${viewDirective} Preserve the object's identity, geometry, proportions, colors, and materials exactly. Only the viewing angle changes. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
+    return `${BASE_INSTRUCTIONS} ${referenceContext} Re-render the SAME object shown in the reference image from a different angle: ${viewDirective} Preserve the object's identity, geometry, proportions, colors, and materials exactly. Only the viewing angle changes. ${userPrompt ? `Additional guidance: ${userPrompt}` : ''}`.trim();
   }
   return `${BASE_INSTRUCTIONS} Generate a 3D-ready rendering of: ${userPrompt}. ${viewDirective}`;
 };
@@ -114,6 +126,7 @@ Deno.serve(async (req) => {
       conversationId,
       refImageId,
       refImageIds,
+      refImageLabels,
       provider,
       mode = 'input',
     }: {
@@ -122,6 +135,7 @@ Deno.serve(async (req) => {
       conversationId?: string;
       refImageId?: string;
       refImageIds?: string[];
+      refImageLabels?: string[];
       provider?: 'openai' | 'nano-banana';
       mode?: 'input' | 'multiview';
     } = await req.json();
@@ -176,6 +190,7 @@ Deno.serve(async (req) => {
       userPrompt,
       referenceIds.length > 0,
       mode,
+      Array.isArray(refImageLabels) ? refImageLabels : [],
     );
     const tokenCost = shouldUseOpenAi
       ? FEATURE_COSTS.generatedInputImage.tokens

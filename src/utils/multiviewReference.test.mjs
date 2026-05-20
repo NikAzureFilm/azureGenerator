@@ -23,7 +23,7 @@ assert.equal(
     targetSlot: 'left',
     prompt: '',
   }),
-  'Generate a left-side orthographic view of this 3D object.',
+  'Generate a left-side profile view of this 3D object.',
 );
 
 assert.equal(
@@ -31,7 +31,31 @@ assert.equal(
     targetSlot: 'left',
     prompt: 'orange dragon with teal wings',
   }),
-  'orange dragon with teal wings Generate a left-side orthographic view of this 3D object.',
+  'orange dragon with teal wings Generate a left-side profile view of this 3D object.',
+);
+
+assert.equal(
+  buildMultiviewGenerationPrompt({
+    targetSlot: 'front',
+    prompt: '',
+  }),
+  'Generate a front view of this 3D object.',
+);
+
+assert.equal(
+  buildMultiviewGenerationPrompt({
+    targetSlot: 'back',
+    prompt: '',
+  }),
+  'Generate a back view of this 3D object.',
+);
+
+assert.equal(
+  buildMultiviewGenerationPrompt({
+    targetSlot: 'right',
+    prompt: '',
+  }),
+  'Generate a right-side profile view of this 3D object.',
 );
 
 assert.equal(getMultiviewGenerationMode(), 'multiview');

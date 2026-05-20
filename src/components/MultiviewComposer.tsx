@@ -266,6 +266,10 @@ export function MultiviewComposer({
               slots,
               targetSlot,
             });
+      const refImageLabels =
+        references.length > 0
+          ? references.map((ref) => ref.label ?? 'Additional reference')
+          : undefined;
       const generationPrompt =
         trimmedPrompt ||
         buildMultiviewGenerationPrompt({
@@ -279,6 +283,10 @@ export function MultiviewComposer({
           view: targetSlot,
           prompt: generationPrompt,
           refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
+          refImageLabels:
+            refImageLabels && refImageLabels.length > 0
+              ? refImageLabels
+              : undefined,
           provider: getImageGenerationProvider(imageGenerationModel),
           mode: getMultiviewGenerationMode(),
         },
