@@ -23,6 +23,10 @@ const utilsSource = readFileSync(
   fileURLToPath(new URL('./utils.ts', import.meta.url)),
   'utf8',
 );
+const modelSelectorSource = readFileSync(
+  fileURLToPath(new URL('../components/ModelSelector.tsx', import.meta.url)),
+  'utf8',
+);
 
 const flashModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.5-flash',
@@ -34,7 +38,7 @@ assert.deepEqual(
   ['google/gemini-3.5-flash'],
 );
 assert.ok(flashModel);
-assert.equal(flashModel.name, 'Gemini 3.5 Flash');
+assert.equal(flashModel.name, 'CAD');
 assert.equal(flashModel.tokenCost, 50);
 assert.notEqual(flashModel.disabled, true);
 assert.equal(
@@ -67,4 +71,14 @@ for (const source of [
   assert.equal(source.includes("return 'openai/gpt-5.5'"), false);
 }
 assert.equal(chatSectionSource.includes('normalizeParametricChatModel'), true);
-assert.equal(parametricEditorSource.includes('normalizeParametricChatModel'), true);
+assert.equal(
+  parametricEditorSource.includes('normalizeParametricChatModel'),
+  true,
+);
+assert.equal(modelSelectorSource.includes('aria-label="Model cost"'), true);
+assert.equal(
+  modelSelectorSource.includes(
+    '<span className="font-normal">{model?.name}</span>',
+  ),
+  false,
+);
