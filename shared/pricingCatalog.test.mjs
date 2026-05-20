@@ -68,9 +68,7 @@ assert.deepEqual(
   {
     chat: 10,
     promptGeneration: 10,
-    parametric: 35,
-    parametricCadPro: 75,
-    parametricCadLite: 20,
+    parametric: 50,
     parametricCadReasoning: 120,
     generatedInputImage: 22,
     generatedInputImageNanoBanana: 7,
@@ -93,8 +91,8 @@ assert.ok(
   'Max quality mesh should cost more than draft mesh',
 );
 
-assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 75);
-assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 20);
-assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 20);
+assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 50);
+assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 50);
+assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 50);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
-assert.equal(getParametricModelTokenCost('legacy-model'), 35);
+assert.equal(getParametricModelTokenCost('legacy-model'), 50);

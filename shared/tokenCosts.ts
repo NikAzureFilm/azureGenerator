@@ -33,20 +33,8 @@ export const FEATURE_COSTS = {
   parametric: {
     id: 'parametric',
     label: 'Parametric CAD generation',
-    tokens: 35,
+    tokens: 50,
     description: 'Text-to-CAD generation with editable parameters.',
-  },
-  parametricCadPro: {
-    id: 'parametric-cad-pro',
-    label: 'CAD Pro generation',
-    tokens: 75,
-    description: 'Recommended default for accurate, practical CAD generation.',
-  },
-  parametricCadLite: {
-    id: 'parametric-cad-lite',
-    label: 'CAD Lite generation',
-    tokens: 20,
-    description: 'Cheaper, faster alternative for quick iterations.',
   },
   parametricCadReasoning: {
     id: 'parametric-cad-reasoning',
@@ -141,11 +129,6 @@ export function getCreativeModelCost(model: CreativeModel): PublicFeatureCost {
 
 export function getParametricModelTokenCost(model: string): number {
   switch (model) {
-    case 'openai/gpt-5.5':
-      return FEATURE_COSTS.parametricCadPro.tokens;
-    case 'google/gemini-3.1-pro-preview':
-    case 'google/gemini-3.5-flash':
-      return FEATURE_COSTS.parametricCadLite.tokens;
     case 'anthropic/claude-opus-4.7':
       return FEATURE_COSTS.parametricCadReasoning.tokens;
     default:

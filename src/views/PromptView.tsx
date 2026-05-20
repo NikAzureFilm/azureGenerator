@@ -29,6 +29,7 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
+import { DEFAULT_PARAMETRIC_MODEL } from '@/lib/parametricModels';
 import { useLayoutContext } from '@/contexts/LayoutContext';
 
 const PROMO_PILLS = [
@@ -60,7 +61,7 @@ export function PromptView() {
 
   const [type, setType] = useState<'parametric' | 'creative'>('parametric');
 
-  const [model, setModel] = useState<Model>('openai/gpt-5.5');
+  const [model, setModel] = useState<Model>(DEFAULT_PARAMETRIC_MODEL);
   const [imageGenerationModel, setImageGenerationModel] =
     useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
 
@@ -70,7 +71,7 @@ export function PromptView() {
     if (newType === 'creative') {
       setModel(DEFAULT_CREATIVE_MODEL);
     } else {
-      setModel('openai/gpt-5.5');
+      setModel(DEFAULT_PARAMETRIC_MODEL);
     }
   };
 

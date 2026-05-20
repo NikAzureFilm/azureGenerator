@@ -9,8 +9,7 @@ const FEATURE_ROWS = [
     rows: [
       FEATURE_COSTS.chat,
       FEATURE_COSTS.promptGeneration,
-      FEATURE_COSTS.parametricCadLite,
-      FEATURE_COSTS.parametricCadPro,
+      FEATURE_COSTS.parametric,
       FEATURE_COSTS.parametricCadReasoning,
     ],
   },

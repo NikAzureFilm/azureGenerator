@@ -23,6 +23,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { normalizeParametricChatModel } from '@/lib/parametricModels';
 import { Share } from 'lucide-react';
 import { useMeshData } from '@/hooks/useMeshData';
 import {
@@ -87,7 +88,7 @@ export function ChatSection({
   const model =
     conversation.type === 'creative'
       ? normalizeCreativeModel(conversation.settings?.model)
-      : (conversation.settings?.model ?? 'openai/gpt-5.5');
+      : normalizeParametricChatModel(conversation.settings?.model);
   const imageGenerationModel = normalizeImageGenerationModel(
     conversation.settings?.imageGenerationModel,
   );

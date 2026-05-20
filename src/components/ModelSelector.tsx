@@ -111,6 +111,30 @@ export function ModelSelector({
     setIsSliding(false);
   };
 
+  if (models.length <= 1) {
+    const model = selectedModelConfig ?? models[0];
+
+    return (
+      <Button
+        variant="ghost"
+        className={cn(
+          'flex h-8 w-auto items-center gap-1.5 rounded-lg px-3 text-sm transition-all duration-200',
+          focused ? 'text-white' : 'text-adam-text-secondary',
+          className,
+        )}
+        disabled={!!disabled}
+        aria-label={model?.name}
+      >
+        <span className="font-normal">{model?.name}</span>
+        {model?.tokenCost ? (
+          <span className="hidden rounded bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary md:inline">
+            {formatTokenCost(model.tokenCost)}
+          </span>
+        ) : null}
+      </Button>
+    );
+  }
+
   return (
     <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
       <DropdownMenuTrigger asChild>

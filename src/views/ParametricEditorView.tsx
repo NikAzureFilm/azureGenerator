@@ -20,6 +20,7 @@ import Tree from '@shared/Tree';
 import { useRequestCancellation } from '@/hooks/useRequestCancellation';
 import posthog from 'posthog-js';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { normalizeParametricChatModel } from '@/lib/parametricModels';
 
 export function ParametricEditorView() {
   const { conversation, updateConversationAsync } = useConversation();
@@ -129,7 +130,7 @@ export function ParametricEditorView() {
 
       const newContent: Content = {
         text: message.content.text ?? '',
-        model: message.content.model ?? 'openai/gpt-5.5',
+        model: normalizeParametricChatModel(message.content.model),
         artifact: {
           title: message.content.artifact?.title ?? '',
           version: message.content.artifact?.version ?? '',

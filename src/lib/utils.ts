@@ -3,7 +3,11 @@ import { twMerge } from 'tailwind-merge';
 import { Message, Model, Parameter } from '@shared/types';
 import { ModelConfig } from '../types/misc.ts';
 import { getCreativeModelTokenCost } from '@shared/tokenCosts';
-import { PARAMETRIC_MODELS } from './parametricModels';
+import {
+  DEFAULT_PARAMETRIC_MODEL,
+  PARAMETRIC_MODELS,
+  normalizeParametricChatModel,
+} from './parametricModels';
 export { PARAMETRIC_MODELS };
 
 export function cn(...inputs: ClassValue[]) {
@@ -272,14 +276,20 @@ export function getBackupModel({
   parentMessage?: Message;
   type: 'parametric' | 'creative';
 }): Model {
+  if (type === 'parametric') {
+    if (message.content.model) {
+      return normalizeParametricChatModel(message.content.model);
+    }
+    if (parentMessage?.content.model) {
+      return normalizeParametricChatModel(parentMessage.content.model);
+    }
+    return DEFAULT_PARAMETRIC_MODEL;
+  }
   if (message.content.model) {
     return message.content.model;
   }
   if (parentMessage?.content.model) {
     return parentMessage.content.model;
-  }
-  if (type === 'parametric') {
-    return 'openai/gpt-5.5';
   } else {
     return 'quality';
   }

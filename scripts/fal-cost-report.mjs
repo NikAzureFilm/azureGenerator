@@ -42,9 +42,7 @@ const DEFAULT_UNIT_PRICES = new Map(
 const CONFIGURED_TOKENS = {
   chat: 10,
   promptGeneration: 10,
-  parametric: 35,
-  parametricCadPro: 75,
-  parametricCadLite: 20,
+  parametric: 50,
   parametricCadReasoning: 120,
   generatedInputImage: 22,
   generatedInputImageNanoBanana: 7,
@@ -71,17 +69,7 @@ const FEATURE_BREAKDOWNS = [
   {
     id: 'parametric',
     label: 'Parametric CAD generation',
-    components: [{ name: 'Default CAD model budget', costUsd: 0.35 }],
-  },
-  {
-    id: 'parametricCadPro',
-    label: 'CAD Pro generation',
-    components: [{ name: 'CAD Pro model budget', costUsd: 0.75 }],
-  },
-  {
-    id: 'parametricCadLite',
-    label: 'CAD Lite generation',
-    components: [{ name: 'CAD Lite model budget', costUsd: 0.2 }],
+    components: [{ name: 'CAD model budget', costUsd: 0.5 }],
   },
   {
     id: 'parametricCadReasoning',
