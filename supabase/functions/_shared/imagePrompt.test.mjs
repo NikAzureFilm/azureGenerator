@@ -6,8 +6,14 @@ import {
 
 assert.match(
   THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /single centered 3D object/i,
-  'global image enforcement should require a single centered 3D object',
+  /single centered 3D model, 3D object/i,
+  'global image enforcement should require a single centered 3D model and 3D object',
+);
+
+assert.match(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /single centered 3D model/i,
+  'global image enforcement should explicitly require generated images to be 3D models',
 );
 
 assert.match(
