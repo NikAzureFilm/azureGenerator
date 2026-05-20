@@ -53,7 +53,7 @@ const CONFIGURED_TOKENS = {
   fastMesh: 41,
   qualityMesh: 34,
   ultraMesh: 60,
-  multiviewMesh: 61,
+  multiviewMesh: 60,
   upscaleMesh: 76,
 };
 
