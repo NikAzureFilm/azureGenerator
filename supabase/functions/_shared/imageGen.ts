@@ -5,6 +5,7 @@ import { fal } from 'npm:@fal-ai/client';
 import OpenAI from 'npm:openai@^6.34.0';
 import { reformatSignedUrl } from './messageUtils.ts';
 import { detectImageMediaType } from './imageMime.ts';
+import { enforce3DObjectPrompt } from './imagePrompt.ts';
 
 const DEBUG_LOGS =
   Deno.env.get('ENVIRONMENT') === 'local' ||
@@ -19,7 +20,7 @@ const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
 // Shared 3D model generation instructions for consistency across all image generation services
 export const INSTRUCTIONS_3D =
-  'You are generating a fully textured and rendered 3D model. Output one centered 3D model or multiple centered objects, no text. Plain white background (or an empty background which provides optimal contrast with the textures of the 3D model), neutral lighting, and a soft shadow directly under the 3D model. Keep the entire object fully in-frame with 5–10% padding; no cropping. Make sure the description strongly impacts the form and shape of the 3D Model not just the surface texture';
+  'You are generating a fully textured and rendered 3D model. Output one centered 3D object or 3D character asset, no text. Plain white background (or an empty background which provides optimal contrast with the textures of the 3D model), neutral lighting, and a soft shadow directly under the 3D model. Keep the entire object fully in-frame with 5-10% padding; no cropping. Make sure the description strongly impacts the form and shape of the 3D Model not just the surface texture.';
 
 // Trim to survive copy-pasted env vars with trailing newlines
 // (newline in Authorization header makes fetch throw and breaks all FAL calls).
@@ -148,10 +149,11 @@ export const generateImageWithGptImage2 = async (
   // protected admin pricing config, not in source.
   quality: GptImageQuality,
 ): Promise<GptImage2Result> => {
+  const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog('Generating image with gpt-image-2 via Responses API', {
     userId,
     conversationId,
-    prompt,
+    prompt: enforcedPrompt,
     imagesCount: images.length,
     priorImageCallId,
   });
@@ -159,7 +161,7 @@ export const generateImageWithGptImage2 = async (
   const content: Array<
     | { type: 'input_text'; text: string }
     | { type: 'input_image'; image_url: string; detail: 'auto' }
-  > = [{ type: 'input_text', text: prompt || 'Generate an image' }];
+  > = [{ type: 'input_text', text: enforcedPrompt }];
 
   // Base64 path is only used when we have no prior gpt-image-2 call to
   // reference (e.g. a freshly uploaded user image).
@@ -252,10 +254,11 @@ export const generateImageWithGeminiMultiTurn = async (
   prompt: string,
   images: string[],
 ): Promise<Buffer> => {
+  const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog('Generating image with Gemini Multi-Turn', {
     userId,
     conversationId,
-    prompt,
+    prompt: enforcedPrompt,
     imagesCount: images.length,
   });
 
@@ -300,7 +303,7 @@ export const generateImageWithGeminiMultiTurn = async (
   const messageContent: {
     text?: string;
     inlineData?: { mimeType: string; data: string };
-  }[] = [{ text: prompt || 'Generate an image' }];
+  }[] = [{ text: enforcedPrompt }];
   messageContent.push(...imageParts);
 
   debugLog('Sending message to Gemini Multi-Turn Chat');
@@ -342,6 +345,7 @@ export const generateImageWithFalFlux = async (
   promptText: string,
   images: string[],
 ) => {
+  const enforcedPrompt = enforce3DObjectPrompt(promptText);
   // Extract all available images for visual context, similar to how OpenAI processes them
   const contextImages: string[] = [];
 
@@ -364,8 +368,8 @@ export const generateImageWithFalFlux = async (
   // Enhance the prompt with 3D instructions and context
   const enhancedPrompt =
     contextImages.length > 0
-      ? `${INSTRUCTIONS_3D} Based on the provided image(s), ${promptText}. Maintain visual consistency and style with the reference image(s).`
-      : `${INSTRUCTIONS_3D} ${promptText}`;
+      ? `${INSTRUCTIONS_3D} Based on the provided image(s), ${enforcedPrompt}. Maintain visual consistency and style with the reference image(s).`
+      : `${INSTRUCTIONS_3D} ${enforcedPrompt}`;
 
   let imageInputs: string[] = [];
   if (contextImages.length > 0) {
@@ -467,11 +471,12 @@ export const generateImageWithGeminiFlash = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
 ): Promise<Buffer> => {
+  const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Generating image with ${GEMINI_FLASH_IMAGE_MODEL}`);
 
   const result = await googleGenAI.models.generateContent({
     model: GEMINI_FLASH_IMAGE_MODEL,
-    contents: [{ text: prompt }],
+    contents: [{ text: enforcedPrompt }],
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
     },
@@ -507,12 +512,13 @@ export const generateImageWithGeminiFlashEdit = async (
   prompt: string,
   imageUrls: string | string[],
 ): Promise<Buffer> => {
+  const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
   const normalizedImageUrls = Array.isArray(imageUrls)
     ? imageUrls
     : [imageUrls];
   debugLog('Input image URLs:', normalizedImageUrls);
-  debugLog('Prompt:', prompt);
+  debugLog('Prompt:', enforcedPrompt);
 
   try {
     const imageParts = await Promise.all(
@@ -543,7 +549,7 @@ export const generateImageWithGeminiFlashEdit = async (
 
     const result = await googleGenAI.models.generateContent({
       model: GEMINI_FLASH_IMAGE_MODEL,
-      contents: [{ text: prompt }, ...imageParts],
+      contents: [{ text: enforcedPrompt }, ...imageParts],
       config: {
         responseModalities: [Modality.TEXT, Modality.IMAGE],
       },

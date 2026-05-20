@@ -36,3 +36,18 @@ assert.doesNotMatch(
   /result: null,\s+status: 'completed'/,
   'Prior image_generation_call references only pass the documented call id',
 );
+assert.match(
+  imageGenSource,
+  /import \{\s*enforce3DObjectPrompt/,
+  'image generation providers should import global 3D object prompt enforcement',
+);
+assert.match(
+  imageGenSource,
+  /const enforcedPrompt = enforce3DObjectPrompt\(prompt\);/,
+  'direct prompt providers should enforce 3D object output before calling image models',
+);
+assert.match(
+  imageGenSource,
+  /const enforcedPrompt = enforce3DObjectPrompt\(promptText\);/,
+  'Flux prompt provider should enforce 3D object output before enhancing prompts',
+);
