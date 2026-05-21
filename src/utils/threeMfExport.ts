@@ -156,12 +156,28 @@ ${triangleXml}
 
 export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
   const normalizedPalette = normalizePalette(palette);
+  const perFilament = (value: string) => normalizedPalette.map(() => value);
 
   return JSON.stringify(
     {
+      name: 'project_settings',
+      from: 'project',
+      version: '01.10.02.76',
       filament_colour: normalizedPalette,
-      filament_type: normalizedPalette.map(() => 'PLA'),
-      filament_settings_id: normalizedPalette.map(() => 'Generic PLA'),
+      filament_type: perFilament('PLA'),
+      filament_settings_id: perFilament('Generic PLA'),
+      filament_vendor: perFilament('Generic'),
+      filament_diameter: perFilament('1.75'),
+      filament_density: perFilament('1.24'),
+      filament_cost: perFilament('20'),
+      filament_ids: perFilament(''),
+      filament_max_volumetric_speed: perFilament('12'),
+      filament_flow_ratio: perFilament('0.98'),
+      nozzle_temperature: perFilament('220'),
+      nozzle_temperature_initial_layer: perFilament('220'),
+      nozzle_temperature_range_high: perFilament('240'),
+      nozzle_temperature_range_low: perFilament('190'),
+      single_extruder_multi_material: '1',
     },
     null,
     2,
@@ -241,6 +257,7 @@ async function createThreeMfPackage({
 function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
   const vertices: VectorTuple[] = [];
   const triangles: SceneGeometry['triangles'] = [];
+  const vertexMap = new Map<string, number>();
 
   scene.updateMatrixWorld(true);
   scene.traverse((node) => {
@@ -259,12 +276,11 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
     const groups = geometry.groups.length
       ? geometry.groups
       : [{ start: 0, count: getIndexCount(geometry), materialIndex: 0 }];
-    const localVertexMap = new Map<string, number>();
 
     const getOrCreateVertexIndex = (sourceIndex: number): number => {
       const vertex = readWorldVertex(position, sourceIndex, matrixWorld);
       const key = getVertexKey(vertex);
-      const existingIndex = localVertexMap.get(key);
+      const existingIndex = vertexMap.get(key);
 
       if (existingIndex !== undefined) {
         return existingIndex;
@@ -272,7 +288,7 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
 
       const vertexIndex = vertices.length;
       vertices.push(vertex);
-      localVertexMap.set(key, vertexIndex);
+      vertexMap.set(key, vertexIndex);
       return vertexIndex;
     };
 

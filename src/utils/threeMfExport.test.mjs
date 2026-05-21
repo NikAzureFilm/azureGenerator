@@ -64,6 +64,16 @@ assert.deepEqual(projectSettings.filament_settings_id, [
   'Generic PLA',
   'Generic PLA',
 ]);
+assert.equal(projectSettings.name, 'project_settings');
+assert.equal(projectSettings.from, 'project');
+assert.equal(projectSettings.single_extruder_multi_material, '1');
+assert.deepEqual(projectSettings.filament_vendor, ['Generic', 'Generic']);
+assert.deepEqual(projectSettings.filament_diameter, ['1.75', '1.75']);
+assert.deepEqual(projectSettings.nozzle_temperature, ['220', '220']);
+assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
+  '220',
+  '220',
+]);
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -115,6 +125,7 @@ const packagedSettings = JSON.parse(
   await settingsEntry.getData(new TextWriter()),
 );
 assert.deepEqual(packagedSettings.filament_colour, ['#FF0000']);
+assert.equal(packagedSettings.name, 'project_settings');
 await zipReader.close();
 
 const squareScene = new THREE.Scene();
@@ -153,6 +164,40 @@ assert.match(
   /<triangle v1="0" v2="2" v3="3"[^>]+paint_color="4"\/>/,
 );
 await squareZipReader.close();
+
+const splitSquareScene = new THREE.Scene();
+for (const positions of [
+  [0, 0, 0, 10, 0, 0, 10, 10, 0],
+  [0, 0, 0, 10, 10, 0, 0, 10, 0],
+]) {
+  splitSquareScene.add(
+    new THREE.Mesh(
+      new THREE.BufferGeometry().setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(positions, 3),
+      ),
+      new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+    ),
+  );
+}
+
+const splitSquareBlob = await createThreeMfBlobFromScene({
+  scene: splitSquareScene,
+  filename: 'split-square',
+  colorCount: 1,
+});
+const splitSquareZipReader = new ZipReader(new BlobReader(splitSquareBlob));
+const splitSquareModelEntry = (await splitSquareZipReader.getEntries()).find(
+  (entry) => entry.filename === '3D/3dmodel.model',
+);
+assert.ok(splitSquareModelEntry);
+const splitSquareModelXml = await splitSquareModelEntry.getData(
+  new TextWriter(),
+);
+assert.equal(splitSquareModelXml.match(/<vertex /g)?.length, 4);
+assert.match(splitSquareModelXml, /<triangle v1="0" v2="1" v3="2"/);
+assert.match(splitSquareModelXml, /<triangle v1="0" v2="2" v3="3"/);
+await splitSquareZipReader.close();
 
 const cubeScene = new THREE.Scene();
 cubeScene.add(
