@@ -12,6 +12,25 @@ const RELATIONSHIPS_NAMESPACE =
   'http://schemas.openxmlformats.org/package/2006/relationships';
 const CONTENT_TYPES_NAMESPACE =
   'http://schemas.openxmlformats.org/package/2006/content-types';
+const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
+  '4',
+  '8',
+  '0C',
+  '1C',
+  '2C',
+  '3C',
+  '4C',
+  '5C',
+  '6C',
+  '7C',
+  '8C',
+  '9C',
+  'AC',
+  'BC',
+  'CC',
+  'DC',
+];
+const VERTEX_KEY_PRECISION = 1e-6;
 
 type VectorTuple = [number, number, number];
 
@@ -62,6 +81,7 @@ export function buildThreeMfContentTypesXml(): string {
 <Types xmlns="${CONTENT_TYPES_NAMESPACE}">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+  <Default Extension="config" ContentType="application/octet-stream"/>
   <Override PartName="/3D/3dmodel.model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
 </Types>`);
 }
@@ -89,9 +109,6 @@ export function buildThreeMfModelXml({
   const colors = normalizedPalette
     .map((color) => `      <m:color color="${color}FF"/>`)
     .join('\n');
-  const multiProperties = normalizedPalette
-    .map((_, index) => `      <m:multi pindices="${index} ${index}"/>`)
-    .join('\n');
   const vertexXml = vertices
     .map(
       ([x, y, z]) =>
@@ -104,7 +121,8 @@ export function buildThreeMfModelXml({
         triangle.colorIndex,
         normalizedPalette.length,
       );
-      return `        <triangle v1="${triangle.v1}" v2="${triangle.v2}" v3="${triangle.v3}" pid="3" p1="${colorIndex}" p2="${colorIndex}" p3="${colorIndex}"/>`;
+      const paintColor = getBambuOrcaPaintColor(colorIndex);
+      return `        <triangle v1="${triangle.v1}" v2="${triangle.v2}" v3="${triangle.v3}" pid="2" p1="${colorIndex}" p2="${colorIndex}" p3="${colorIndex}" paint_color="${paintColor}"/>`;
     })
     .join('\n');
 
@@ -119,10 +137,7 @@ ${baseMaterials}
     <m:colorgroup id="2">
 ${colors}
     </m:colorgroup>
-    <m:multiproperties id="3" pids="1 2">
-${multiProperties}
-    </m:multiproperties>
-    <object id="4" type="model" pid="3" pindex="0">
+    <object id="4" type="model" pid="2" pindex="0">
       <mesh>
         <vertices>
 ${vertexXml}
@@ -137,6 +152,20 @@ ${triangleXml}
     <item objectid="4"/>
   </build>
 </model>`);
+}
+
+export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
+  const normalizedPalette = normalizePalette(palette);
+
+  return JSON.stringify(
+    {
+      filament_colour: normalizedPalette,
+      filament_type: normalizedPalette.map(() => 'PLA'),
+      filament_settings_id: normalizedPalette.map(() => 'Generic PLA'),
+    },
+    null,
+    2,
+  );
 }
 
 export async function createThreeMfBlobFromScene({
@@ -181,6 +210,9 @@ export async function createThreeMfBlobFromScene({
     contentTypesXml: buildThreeMfContentTypesXml(),
     relationshipsXml: buildThreeMfRelationshipsXml(),
     modelXml,
+    projectSettingsConfig: buildThreeMfProjectSettingsConfig(
+      palette.map(colorToHex),
+    ),
   });
 }
 
@@ -188,15 +220,21 @@ async function createThreeMfPackage({
   contentTypesXml,
   relationshipsXml,
   modelXml,
+  projectSettingsConfig,
 }: {
   contentTypesXml: string;
   relationshipsXml: string;
   modelXml: string;
+  projectSettingsConfig: string;
 }): Promise<Blob> {
   const zipWriter = new ZipWriter(new BlobWriter('model/3mf'));
   await zipWriter.add('[Content_Types].xml', new TextReader(contentTypesXml));
   await zipWriter.add('_rels/.rels', new TextReader(relationshipsXml));
   await zipWriter.add('3D/3dmodel.model', new TextReader(modelXml));
+  await zipWriter.add(
+    'Metadata/project_settings.config',
+    new TextReader(projectSettingsConfig),
+  );
   return zipWriter.close();
 }
 
@@ -221,6 +259,22 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
     const groups = geometry.groups.length
       ? geometry.groups
       : [{ start: 0, count: getIndexCount(geometry), materialIndex: 0 }];
+    const localVertexMap = new Map<string, number>();
+
+    const getOrCreateVertexIndex = (sourceIndex: number): number => {
+      const vertex = readWorldVertex(position, sourceIndex, matrixWorld);
+      const key = getVertexKey(vertex);
+      const existingIndex = localVertexMap.get(key);
+
+      if (existingIndex !== undefined) {
+        return existingIndex;
+      }
+
+      const vertexIndex = vertices.length;
+      vertices.push(vertex);
+      localVertexMap.set(key, vertexIndex);
+      return vertexIndex;
+    };
 
     for (const group of groups) {
       const material = materials[group.materialIndex ?? 0] ?? materials[0];
@@ -230,22 +284,25 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
         const a = getVertexIndex(geometry, offset);
         const b = getVertexIndex(geometry, offset + 1);
         const c = getVertexIndex(geometry, offset + 2);
-        const triangleVertices = [a, b, c].map((index) =>
-          readWorldVertex(position, index, matrixWorld),
-        );
+        const v1 = getOrCreateVertexIndex(a);
+        const v2 = getOrCreateVertexIndex(b);
+        const v3 = getOrCreateVertexIndex(c);
+
+        if (v1 === v2 || v2 === v3 || v1 === v3) {
+          continue;
+        }
+
         const triangleColor = sampleTriangleColor({
           material,
           colorAttribute,
           uvAttribute,
           vertexIndices: [a, b, c],
         });
-        const firstVertexIndex = vertices.length;
 
-        vertices.push(...triangleVertices);
         triangles.push({
-          v1: firstVertexIndex,
-          v2: firstVertexIndex + 1,
-          v3: firstVertexIndex + 2,
+          v1,
+          v2,
+          v3,
           color: triangleColor,
         });
       }
@@ -499,6 +556,14 @@ function colorToHex(color: THREE.Color): string {
   return `#${color.getHexString().toUpperCase()}`;
 }
 
+function getBambuOrcaPaintColor(colorIndex: number): string {
+  return (
+    BAMBU_ORCA_FILAMENT_SLOT_CODES[
+      clampIndex(colorIndex, BAMBU_ORCA_FILAMENT_SLOT_CODES.length)
+    ] ?? BAMBU_ORCA_FILAMENT_SLOT_CODES[0]
+  );
+}
+
 function normalizePalette(palette: string[]): string[] {
   const normalized = palette
     .map((color) => color.trim().toUpperCase())
@@ -519,6 +584,14 @@ function readWorldVertex(
   );
   vertex.applyMatrix4(matrixWorld);
   return [vertex.x, vertex.y, vertex.z];
+}
+
+function getVertexKey([x, y, z]: VectorTuple): string {
+  return [
+    Math.round(x / VERTEX_KEY_PRECISION),
+    Math.round(y / VERTEX_KEY_PRECISION),
+    Math.round(z / VERTEX_KEY_PRECISION),
+  ].join(',');
 }
 
 function getIndexCount(geometry: THREE.BufferGeometry): number {
