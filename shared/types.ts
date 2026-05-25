@@ -2,7 +2,6 @@ import type { Database } from './database.ts';
 import type { ImageGenerationModel } from './imageGeneration.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
-export type UltraMeshProvider = 'meshy-v6' | 'pixal3d';
 export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
 
 export function normalizeCreativeModel(model: unknown): CreativeModel {
@@ -75,8 +74,6 @@ export type Content = {
   polygonCount?: number;
   // File format preference for quad topology models
   preferredFormat?: 'glb' | 'fbx';
-  // Max Quality mesh backend.
-  ultraMeshProvider?: UltraMeshProvider;
   // 4-slot labeled images for the 'multiview' model (front/left/back/right)
   multiviewImages?: MultiviewImages;
   // Image provider used when creating seed/reference images for mesh generation.

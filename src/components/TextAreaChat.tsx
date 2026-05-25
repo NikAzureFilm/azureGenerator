@@ -16,7 +16,6 @@ import {
   CircleX,
   Wand2,
   Box,
-  Cpu,
   Ruler,
   X,
   Sparkles,
@@ -33,7 +32,6 @@ import {
   DEFAULT_CREATIVE_MODEL,
   MeshFileType,
   Model,
-  UltraMeshProvider,
 } from '@shared/types';
 import {
   MultiviewComposer,
@@ -49,6 +47,11 @@ import {
   getModelDefaultPolygonCount,
   getMaxPolygonCount,
 } from '@/constants/meshConstants';
+
+// Local helper functions for this component
+const shouldShowQuadsControls = (model: Model): boolean => {
+  return shouldShowPolygonControls(model as CreativeModel);
+};
 import { MessageItem } from '../types/misc.ts';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -99,35 +102,6 @@ import {
   buildReferenceImageAccept,
   shouldShowReferenceImageControl,
 } from '@/utils/inputImageControls';
-
-// Local helper functions for this component
-const shouldShowQuadsControls = (model: Model): boolean => {
-  return shouldShowPolygonControls(model as CreativeModel);
-};
-
-const ULTRA_MESH_PROVIDERS: Array<{
-  id: UltraMeshProvider;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: 'meshy-v6',
-    label: 'Meshy v6',
-    description: 'Textured image-to-3D with topology controls',
-  },
-  {
-    id: 'pixal3d',
-    label: 'Pixal3D',
-    description: 'High fidelity 1024p image-to-3D',
-  },
-];
-
-function getUltraMeshProviderLabel(provider: UltraMeshProvider) {
-  return (
-    ULTRA_MESH_PROVIDERS.find((option) => option.id === provider)?.label ??
-    'Meshy v6'
-  );
-}
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -237,14 +211,6 @@ interface QuadsButtonProps {
   onToggle: () => void;
 }
 
-interface UltraMeshProviderButtonProps {
-  provider: UltraMeshProvider;
-  showFullLabels: boolean;
-  isLoading: boolean;
-  disabled: boolean;
-  onProviderChange: (provider: UltraMeshProvider) => void;
-}
-
 const QuadsButton = ({
   meshTopology,
   showFullLabels,
@@ -290,63 +256,6 @@ const QuadsButton = ({
         {isQuadsEnabled ? 'Quad topology enabled' : 'Switch to quad topology'}
       </TooltipContent>
     </Tooltip>
-  );
-};
-
-const UltraMeshProviderButton = ({
-  provider,
-  showFullLabels,
-  isLoading,
-  disabled,
-  onProviderChange,
-}: UltraMeshProviderButtonProps) => {
-  const label = getUltraMeshProviderLabel(provider);
-  const buttonContent = (
-    <button
-      type="button"
-      disabled={isLoading || disabled}
-      className="flex h-8 items-center justify-center gap-2 rounded-full border border-[#2a2a2a] bg-transparent px-2 text-sm transition-colors duration-200 hover:bg-adam-bg-secondary-dark focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50"
-    >
-      <Cpu className="h-4 w-4 text-adam-text-primary" />
-      {showFullLabels && (
-        <span className="hidden text-xs text-adam-text-primary lg:inline">
-          {label}
-        </span>
-      )}
-    </button>
-  );
-
-  return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>{buttonContent}</DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>Max Quality backend: {label}</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="start" side="top" className="w-64 p-1">
-        {ULTRA_MESH_PROVIDERS.map((option) => (
-          <DropdownMenuItem
-            key={option.id}
-            className="flex cursor-pointer items-start gap-2 rounded-md text-adam-text-primary"
-            onSelect={() => onProviderChange(option.id)}
-          >
-            <Cpu className="mt-0.5 h-4 w-4 text-adam-text-secondary" />
-            <span className="flex flex-col">
-              <span className="text-sm">{option.label}</span>
-              <span className="text-xs text-adam-text-secondary">
-                {option.description}
-              </span>
-            </span>
-            {provider === option.id && (
-              <span className="ml-auto rounded-md bg-adam-blue/15 px-1.5 py-0.5 text-[10px] text-adam-blue">
-                Active
-              </span>
-            )}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 };
 
@@ -658,16 +567,6 @@ function TextAreaChat({
     return 'polys';
   });
 
-  const [ultraMeshProvider, setUltraMeshProvider] = useState<UltraMeshProvider>(
-    () => {
-      if (typeof window !== 'undefined') {
-        const stored = localStorage.getItem('adam-ultra-mesh-provider');
-        return stored === 'pixal3d' ? 'pixal3d' : 'meshy-v6';
-      }
-      return 'meshy-v6';
-    },
-  );
-
   // Polygon count state - single source of truth for user overrides
   const [polygonOverrides, setPolygonOverrides] = useState<
     Record<string, number>
@@ -765,12 +664,6 @@ function TextAreaChat({
       localStorage.setItem('adam-mesh-topology', meshTopology);
     }
   }, [meshTopology]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('adam-ultra-mesh-provider', ultraMeshProvider);
-    }
-  }, [ultraMeshProvider]);
 
   // Reset polygon count to default for current model and topology
   const resetPolygonCount = useCallback(() => {
@@ -954,7 +847,6 @@ function TextAreaChat({
         ...(shouldShowPolygonControls(model as CreativeModel) && {
           polygonCount: Math.min(polygonCount, maxPolygonCount),
         }),
-        ...(model === 'ultra' && { ultraMeshProvider }),
       };
     } else if (type === 'parametric' && mesh) {
       content = {
@@ -2092,16 +1984,6 @@ function TextAreaChat({
                     meshTopology === 'quads' ? 'polys' : 'quads',
                   )
                 }
-              />
-            )}
-
-            {type === 'creative' && model === 'ultra' && (
-              <UltraMeshProviderButton
-                provider={ultraMeshProvider}
-                showFullLabels={showFullLabels}
-                isLoading={isLoading}
-                disabled={disabled || false}
-                onProviderChange={setUltraMeshProvider}
               />
             )}
 
