@@ -43,8 +43,9 @@ assert.match(modelXml, /<m:color color="#112233FF"\/>/);
 assert.doesNotMatch(modelXml, /<m:multiproperties/);
 assert.match(
   modelXml,
-  /<triangle v1="0" v2="1" v3="2" pid="2" p1="1" p2="1" p3="1" paint_color="8"\/>/,
+  /<triangle v1="0" v2="1" v3="2" pid="1" p1="1" p2="1" p3="1" paint_color="8"\/>/,
 );
+assert.match(modelXml, /<object id="4" type="model" pid="1" pindex="0">/);
 assert.match(modelXml, /<item objectid="4"\/>/);
 
 const contentTypesXml = buildThreeMfContentTypesXml();
@@ -287,11 +288,11 @@ assert.match(repairedModelXml, /<m:color color="#00FF00FF"\/>/);
 assert.doesNotMatch(repairedModelXml, /<m:color color="#0000FFFF"\/>/);
 assert.match(
   repairedModelXml,
-  /<triangle v1="0" v2="1" v3="2" pid="2" p1="0" p2="0" p3="0" paint_color="4"\/>/,
+  /<triangle v1="0" v2="1" v3="2" pid="1" p1="0" p2="0" p3="0" paint_color="4"\/>/,
 );
 assert.match(
   repairedModelXml,
-  /<triangle v1="1" v2="0" v3="3" pid="2" p1="1" p2="1" p3="1" paint_color="8"\/>/,
+  /<triangle v1="1" v2="0" v3="3" pid="1" p1="1" p2="1" p3="1" paint_color="8"\/>/,
 );
 const repairedSettingsEntry = repairedEntries.find(
   (entry) => entry.filename === 'Metadata/project_settings.config',
@@ -355,3 +356,55 @@ const degenerateRepairSettings = JSON.parse(
 );
 assert.deepEqual(degenerateRepairSettings.filament_colour, ['#FF0000']);
 await degenerateRepairZipReader.close();
+
+// Coincident-triangle dedup: two triangles sharing the same three vertices
+// form a zero-volume sandwich (the typical "internal wall" pattern from CSG
+// unions). Cancelling the pair removes the non-manifold edges Bambu Studio
+// reports, and a third coincident triangle leaves an odd-parity survivor.
+const coincidentTriangleScene = new THREE.Scene();
+const coincidentTriangleGeometry = new THREE.BufferGeometry();
+coincidentTriangleGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [
+      0, 0, 0,
+      10, 0, 0,
+      0, 10, 0,
+      0, 0, 10,
+    ],
+    3,
+  ),
+);
+// Tetra base triangle [0,1,2] appears twice (cancelling pair); the other
+// three faces of the tetrahedron exist once each and must remain.
+coincidentTriangleGeometry.setIndex([
+  0, 1, 2,
+  0, 2, 1,
+  0, 1, 3,
+  1, 2, 3,
+  2, 0, 3,
+]);
+coincidentTriangleScene.add(
+  new THREE.Mesh(
+    coincidentTriangleGeometry,
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+  ),
+);
+
+const coincidentTriangleBlob = await createThreeMfBlobFromScene({
+  scene: coincidentTriangleScene,
+  filename: 'coincident-triangles',
+  colorCount: 1,
+});
+const coincidentTriangleZipReader = new ZipReader(
+  new BlobReader(coincidentTriangleBlob),
+);
+const coincidentTriangleModelEntry = (
+  await coincidentTriangleZipReader.getEntries()
+).find((entry) => entry.filename === '3D/3dmodel.model');
+assert.ok(coincidentTriangleModelEntry);
+const coincidentTriangleModelXml = await coincidentTriangleModelEntry.getData(
+  new TextWriter(),
+);
+assert.equal(coincidentTriangleModelXml.match(/<triangle /g)?.length, 3);
+await coincidentTriangleZipReader.close();

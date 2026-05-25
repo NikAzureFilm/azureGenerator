@@ -123,7 +123,12 @@ export function buildThreeMfModelXml({
         normalizedPalette.length,
       );
       const paintColor = getBambuOrcaPaintColor(colorIndex);
-      return `        <triangle v1="${triangle.v1}" v2="${triangle.v2}" v3="${triangle.v3}" pid="2" p1="${colorIndex}" p2="${colorIndex}" p3="${colorIndex}" paint_color="${paintColor}"/>`;
+      // pid="1" references <basematerials>, which Bambu Studio honors as the
+      // per-triangle filament assignment. Pointing at <m:colorgroup> (pid="2")
+      // left every triangle on the object's default material and let the
+      // paint_color overlay collide with the slicer's auto color-parsing,
+      // producing the scrambled colors seen in Bambu Studio.
+      return `        <triangle v1="${triangle.v1}" v2="${triangle.v2}" v3="${triangle.v3}" pid="1" p1="${colorIndex}" p2="${colorIndex}" p3="${colorIndex}" paint_color="${paintColor}"/>`;
     })
     .join('\n');
 
@@ -138,7 +143,7 @@ ${baseMaterials}
     <m:colorgroup id="2">
 ${colors}
     </m:colorgroup>
-    <object id="4" type="model" pid="2" pindex="0">
+    <object id="4" type="model" pid="1" pindex="0">
       <mesh>
         <vertices>
 ${vertexXml}
@@ -335,17 +340,36 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
 function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
 ): SceneGeometry {
-  const keptTriangleIndexes = new Set(
-    geometry.triangles.map((_, index) => index),
-  );
-  const edgeToTriangleIndexes = new Map<string, number[]>();
+  const keptTriangleIndexes = new Set<number>();
 
+  // Group non-degenerate triangles by their unordered vertex set. CSG unions
+  // and AI-generated meshes routinely emit multiple coincident triangles on
+  // the same three vertices — typically internal walls between solids, where
+  // each side contributes a copy with opposite winding. Cancelling even
+  // counts and keeping a single triangle for odd counts removes the
+  // zero-volume sandwiches that Bambu Studio flags as non-manifold edges.
+  const vertexSetGroups = new Map<string, number[]>();
   geometry.triangles.forEach((triangle, triangleIndex) => {
     if (isDegenerateTriangle(triangle, geometry.vertices)) {
-      keptTriangleIndexes.delete(triangleIndex);
       return;
     }
+    const key = [triangle.v1, triangle.v2, triangle.v3]
+      .sort((a, b) => a - b)
+      .join('-');
+    const group = vertexSetGroups.get(key) ?? [];
+    group.push(triangleIndex);
+    vertexSetGroups.set(key, group);
+  });
 
+  for (const group of vertexSetGroups.values()) {
+    if (group.length % 2 === 1) {
+      keptTriangleIndexes.add(group[0]);
+    }
+  }
+
+  const edgeToTriangleIndexes = new Map<string, number[]>();
+  for (const triangleIndex of keptTriangleIndexes) {
+    const triangle = geometry.triangles[triangleIndex];
     for (const [a, b] of [
       [triangle.v1, triangle.v2],
       [triangle.v2, triangle.v3],
@@ -356,7 +380,7 @@ function repairSceneGeometryForThreeMfExport(
       triangleIndexes.push(triangleIndex);
       edgeToTriangleIndexes.set(key, triangleIndexes);
     }
-  });
+  }
 
   for (const triangleIndexes of edgeToTriangleIndexes.values()) {
     const currentlyKeptTriangleIndexes = triangleIndexes.filter(
