@@ -274,7 +274,7 @@ export function PromptView() {
           </div>
           <div
             className={cn(
-              'mb-8 w-full max-w-[54.4rem]',
+              'mb-8 w-full max-w-[64rem]',
               'motion-safe:transition-opacity motion-safe:duration-700 motion-safe:ease-out',
               isLoaded ? 'opacity-100' : 'opacity-0',
             )}

@@ -18,7 +18,7 @@ export function CreationModeCards({
   className,
 }: CreationModeCardsProps) {
   return (
-    <div className={cn('grid w-full gap-3 md:grid-cols-2', className)}>
+    <div className={cn('grid w-full gap-4 md:grid-cols-2', className)}>
       {CREATION_MODE_OPTIONS.map((option) => {
         const isSelected = option.type === selectedType;
         const Icon = option.type === 'parametric' ? Ruler : Box;
@@ -36,7 +36,7 @@ export function CreationModeCards({
                 : 'border-white/10 shadow-[0_14px_34px_rgba(0,0,0,0.16)] hover:border-white/20 hover:bg-[#1d1e1e]',
             )}
           >
-            <div className="relative z-10 flex w-full flex-col justify-between p-3">
+            <div className="relative z-10 flex w-full flex-col justify-between p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div
@@ -96,7 +96,7 @@ function CreationModePreview({
   return (
     <div
       className={cn(
-        'mt-3 aspect-[3.4/1] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
+        'mt-4 aspect-[3/1] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
         selected ? 'border-adam-blue/40' : 'border-white/10',
       )}
     >
