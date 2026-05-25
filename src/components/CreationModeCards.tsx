@@ -36,12 +36,12 @@ export function CreationModeCards({
                 : 'border-white/10 shadow-[0_14px_34px_rgba(0,0,0,0.16)] hover:border-white/20 hover:bg-[#1d1e1e]',
             )}
           >
-            <div className="relative z-10 flex w-full flex-col justify-between p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
+            <div className="relative z-10 flex w-full flex-col justify-between p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
                   <div
                     className={cn(
-                      'mb-3 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors',
+                      'mb-2 flex h-7 w-7 items-center justify-center rounded-lg border transition-colors',
                       isSelected
                         ? 'border-adam-blue/40 bg-adam-blue/15 text-adam-blue'
                         : 'border-white/10 bg-white/[0.03] text-adam-text-secondary group-hover:text-adam-text-primary',
@@ -52,7 +52,7 @@ export function CreationModeCards({
                   <h2 className="text-base font-semibold leading-tight text-adam-text-primary">
                     {option.title}
                   </h2>
-                  <p className="mt-1 max-w-[18rem] text-sm leading-5 text-adam-text-secondary">
+                  <p className="mt-1 truncate text-sm leading-5 text-adam-text-secondary">
                     {option.description}
                   </p>
                 </div>
@@ -96,7 +96,7 @@ function CreationModePreview({
   return (
     <div
       className={cn(
-        'mt-4 aspect-[3/1] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
+        'mt-3 aspect-[3.4/1] overflow-hidden rounded-lg border bg-[#161717] transition-colors',
         selected ? 'border-adam-blue/40' : 'border-white/10',
       )}
     >
