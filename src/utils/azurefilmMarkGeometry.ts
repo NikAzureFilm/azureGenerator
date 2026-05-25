@@ -1,4 +1,4 @@
-import { azurefilmMarkVertices } from './azurefilmMarkVertices';
+import { azurefilmMarkVertices } from './azurefilmMarkVertices.ts';
 
 export type AzureFilmMarkPoint = {
   x: number;

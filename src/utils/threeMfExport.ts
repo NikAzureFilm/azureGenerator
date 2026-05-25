@@ -31,6 +31,7 @@ const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
   'DC',
 ];
 const VERTEX_KEY_PRECISION = 1e-6;
+const DEGENERATE_TRIANGLE_AREA_SQUARED = 1e-20;
 
 type VectorTuple = [number, number, number];
 
@@ -194,7 +195,10 @@ export async function createThreeMfBlobFromScene({
   colorCount: number;
 }): Promise<Blob> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
-  const geometry = extractSceneGeometry(scene);
+  // Run the printable repair pass before palette quantization and 3MF color ids.
+  const geometry = repairSceneGeometryForThreeMfExport(
+    extractSceneGeometry(scene),
+  );
 
   if (geometry.vertices.length === 0 || geometry.triangles.length === 0) {
     throw new Error('No printable mesh geometry was found for 3MF export.');
@@ -326,6 +330,85 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
   });
 
   return { vertices, triangles };
+}
+
+function repairSceneGeometryForThreeMfExport(
+  geometry: SceneGeometry,
+): SceneGeometry {
+  const keptTriangleIndexes = new Set(
+    geometry.triangles.map((_, index) => index),
+  );
+  const edgeToTriangleIndexes = new Map<string, number[]>();
+
+  geometry.triangles.forEach((triangle, triangleIndex) => {
+    if (isDegenerateTriangle(triangle, geometry.vertices)) {
+      keptTriangleIndexes.delete(triangleIndex);
+      return;
+    }
+
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = getEdgeKey(a, b);
+      const triangleIndexes = edgeToTriangleIndexes.get(key) ?? [];
+      triangleIndexes.push(triangleIndex);
+      edgeToTriangleIndexes.set(key, triangleIndexes);
+    }
+  });
+
+  for (const triangleIndexes of edgeToTriangleIndexes.values()) {
+    const currentlyKeptTriangleIndexes = triangleIndexes.filter(
+      (triangleIndex) => keptTriangleIndexes.has(triangleIndex),
+    );
+
+    if (currentlyKeptTriangleIndexes.length <= 2) {
+      continue;
+    }
+
+    for (const triangleIndex of currentlyKeptTriangleIndexes.slice(2)) {
+      keptTriangleIndexes.delete(triangleIndex);
+    }
+  }
+
+  const repairedTriangles = geometry.triangles.filter((_, index) =>
+    keptTriangleIndexes.has(index),
+  );
+  return compactSceneGeometry({
+    vertices: geometry.vertices,
+    triangles: repairedTriangles,
+  });
+}
+
+function compactSceneGeometry(geometry: SceneGeometry): SceneGeometry {
+  const vertexRemap = new Map<number, number>();
+  const vertices: VectorTuple[] = [];
+  const triangles = geometry.triangles.map((triangle) => ({
+    v1: remapVertexIndex(triangle.v1, vertexRemap, vertices, geometry.vertices),
+    v2: remapVertexIndex(triangle.v2, vertexRemap, vertices, geometry.vertices),
+    v3: remapVertexIndex(triangle.v3, vertexRemap, vertices, geometry.vertices),
+    color: triangle.color,
+  }));
+
+  return { vertices, triangles };
+}
+
+function isDegenerateTriangle(
+  triangle: SceneGeometry['triangles'][number],
+  vertices: VectorTuple[],
+): boolean {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+
+  if (!a || !b || !c) {
+    return true;
+  }
+
+  const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  return ab.cross(ac).lengthSq() <= DEGENERATE_TRIANGLE_AREA_SQUARED;
 }
 
 function sampleTriangleColor({
@@ -608,6 +691,27 @@ function getVertexKey([x, y, z]: VectorTuple): string {
     Math.round(y / VERTEX_KEY_PRECISION),
     Math.round(z / VERTEX_KEY_PRECISION),
   ].join(',');
+}
+
+function getEdgeKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
+function remapVertexIndex(
+  sourceIndex: number,
+  vertexRemap: Map<number, number>,
+  vertices: VectorTuple[],
+  sourceVertices: VectorTuple[],
+): number {
+  const existingIndex = vertexRemap.get(sourceIndex);
+  if (existingIndex !== undefined) {
+    return existingIndex;
+  }
+
+  const vertexIndex = vertices.length;
+  vertexRemap.set(sourceIndex, vertexIndex);
+  vertices.push(sourceVertices[sourceIndex]);
+  return vertexIndex;
 }
 
 function getIndexCount(geometry: THREE.BufferGeometry): number {
