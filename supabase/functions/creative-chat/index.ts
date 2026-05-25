@@ -723,6 +723,8 @@ Deno.serve(async (req) => {
                   const imageGenerationModel =
                     newMessage?.content?.imageGenerationModel;
                   const multiviewImages = newMessage?.content?.multiviewImages;
+                  const ultraMeshProvider =
+                    newMessage?.content?.ultraMeshProvider;
 
                   const fallbackText =
                     toolInput.text ?? newMessage?.content?.text;
@@ -738,6 +740,8 @@ Deno.serve(async (req) => {
                     ...(meshTopology && { meshTopology }),
                     ...(polygonCount && { polygonCount }),
                     ...(imageGenerationModel && { imageGenerationModel }),
+                    ...(model === 'ultra' &&
+                      ultraMeshProvider && { ultraMeshProvider }),
                     ...(multiviewImages && { multiviewImages }),
                   };
 

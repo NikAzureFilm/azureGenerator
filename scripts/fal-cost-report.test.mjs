@@ -16,7 +16,7 @@ assert.equal(TOKEN_INTERNAL_USD_COST, SHARED_TOKEN_INTERNAL_USD_COST);
 assert.equal(TOKEN_USD_VALUE, SHARED_TOKEN_USD_VALUE);
 assert.equal(tokensForCostUsd(0.07), 7);
 assert.equal(tokensForCostUsd(0.071), 8);
-assert.equal(FAL_ENDPOINTS.includes('fal-ai/pixal3d'), false);
+assert.ok(FAL_ENDPOINTS.includes('fal-ai/pixal3d'));
 assert.ok(FAL_ENDPOINTS.includes('fal-ai/meshy/v6-preview/image-to-3d'));
 assert.ok(FAL_ENDPOINTS.includes('fal-ai/hunyuan-3d/v3.1/pro/image-to-3d'));
 assert.equal(

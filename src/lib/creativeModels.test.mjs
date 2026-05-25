@@ -73,7 +73,12 @@ assert.equal(
 assert.equal(multiviewComposerSource.includes("mode: 'input'"), false);
 assert.equal(chatSectionSource.includes('normalizeCreativeModel'), true);
 assert.equal(messageServiceSource.includes('normalizeCreativeModel'), true);
-assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), false);
+assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), true);
+assert.equal(meshFunctionSource.includes('ultraMeshProvider'), true);
+assert.equal(sharedTypesSource.includes('UltraMeshProvider'), true);
+assert.equal(textAreaChatSource.includes('ultraMeshProvider'), true);
+assert.equal(textAreaChatSource.includes('Meshy v6'), true);
+assert.equal(textAreaChatSource.includes('Pixal3D'), true);
 assert.equal(
   meshFunctionSource.includes("'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d'"),
   true,

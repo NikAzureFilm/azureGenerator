@@ -6,6 +6,7 @@ export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
 
 export const FAL_ENDPOINTS = [
+  'fal-ai/pixal3d',
   'fal-ai/meshy/v6-preview/image-to-3d',
   'fal-ai/sam-3/3d-objects',
   'tripo3d/tripo/v2.5/image-to-3d',
@@ -19,6 +20,7 @@ export const FAL_ENDPOINTS = [
 
 const DEFAULT_UNIT_PRICES = new Map(
   [
+    ['fal-ai/pixal3d', 0.3, 'generations'],
     ['fal-ai/meshy/v6-preview/image-to-3d', 0.06, 'units'],
     ['fal-ai/sam-3/3d-objects', 0.02, 'units'],
     ['tripo3d/tripo/v2.5/image-to-3d', 0.00007, 'compute seconds'],
