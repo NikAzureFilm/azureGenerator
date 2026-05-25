@@ -1,7 +1,5 @@
 import {
   Environment,
-  GizmoHelper,
-  GizmoViewcube,
   OrbitControls,
   Stage,
   PerspectiveCamera,
@@ -30,6 +28,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 import { useMeshData } from '@/hooks/useMeshData';
 import { DownloadMenu } from './DownloadMenu';
+import { ViewGizmo } from './ViewGizmo';
 import { WireframeIcon } from '@/components/icons/ui/WireframeIcon';
 
 // Default values for material controls
@@ -848,11 +847,7 @@ export function MeshPreview({ meshId }: { meshId: string }) {
             )}
           </Stage>
           <OrbitControls makeDefault />
-          {!isMobile && (
-            <GizmoHelper alignment="top-left" margin={[80, 65]}>
-              <GizmoViewcube />
-            </GizmoHelper>
-          )}
+          {!isMobile && <ViewGizmo alignment="top-left" margin={[80, 65]} />}
         </Canvas>
       </div>
 
