@@ -73,7 +73,7 @@ assert.equal(
 assert.equal(multiviewComposerSource.includes("mode: 'input'"), false);
 assert.equal(chatSectionSource.includes('normalizeCreativeModel'), true);
 assert.equal(messageServiceSource.includes('normalizeCreativeModel'), true);
-assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), true);
+assert.equal(meshFunctionSource.includes("'fal-ai/pixal3d'"), false);
 assert.equal(
   meshFunctionSource.includes("'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d'"),
   true,
@@ -109,7 +109,7 @@ assert.equal(
 );
 assert.equal(
   meshFunctionSource.includes("'fal-ai/meshy/v6-preview/image-to-3d'"),
-  false,
+  true,
 );
 assert.equal(
   meshFunctionSource.includes("'tripo3d/h3.1/multiview-to-3d'"),

@@ -51,7 +51,7 @@ const debugLog = (...args: unknown[]) => {
 const QUALITY_CAPTION_TIMEOUT_MS = 10000;
 const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
 const QUALITY_MASK_TIMEOUT_MS = 10000;
-const PIXAL3D_ENDPOINT = 'fal-ai/pixal3d';
+const MESHY_V6_IMAGE_TO_3D_ENDPOINT = 'fal-ai/meshy/v6-preview/image-to-3d';
 const HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT =
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d';
 const MULTIVIEW_SLOTS = ['front', 'left', 'back', 'right'] as const;
@@ -1492,7 +1492,7 @@ async function submitMeshJob(
     debugLog('model value:', model);
 
     if (model === 'ultra') {
-      debugLog('=== ENTERING ULTRA MODEL PATH (PIXAL3D) ===');
+      debugLog('=== ENTERING ULTRA MODEL PATH (MESHY V6 PREVIEW) ===');
 
       // Check if this is first generation or conversational edit by looking for COMPLETED meshes (not images)
       // This properly handles branching - a branch won't have completed meshes
@@ -1604,7 +1604,7 @@ async function submitMeshJob(
         })
         .eq('id', imageData.id);
 
-      // Get signed URL for the base image to send to Pixal3D
+      // Get signed URL for the base image to send to Meshy
       const { data: imageSignedUrl, error: imageSignedUrlError } =
         await supabaseClient.storage
           .from('images')
@@ -1619,41 +1619,48 @@ async function submitMeshJob(
 
       const baseImageUrl = reformatSignedUrl(imageSignedUrl.signedUrl);
 
-      const decimationTarget = polygonCount
-        ? Math.max(1000, Math.min(300000, polygonCount))
-        : 200000;
+      // Configure Meshy parameters. Topology defaults to triangle, but
+      // preserves the quad preference from the Max Quality controls.
+      const meshyTopology = meshTopology === 'quads' ? 'quad' : 'triangle';
+      const safePolycount = polygonCount
+        ? Math.max(200, Math.min(300000, polygonCount))
+        : 30000;
 
-      const pixal3dInput = {
+      const meshyInput = {
         image_url: baseImageUrl,
-        resolution: 1024 as const,
-        texture_size: 2048 as const,
-        remesh: true,
-        decimation_target: decimationTarget,
+        topology: meshyTopology as 'quad' | 'triangle',
+        target_polycount: safePolycount,
+        symmetry_mode: 'auto' as const,
+        should_remesh: true,
+        should_texture: true,
+        enable_pbr: true,
       };
 
-      debugLog('Submitting to Pixal3D', {
-        decimationTarget,
-        resolution: pixal3dInput.resolution,
-        textureSize: pixal3dInput.texture_size,
+      debugLog('Submitting to Meshy v6 Preview', {
+        topology: meshyTopology,
+        polycount: safePolycount,
       });
 
-      const pixal3dSubmission = await fal.queue.submit(PIXAL3D_ENDPOINT, {
-        input: pixal3dInput,
-        webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
-      });
+      const meshySubmission = await fal.queue.submit(
+        MESHY_V6_IMAGE_TO_3D_ENDPOINT,
+        {
+          input: meshyInput,
+          webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
+        },
+      );
       await recordFalQueueRequest(
         supabaseClient,
         meshId,
-        PIXAL3D_ENDPOINT,
-        pixal3dSubmission,
+        MESHY_V6_IMAGE_TO_3D_ENDPOINT,
+        meshySubmission,
       );
 
-      debugLog('Successfully submitted to Pixal3D');
+      debugLog('Successfully submitted to Meshy v6 Preview');
 
       // Create preview using the base image
       await createHunyuanPreview(
         baseImageUrl,
-        'ultra Pixal3D seed image',
+        'ultra Meshy v6 seed image',
         userId,
         conversationId,
         meshId,

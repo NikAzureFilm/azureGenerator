@@ -6,7 +6,7 @@ export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
 
 export const FAL_ENDPOINTS = [
-  'fal-ai/pixal3d',
+  'fal-ai/meshy/v6-preview/image-to-3d',
   'fal-ai/sam-3/3d-objects',
   'tripo3d/tripo/v2.5/image-to-3d',
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
@@ -19,7 +19,7 @@ export const FAL_ENDPOINTS = [
 
 const DEFAULT_UNIT_PRICES = new Map(
   [
-    ['fal-ai/pixal3d', 0.06, 'units'],
+    ['fal-ai/meshy/v6-preview/image-to-3d', 0.06, 'units'],
     ['fal-ai/sam-3/3d-objects', 0.02, 'units'],
     ['tripo3d/tripo/v2.5/image-to-3d', 0.00007, 'compute seconds'],
     ['fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', 0.015, 'units'],
@@ -145,10 +145,9 @@ const FEATURE_BREAKDOWNS = [
     components: [
       { name: 'gpt-image-2 high-quality seed image', costUsd: 0.22 },
       {
-        name: 'Pixal3D 1024p model',
-        endpoint: 'fal-ai/pixal3d',
-        unitQuantity: 5,
-        note: 'fal pricing API reports $0.06 units; gallery shows $0.30 at 1024p',
+        name: 'Meshy v6 preview textured model',
+        endpoint: 'fal-ai/meshy/v6-preview/image-to-3d',
+        note: 'textured image-to-3D submit',
       },
       {
         name: 'Hunyuan mini preview',
