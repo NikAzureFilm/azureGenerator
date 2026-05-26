@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { BlobReader, TextWriter, ZipReader } from '@zip.js/zip.js';
+import {
+  BlobReader,
+  BlobWriter,
+  TextReader,
+  TextWriter,
+  ZipReader,
+  ZipWriter,
+} from '@zip.js/zip.js';
 import * as THREE from 'three';
 import {
   buildThreeMfContentTypesXml,
@@ -8,6 +15,7 @@ import {
   buildThreeMfRelationshipsXml,
   clampThreeMfColorCount,
   createThreeMfBlobFromScene,
+  validateThreeMfBlob,
 } from './threeMfExport.ts';
 
 assert.equal(clampThreeMfColorCount(0), 1);
@@ -247,13 +255,7 @@ const nonManifoldGeometry = new THREE.BufferGeometry();
 nonManifoldGeometry.setAttribute(
   'position',
   new THREE.Float32BufferAttribute(
-    [
-      0, 0, 0,
-      10, 0, 0,
-      0, 10, 0,
-      0, 0, 10,
-      10, 10, 0,
-    ],
+    [0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10, 10, 10, 0],
     3,
   ),
 );
@@ -308,15 +310,7 @@ const degenerateRepairScene = new THREE.Scene();
 const degenerateRepairGeometry = new THREE.BufferGeometry();
 degenerateRepairGeometry.setAttribute(
   'position',
-  new THREE.Float32BufferAttribute(
-    [
-      0, 0, 0,
-      10, 0, 0,
-      0, 10, 0,
-      20, 0, 0,
-    ],
-    3,
-  ),
+  new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0, 20, 0, 0], 3),
 );
 degenerateRepairGeometry.setIndex([0, 1, 2, 0, 1, 3]);
 degenerateRepairGeometry.clearGroups();
@@ -365,24 +359,12 @@ const coincidentTriangleScene = new THREE.Scene();
 const coincidentTriangleGeometry = new THREE.BufferGeometry();
 coincidentTriangleGeometry.setAttribute(
   'position',
-  new THREE.Float32BufferAttribute(
-    [
-      0, 0, 0,
-      10, 0, 0,
-      0, 10, 0,
-      0, 0, 10,
-    ],
-    3,
-  ),
+  new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10], 3),
 );
 // Tetra base triangle [0,1,2] appears twice (cancelling pair); the other
 // three faces of the tetrahedron exist once each and must remain.
 coincidentTriangleGeometry.setIndex([
-  0, 1, 2,
-  0, 2, 1,
-  0, 1, 3,
-  1, 2, 3,
-  2, 0, 3,
+  0, 1, 2, 0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3,
 ]);
 coincidentTriangleScene.add(
   new THREE.Mesh(
@@ -408,3 +390,85 @@ const coincidentTriangleModelXml = await coincidentTriangleModelEntry.getData(
 );
 assert.equal(coincidentTriangleModelXml.match(/<triangle /g)?.length, 3);
 await coincidentTriangleZipReader.close();
+
+const recolorAfterRepairScene = new THREE.Scene();
+const recolorAfterRepairGeometry = new THREE.BufferGeometry();
+recolorAfterRepairGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0], 3),
+);
+recolorAfterRepairGeometry.setIndex([0, 1, 2, 0, 2, 1, 0, 1, 2]);
+recolorAfterRepairGeometry.clearGroups();
+recolorAfterRepairGeometry.addGroup(0, 3, 0);
+recolorAfterRepairGeometry.addGroup(3, 3, 1);
+recolorAfterRepairGeometry.addGroup(6, 3, 1);
+recolorAfterRepairScene.add(
+  new THREE.Mesh(recolorAfterRepairGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+  ]),
+);
+
+const recolorAfterRepairBlob = await createThreeMfBlobFromScene({
+  scene: recolorAfterRepairScene,
+  filename: 'recolor-after-repair',
+  colorCount: 2,
+});
+const recolorAfterRepairZipReader = new ZipReader(
+  new BlobReader(recolorAfterRepairBlob),
+);
+const recolorAfterRepairEntries =
+  await recolorAfterRepairZipReader.getEntries();
+const recolorAfterRepairModelEntry = recolorAfterRepairEntries.find(
+  (entry) => entry.filename === '3D/3dmodel.model',
+);
+assert.ok(recolorAfterRepairModelEntry);
+const recolorAfterRepairModelXml = await recolorAfterRepairModelEntry.getData(
+  new TextWriter(),
+);
+assert.equal(recolorAfterRepairModelXml.match(/<triangle /g)?.length, 1);
+assert.match(recolorAfterRepairModelXml, /<m:color color="#00FF00FF"\/>/);
+assert.doesNotMatch(
+  recolorAfterRepairModelXml,
+  /<m:color color="#FF0000FF"\/>/,
+);
+const recolorAfterRepairSettingsEntry = recolorAfterRepairEntries.find(
+  (entry) => entry.filename === 'Metadata/project_settings.config',
+);
+assert.ok(recolorAfterRepairSettingsEntry);
+const recolorAfterRepairSettings = JSON.parse(
+  await recolorAfterRepairSettingsEntry.getData(new TextWriter()),
+);
+assert.deepEqual(recolorAfterRepairSettings.filament_colour, ['#00FF00']);
+await recolorAfterRepairZipReader.close();
+
+const invalidModelXml = buildThreeMfModelXml({
+  modelName: 'invalid-color-index',
+  vertices: [
+    [0, 0, 0],
+    [10, 0, 0],
+    [0, 10, 0],
+  ],
+  triangles: [{ v1: 0, v2: 1, v3: 2, colorIndex: 0 }],
+  palette: ['#FF0000'],
+}).replace('p1="0" p2="0" p3="0"', 'p1="1" p2="0" p3="0"');
+
+const invalidZipWriter = new ZipWriter(new BlobWriter('model/3mf'));
+await invalidZipWriter.add(
+  '[Content_Types].xml',
+  new TextReader(buildThreeMfContentTypesXml()),
+);
+await invalidZipWriter.add(
+  '_rels/.rels',
+  new TextReader(buildThreeMfRelationshipsXml()),
+);
+await invalidZipWriter.add('3D/3dmodel.model', new TextReader(invalidModelXml));
+await invalidZipWriter.add(
+  'Metadata/project_settings.config',
+  new TextReader(buildThreeMfProjectSettingsConfig(['#FF0000'])),
+);
+const invalidThreeMfBlob = await invalidZipWriter.close();
+await assert.rejects(
+  () => validateThreeMfBlob(invalidThreeMfBlob),
+  /3MF triangle material index 1 exceeds 1 available materials/,
+);

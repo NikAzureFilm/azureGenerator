@@ -1,4 +1,11 @@
-import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
+import {
+  BlobReader,
+  BlobWriter,
+  TextReader,
+  TextWriter,
+  ZipReader,
+  ZipWriter,
+} from '@zip.js/zip.js';
 import * as THREE from 'three';
 
 export const DEFAULT_THREE_MF_COLOR_COUNT = 4;
@@ -65,6 +72,22 @@ type SceneGeometry = {
   triangles: Array<
     Omit<ThreeMfTriangle, 'colorIndex'> & { color: THREE.Color }
   >;
+};
+
+type RepairedSceneGeometry = {
+  vertices: VectorTuple[];
+  triangles: Array<Omit<ThreeMfTriangle, 'colorIndex'>>;
+};
+
+type ThreeMfPackageParts = {
+  contentTypesXml: string;
+  relationshipsXml: string;
+  modelXml: string;
+  projectSettingsConfig: string;
+};
+
+type ZipTextEntry = {
+  getData?: (writer: TextWriter) => Promise<string>;
 };
 
 const texturePixelCache = new WeakMap<THREE.Texture, TexturePixels | null>();
@@ -200,24 +223,27 @@ export async function createThreeMfBlobFromScene({
   colorCount: number;
 }): Promise<Blob> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
+  const sourceGeometry = extractSceneGeometry(scene);
   // Run the printable repair pass before palette quantization and 3MF color ids.
-  const geometry = repairSceneGeometryForThreeMfExport(
-    extractSceneGeometry(scene),
-  );
+  const geometry = repairSceneGeometryForThreeMfExport(sourceGeometry);
 
   if (geometry.vertices.length === 0 || geometry.triangles.length === 0) {
     throw new Error('No printable mesh geometry was found for 3MF export.');
   }
 
+  const coloredTriangles = assignColorsToRepairedTriangles(
+    geometry,
+    sourceGeometry,
+  );
   const palette = quantizeTriangleColors(
-    geometry.triangles.map((triangle) => ({
+    coloredTriangles.map((triangle) => ({
       color: triangle.color,
       weight: 1,
     })),
     targetColorCount,
   );
 
-  const triangles = geometry.triangles.map((triangle) => ({
+  const triangles = coloredTriangles.map((triangle) => ({
     v1: triangle.v1,
     v2: triangle.v2,
     v3: triangle.v3,
@@ -231,14 +257,19 @@ export async function createThreeMfBlobFromScene({
     palette: palette.map(colorToHex),
   });
 
-  return createThreeMfPackage({
+  const packageParts = {
     contentTypesXml: buildThreeMfContentTypesXml(),
     relationshipsXml: buildThreeMfRelationshipsXml(),
     modelXml,
     projectSettingsConfig: buildThreeMfProjectSettingsConfig(
       palette.map(colorToHex),
     ),
-  });
+  };
+  validateThreeMfPackageParts(packageParts);
+
+  const blob = await createThreeMfPackage(packageParts);
+  await validateThreeMfBlob(blob);
+  return blob;
 }
 
 async function createThreeMfPackage({
@@ -246,12 +277,7 @@ async function createThreeMfPackage({
   relationshipsXml,
   modelXml,
   projectSettingsConfig,
-}: {
-  contentTypesXml: string;
-  relationshipsXml: string;
-  modelXml: string;
-  projectSettingsConfig: string;
-}): Promise<Blob> {
+}: ThreeMfPackageParts): Promise<Blob> {
   const zipWriter = new ZipWriter(new BlobWriter('model/3mf'));
   await zipWriter.add('[Content_Types].xml', new TextReader(contentTypesXml));
   await zipWriter.add('_rels/.rels', new TextReader(relationshipsXml));
@@ -261,6 +287,170 @@ async function createThreeMfPackage({
     new TextReader(projectSettingsConfig),
   );
   return zipWriter.close();
+}
+
+export async function validateThreeMfBlob(blob: Blob): Promise<void> {
+  const zipReader = new ZipReader(new BlobReader(blob));
+
+  try {
+    const entries = await zipReader.getEntries();
+    const entriesByName = new Map<string, ZipTextEntry>(
+      entries.map((entry) => [entry.filename, entry as ZipTextEntry]),
+    );
+
+    for (const filename of [
+      '[Content_Types].xml',
+      '_rels/.rels',
+      '3D/3dmodel.model',
+      'Metadata/project_settings.config',
+    ]) {
+      if (!entriesByName.has(filename)) {
+        throw new Error(`3MF package is missing ${filename}`);
+      }
+    }
+
+    const contentTypesXml = await readRequiredZipText(
+      entriesByName,
+      '[Content_Types].xml',
+    );
+    const relationshipsXml = await readRequiredZipText(
+      entriesByName,
+      '_rels/.rels',
+    );
+    const modelXml = await readRequiredZipText(
+      entriesByName,
+      '3D/3dmodel.model',
+    );
+    const projectSettingsConfig = await readRequiredZipText(
+      entriesByName,
+      'Metadata/project_settings.config',
+    );
+
+    validateThreeMfPackageParts({
+      contentTypesXml,
+      relationshipsXml,
+      modelXml,
+      projectSettingsConfig,
+    });
+  } finally {
+    await zipReader.close();
+  }
+}
+
+function validateThreeMfPackageParts({
+  contentTypesXml,
+  relationshipsXml,
+  modelXml,
+  projectSettingsConfig,
+}: ThreeMfPackageParts): void {
+  if (
+    !contentTypesXml.includes(
+      'application/vnd.ms-package.3dmanufacturing-3dmodel+xml',
+    )
+  ) {
+    throw new Error('3MF package is missing the model content type');
+  }
+
+  if (!relationshipsXml.includes('Target="/3D/3dmodel.model"')) {
+    throw new Error('3MF package is missing the 3D model relationship');
+  }
+
+  if (!modelXml.includes(`xmlns="${CORE_NAMESPACE}"`)) {
+    throw new Error('3MF model is missing the core namespace');
+  }
+
+  if (!modelXml.includes(`xmlns:m="${MATERIAL_NAMESPACE}"`)) {
+    throw new Error('3MF model is missing the material namespace');
+  }
+
+  const resourceMaterialCounts = getMaterialResourceCounts(modelXml);
+  const vertexCount = modelXml.match(/<vertex\b/g)?.length ?? 0;
+  if (vertexCount === 0) {
+    throw new Error('3MF model has no vertices');
+  }
+
+  const objectIds = new Set<string>();
+  for (const match of modelXml.matchAll(/<object\b([^>]*)>/g)) {
+    const attributes = parseXmlAttributes(match[1]);
+    const objectId = attributes.get('id');
+    if (objectId) {
+      objectIds.add(objectId);
+    }
+
+    const pid = attributes.get('pid');
+    const pindex = attributes.get('pindex');
+    if (pid && pindex) {
+      validateMaterialIndex(
+        pid,
+        Number.parseInt(pindex, 10),
+        resourceMaterialCounts,
+      );
+    }
+  }
+
+  if (objectIds.size === 0) {
+    throw new Error('3MF model has no object resources');
+  }
+
+  for (const match of modelXml.matchAll(/<item\b([^>]*)\/>/g)) {
+    const objectId = parseXmlAttributes(match[1]).get('objectid');
+    if (!objectId || !objectIds.has(objectId)) {
+      throw new Error(`3MF build item references missing object ${objectId}`);
+    }
+  }
+
+  let triangleCount = 0;
+  for (const match of modelXml.matchAll(/<triangle\b([^>]*)\/>/g)) {
+    triangleCount += 1;
+    const attributes = parseXmlAttributes(match[1]);
+    const vertexIndexes = ['v1', 'v2', 'v3'].map((name) =>
+      Number.parseInt(attributes.get(name) ?? '', 10),
+    );
+
+    if (vertexIndexes.some((index) => !Number.isInteger(index))) {
+      throw new Error('3MF triangle has an invalid vertex index');
+    }
+
+    if (new Set(vertexIndexes).size !== 3) {
+      throw new Error('3MF triangle has duplicate vertex indexes');
+    }
+
+    for (const vertexIndex of vertexIndexes) {
+      if (vertexIndex < 0 || vertexIndex >= vertexCount) {
+        throw new Error(
+          `3MF triangle vertex index ${vertexIndex} exceeds ${vertexCount} available vertices`,
+        );
+      }
+    }
+
+    const pid = attributes.get('pid');
+    if (!pid) {
+      throw new Error('3MF triangle is missing a material pid');
+    }
+
+    for (const name of ['p1', 'p2', 'p3']) {
+      const materialIndex = Number.parseInt(attributes.get(name) ?? '', 10);
+      validateMaterialIndex(pid, materialIndex, resourceMaterialCounts);
+    }
+  }
+
+  if (triangleCount === 0) {
+    throw new Error('3MF model has no triangles');
+  }
+
+  validateProjectSettingsColors(projectSettingsConfig, modelXml);
+}
+
+async function readRequiredZipText(
+  entriesByName: Map<string, ZipTextEntry>,
+  filename: string,
+): Promise<string> {
+  const entry = entriesByName.get(filename);
+  if (!entry?.getData) {
+    throw new Error(`3MF package entry ${filename} cannot be read`);
+  }
+
+  return entry.getData(new TextWriter());
 }
 
 function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
@@ -339,7 +529,7 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
 
 function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
-): SceneGeometry {
+): RepairedSceneGeometry {
   const keptTriangleIndexes = new Set<number>();
 
   // Group non-degenerate triangles by their unordered vertex set. CSG unions
@@ -396,26 +586,114 @@ function repairSceneGeometryForThreeMfExport(
     }
   }
 
-  const repairedTriangles = geometry.triangles.filter((_, index) =>
-    keptTriangleIndexes.has(index),
-  );
+  const repairedTriangles = geometry.triangles
+    .filter((_, index) => keptTriangleIndexes.has(index))
+    .map(({ v1, v2, v3 }) => ({ v1, v2, v3 }));
   return compactSceneGeometry({
     vertices: geometry.vertices,
     triangles: repairedTriangles,
   });
 }
 
-function compactSceneGeometry(geometry: SceneGeometry): SceneGeometry {
+function compactSceneGeometry(
+  geometry: RepairedSceneGeometry,
+): RepairedSceneGeometry {
   const vertexRemap = new Map<number, number>();
   const vertices: VectorTuple[] = [];
   const triangles = geometry.triangles.map((triangle) => ({
     v1: remapVertexIndex(triangle.v1, vertexRemap, vertices, geometry.vertices),
     v2: remapVertexIndex(triangle.v2, vertexRemap, vertices, geometry.vertices),
     v3: remapVertexIndex(triangle.v3, vertexRemap, vertices, geometry.vertices),
-    color: triangle.color,
   }));
 
   return { vertices, triangles };
+}
+
+function assignColorsToRepairedTriangles(
+  repairedGeometry: RepairedSceneGeometry,
+  sourceGeometry: SceneGeometry,
+): SceneGeometry['triangles'] {
+  const sourceTrianglesByGeometry = new Map<
+    string,
+    SceneGeometry['triangles']
+  >();
+  sourceGeometry.triangles.forEach((triangle) => {
+    const key = getTriangleGeometryKey(sourceGeometry.vertices, triangle);
+    const sourceTriangles = sourceTrianglesByGeometry.get(key) ?? [];
+    sourceTriangles.push(triangle);
+    sourceTrianglesByGeometry.set(key, sourceTriangles);
+  });
+
+  return repairedGeometry.triangles.map((triangle) => {
+    const exactSourceTriangles = sourceTrianglesByGeometry.get(
+      getTriangleGeometryKey(repairedGeometry.vertices, triangle),
+    );
+    const color = exactSourceTriangles?.length
+      ? getDominantTriangleColor(exactSourceTriangles)
+      : getNearestTriangleColor(
+          triangle,
+          repairedGeometry.vertices,
+          sourceGeometry,
+        );
+
+    return {
+      ...triangle,
+      color,
+    };
+  });
+}
+
+function getDominantTriangleColor(
+  triangles: SceneGeometry['triangles'],
+): THREE.Color {
+  const countsByColor = new Map<
+    string,
+    { color: THREE.Color; count: number; firstIndex: number }
+  >();
+
+  triangles.forEach((triangle, index) => {
+    const colorKey = colorToHex(triangle.color);
+    const existing = countsByColor.get(colorKey);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    countsByColor.set(colorKey, {
+      color: triangle.color,
+      count: 1,
+      firstIndex: index,
+    });
+  });
+
+  const dominant = [...countsByColor.values()].sort(
+    (a, b) => b.count - a.count || a.firstIndex - b.firstIndex,
+  )[0];
+  return dominant.color.clone();
+}
+
+function getNearestTriangleColor(
+  triangle: RepairedSceneGeometry['triangles'][number],
+  vertices: VectorTuple[],
+  sourceGeometry: SceneGeometry,
+): THREE.Color {
+  const centroid = getTriangleCentroid(vertices, triangle);
+  let nearestTriangle = sourceGeometry.triangles[0];
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  sourceGeometry.triangles.forEach((sourceTriangle) => {
+    const sourceCentroid = getTriangleCentroid(
+      sourceGeometry.vertices,
+      sourceTriangle,
+    );
+    const distance = centroid.distanceToSquared(sourceCentroid);
+    if (distance < nearestDistance) {
+      nearestTriangle = sourceTriangle;
+      nearestDistance = distance;
+    }
+  });
+
+  return nearestTriangle.color.clone();
 }
 
 function isDegenerateTriangle(
@@ -695,6 +973,98 @@ function normalizePalette(palette: string[]): string[] {
   return normalized.length > 0 ? normalized : ['#CCCCCC'];
 }
 
+function getMaterialResourceCounts(modelXml: string): Map<string, number> {
+  const resourceMaterialCounts = new Map<string, number>();
+
+  for (const match of modelXml.matchAll(
+    /<basematerials\b([^>]*)>([\s\S]*?)<\/basematerials>/g,
+  )) {
+    const id = parseXmlAttributes(match[1]).get('id');
+    if (id) {
+      resourceMaterialCounts.set(id, match[2].match(/<base\b/g)?.length ?? 0);
+    }
+  }
+
+  for (const match of modelXml.matchAll(
+    /<m:colorgroup\b([^>]*)>([\s\S]*?)<\/m:colorgroup>/g,
+  )) {
+    const id = parseXmlAttributes(match[1]).get('id');
+    if (id) {
+      resourceMaterialCounts.set(
+        id,
+        match[2].match(/<m:color\b/g)?.length ?? 0,
+      );
+    }
+  }
+
+  return resourceMaterialCounts;
+}
+
+function validateMaterialIndex(
+  pid: string,
+  materialIndex: number,
+  resourceMaterialCounts: Map<string, number>,
+): void {
+  if (!Number.isInteger(materialIndex) || materialIndex < 0) {
+    throw new Error(`3MF triangle has invalid material index ${materialIndex}`);
+  }
+
+  const materialCount = resourceMaterialCounts.get(pid);
+  if (materialCount === undefined) {
+    throw new Error(`3MF triangle references missing material resource ${pid}`);
+  }
+
+  if (materialIndex >= materialCount) {
+    throw new Error(
+      `3MF triangle material index ${materialIndex} exceeds ${materialCount} available materials`,
+    );
+  }
+}
+
+function validateProjectSettingsColors(
+  projectSettingsConfig: string,
+  modelXml: string,
+): void {
+  const projectSettings = JSON.parse(projectSettingsConfig) as {
+    filament_colour?: unknown;
+  };
+
+  if (!Array.isArray(projectSettings.filament_colour)) {
+    throw new Error('3MF project settings are missing filament_colour');
+  }
+
+  const baseColors = [
+    ...modelXml.matchAll(/displaycolor="(#[0-9A-Fa-f]{6})/g),
+  ].map((match) => match[1].toUpperCase());
+  const filamentColors = projectSettings.filament_colour.map((color) =>
+    typeof color === 'string' ? color.toUpperCase() : '',
+  );
+
+  if (baseColors.length !== filamentColors.length) {
+    throw new Error(
+      '3MF project settings color count does not match materials',
+    );
+  }
+
+  baseColors.forEach((color, index) => {
+    if (filamentColors[index] !== color) {
+      throw new Error(
+        `3MF project settings color ${filamentColors[index]} does not match material ${color}`,
+      );
+    }
+  });
+}
+
+function parseXmlAttributes(source: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  for (const match of source.matchAll(
+    /([A-Za-z_:][A-Za-z0-9_:.-]*)="([^"]*)"/g,
+  )) {
+    attributes.set(match[1], match[2]);
+  }
+  return attributes;
+}
+
 function readWorldVertex(
   position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
   index: number,
@@ -715,6 +1085,31 @@ function getVertexKey([x, y, z]: VectorTuple): string {
     Math.round(y / VERTEX_KEY_PRECISION),
     Math.round(z / VERTEX_KEY_PRECISION),
   ].join(',');
+}
+
+function getTriangleGeometryKey(
+  vertices: VectorTuple[],
+  triangle: Omit<ThreeMfTriangle, 'colorIndex'>,
+): string {
+  return [triangle.v1, triangle.v2, triangle.v3]
+    .map((index) => getVertexKey(vertices[index]))
+    .sort()
+    .join('|');
+}
+
+function getTriangleCentroid(
+  vertices: VectorTuple[],
+  triangle: Omit<ThreeMfTriangle, 'colorIndex'>,
+): THREE.Vector3 {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+
+  return new THREE.Vector3(
+    (a[0] + b[0] + c[0]) / 3,
+    (a[1] + b[1] + c[1]) / 3,
+    (a[2] + b[2] + c[2]) / 3,
+  );
 }
 
 function getEdgeKey(a: number, b: number): string {
