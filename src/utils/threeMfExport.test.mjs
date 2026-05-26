@@ -15,8 +15,19 @@ import {
   buildThreeMfRelationshipsXml,
   clampThreeMfColorCount,
   createThreeMfBlobFromScene,
+  analyzeThreeMfMeshTopology,
   validateThreeMfBlob,
 } from './threeMfExport.ts';
+
+async function getZipText(entries, filename) {
+  const entry = entries.find((candidate) => candidate.filename === filename);
+  assert.ok(entry, `${filename} is present`);
+  return entry.getData(new TextWriter());
+}
+
+async function getMeshModelXml(entries) {
+  return getZipText(entries, '3D/Objects/Object_1_1.model');
+}
 
 assert.equal(clampThreeMfColorCount(0), 1);
 assert.equal(clampThreeMfColorCount(4), 4);
@@ -53,8 +64,11 @@ assert.match(
   modelXml,
   /<triangle v1="0" v2="1" v3="2" pid="1" p1="1" p2="1" p3="1" paint_color="8"\/>/,
 );
-assert.match(modelXml, /<object id="4" type="model" pid="1" pindex="0">/);
-assert.match(modelXml, /<item objectid="4"\/>/);
+assert.match(
+  modelXml,
+  /<object id="1"[^>]+type="model"[^>]+pid="1" pindex="0">/,
+);
+assert.doesNotMatch(modelXml, /<build>/);
 
 const contentTypesXml = buildThreeMfContentTypesXml();
 assert.match(
@@ -68,10 +82,20 @@ const projectSettings = JSON.parse(
   buildThreeMfProjectSettingsConfig(['#112233', '#AABBCC']),
 );
 assert.deepEqual(projectSettings.filament_colour, ['#112233', '#AABBCC']);
+assert.deepEqual(projectSettings.default_filament_colour, [
+  '#112233',
+  '#AABBCC',
+]);
 assert.deepEqual(projectSettings.filament_type, ['PLA', 'PLA']);
 assert.deepEqual(projectSettings.filament_settings_id, [
   'Generic PLA',
   'Generic PLA',
+]);
+assert.deepEqual(projectSettings.filament_is_support, ['0', '0']);
+assert.deepEqual(projectSettings.filament_soluble, ['0', '0']);
+assert.deepEqual(projectSettings.filament_minimal_purge_on_wipe_tower, [
+  '15',
+  '15',
 ]);
 assert.equal(projectSettings.name, 'project_settings');
 assert.equal(projectSettings.from, 'project');
@@ -83,6 +107,7 @@ assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
   '220',
   '220',
 ]);
+assert.deepEqual(projectSettings.nozzle_diameter, ['0.4']);
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -114,16 +139,31 @@ const entries = await zipReader.getEntries();
 const entryNames = entries.map((entry) => entry.filename).sort();
 assert.deepEqual(entryNames, [
   '3D/3dmodel.model',
+  '3D/Objects/Object_1_1.model',
+  '3D/_rels/3dmodel.model.rels',
+  'Metadata/model_settings.config',
   'Metadata/project_settings.config',
+  'Metadata/slice_info.config',
   '[Content_Types].xml',
   '_rels/.rels',
 ]);
 
-const modelEntry = entries.find(
-  (entry) => entry.filename === '3D/3dmodel.model',
+const rootModelXml = await getZipText(entries, '3D/3dmodel.model');
+assert.match(rootModelXml, /<metadata name="Title">red-part<\/metadata>/);
+assert.match(
+  rootModelXml,
+  /<component p:path="\/3D\/Objects\/Object_1_1\.model" objectid="1"/,
 );
-assert.ok(modelEntry);
-const packagedModelXml = await modelEntry.getData(new TextWriter());
+assert.match(rootModelXml, /<item objectid="2"[^>]+printable="1"\/>/);
+const modelRelationshipsXml = await getZipText(
+  entries,
+  '3D/_rels/3dmodel.model.rels',
+);
+assert.match(
+  modelRelationshipsXml,
+  /Target="\/3D\/Objects\/Object_1_1\.model"/,
+);
+const packagedModelXml = await getMeshModelXml(entries);
 assert.match(packagedModelXml, /<metadata name="Title">red-part<\/metadata>/);
 assert.match(packagedModelXml, /<base name="Generic PLA 1 \(#FF0000\)"/);
 const settingsEntry = entries.find(
@@ -134,7 +174,17 @@ const packagedSettings = JSON.parse(
   await settingsEntry.getData(new TextWriter()),
 );
 assert.deepEqual(packagedSettings.filament_colour, ['#FF0000']);
+assert.deepEqual(packagedSettings.default_filament_colour, ['#FF0000']);
+assert.deepEqual(packagedSettings.filament_is_support, ['0']);
 assert.equal(packagedSettings.name, 'project_settings');
+assert.match(
+  await getZipText(entries, 'Metadata/model_settings.config'),
+  /<mesh_stat edges_fixed="0" degenerate_facets="0"/,
+);
+assert.match(
+  await getZipText(entries, 'Metadata/slice_info.config'),
+  /X-BBL-Client-Version/,
+);
 await zipReader.close();
 
 const squareScene = new THREE.Scene();
@@ -157,11 +207,9 @@ const squareBlob = await createThreeMfBlobFromScene({
   colorCount: 1,
 });
 const squareZipReader = new ZipReader(new BlobReader(squareBlob));
-const squareModelEntry = (await squareZipReader.getEntries()).find(
-  (entry) => entry.filename === '3D/3dmodel.model',
+const squareModelXml = await getMeshModelXml(
+  await squareZipReader.getEntries(),
 );
-assert.ok(squareModelEntry);
-const squareModelXml = await squareModelEntry.getData(new TextWriter());
 assert.equal(squareModelXml.match(/<vertex /g)?.length, 4);
 assert.equal(squareModelXml.match(/<triangle /g)?.length, 2);
 assert.match(
@@ -196,17 +244,50 @@ const splitSquareBlob = await createThreeMfBlobFromScene({
   colorCount: 1,
 });
 const splitSquareZipReader = new ZipReader(new BlobReader(splitSquareBlob));
-const splitSquareModelEntry = (await splitSquareZipReader.getEntries()).find(
-  (entry) => entry.filename === '3D/3dmodel.model',
-);
-assert.ok(splitSquareModelEntry);
-const splitSquareModelXml = await splitSquareModelEntry.getData(
-  new TextWriter(),
+const splitSquareModelXml = await getMeshModelXml(
+  await splitSquareZipReader.getEntries(),
 );
 assert.equal(splitSquareModelXml.match(/<vertex /g)?.length, 4);
 assert.match(splitSquareModelXml, /<triangle v1="0" v2="1" v3="2"/);
 assert.match(splitSquareModelXml, /<triangle v1="0" v2="2" v3="3"/);
 await splitSquareZipReader.close();
+
+const noisySurfaceScene = new THREE.Scene();
+const noisySurfaceGeometry = new THREE.BufferGeometry();
+noisySurfaceGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [5, 5, 0, 0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+    3,
+  ),
+);
+noisySurfaceGeometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1]);
+noisySurfaceGeometry.clearGroups();
+noisySurfaceGeometry.addGroup(0, 3, 0);
+noisySurfaceGeometry.addGroup(3, 9, 1);
+noisySurfaceScene.add(
+  new THREE.Mesh(noisySurfaceGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#00ee00' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+  ]),
+);
+const noisySurfaceBlob = await createThreeMfBlobFromScene({
+  scene: noisySurfaceScene,
+  filename: 'noisy-surface',
+  colorCount: 2,
+});
+const noisySurfaceZipReader = new ZipReader(new BlobReader(noisySurfaceBlob));
+const noisySurfaceEntries = await noisySurfaceZipReader.getEntries();
+const noisySurfaceModelXml = await getMeshModelXml(noisySurfaceEntries);
+const noisySurfaceMaterialIndexes = [
+  ...noisySurfaceModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => match[1]);
+assert.deepEqual([...new Set(noisySurfaceMaterialIndexes)], ['0']);
+const noisySurfaceSettings = JSON.parse(
+  await getZipText(noisySurfaceEntries, 'Metadata/project_settings.config'),
+);
+assert.equal(noisySurfaceSettings.filament_colour.length, 1);
+await noisySurfaceZipReader.close();
 
 const cubeScene = new THREE.Scene();
 cubeScene.add(
@@ -222,11 +303,7 @@ const cubeBlob = await createThreeMfBlobFromScene({
   colorCount: 1,
 });
 const cubeZipReader = new ZipReader(new BlobReader(cubeBlob));
-const cubeModelEntry = (await cubeZipReader.getEntries()).find(
-  (entry) => entry.filename === '3D/3dmodel.model',
-);
-assert.ok(cubeModelEntry);
-const cubeModelXml = await cubeModelEntry.getData(new TextWriter());
+const cubeModelXml = await getMeshModelXml(await cubeZipReader.getEntries());
 assert.equal(cubeModelXml.match(/<vertex /g)?.length, 8);
 assert.equal(cubeModelXml.match(/<triangle /g)?.length, 12);
 
@@ -248,7 +325,39 @@ assert.equal(
   [...edgeCounts.values()].every((count) => count === 2),
   true,
 );
+const cubeTopology = analyzeThreeMfMeshTopology(cubeModelXml);
+assert.deepEqual(cubeTopology.edgeUseHistogram, { 2: 18 });
+assert.equal(cubeTopology.boundaryEdges, 0);
+assert.equal(cubeTopology.overSharedEdges, 0);
+assert.equal(cubeTopology.degenerateTriangleCount, 0);
 await cubeZipReader.close();
+
+const closeVertexTopologyXml = buildThreeMfModelXml({
+  modelName: 'close-vertex-topology',
+  vertices: [
+    [0, 0, 0],
+    [10, 0, 0],
+    [0, 10, 0],
+    [0.05, 0, 0],
+    [10, 10, 0],
+  ],
+  triangles: [
+    { v1: 0, v2: 1, v3: 2, colorIndex: 0 },
+    { v1: 3, v2: 1, v3: 4, colorIndex: 1 },
+  ],
+  palette: ['#FF0000', '#00FF00'],
+});
+const rawCloseVertexTopology = analyzeThreeMfMeshTopology(
+  closeVertexTopologyXml,
+);
+assert.equal(rawCloseVertexTopology.degenerateTriangleCount, 0);
+const weldedCloseVertexTopology = analyzeThreeMfMeshTopology(
+  closeVertexTopologyXml,
+  { weldTolerance: 0.09 },
+);
+assert.equal(weldedCloseVertexTopology.weldedVertexCount, 4);
+assert.equal(weldedCloseVertexTopology.degenerateTriangleCount, 0);
+assert.equal(weldedCloseVertexTopology.boundaryEdges, 4);
 
 const nonManifoldScene = new THREE.Scene();
 const nonManifoldGeometry = new THREE.BufferGeometry();
@@ -279,11 +388,7 @@ const repairedThreeMfBlob = await createThreeMfBlobFromScene({
 });
 const repairedZipReader = new ZipReader(new BlobReader(repairedThreeMfBlob));
 const repairedEntries = await repairedZipReader.getEntries();
-const repairedModelEntry = repairedEntries.find(
-  (entry) => entry.filename === '3D/3dmodel.model',
-);
-assert.ok(repairedModelEntry);
-const repairedModelXml = await repairedModelEntry.getData(new TextWriter());
+const repairedModelXml = await getMeshModelXml(repairedEntries);
 assert.equal(repairedModelXml.match(/<triangle /g)?.length, 2);
 assert.match(repairedModelXml, /<m:color color="#FF0000FF"\/>/);
 assert.match(repairedModelXml, /<m:color color="#00FF00FF"\/>/);
@@ -331,19 +436,14 @@ const degenerateRepairBlob = await createThreeMfBlobFromScene({
 const degenerateRepairZipReader = new ZipReader(
   new BlobReader(degenerateRepairBlob),
 );
-const degenerateRepairModelEntry = (
-  await degenerateRepairZipReader.getEntries()
-).find((entry) => entry.filename === '3D/3dmodel.model');
-assert.ok(degenerateRepairModelEntry);
-const degenerateRepairModelXml = await degenerateRepairModelEntry.getData(
-  new TextWriter(),
-);
+const degenerateRepairEntries = await degenerateRepairZipReader.getEntries();
+const degenerateRepairModelXml = await getMeshModelXml(degenerateRepairEntries);
 assert.equal(degenerateRepairModelXml.match(/<triangle /g)?.length, 1);
 assert.match(degenerateRepairModelXml, /<m:color color="#FF0000FF"\/>/);
 assert.doesNotMatch(degenerateRepairModelXml, /<m:color color="#0000FFFF"\/>/);
-const degenerateRepairSettingsEntry = (
-  await degenerateRepairZipReader.getEntries()
-).find((entry) => entry.filename === 'Metadata/project_settings.config');
+const degenerateRepairSettingsEntry = degenerateRepairEntries.find(
+  (entry) => entry.filename === 'Metadata/project_settings.config',
+);
 assert.ok(degenerateRepairSettingsEntry);
 const degenerateRepairSettings = JSON.parse(
   await degenerateRepairSettingsEntry.getData(new TextWriter()),
@@ -381,12 +481,8 @@ const coincidentTriangleBlob = await createThreeMfBlobFromScene({
 const coincidentTriangleZipReader = new ZipReader(
   new BlobReader(coincidentTriangleBlob),
 );
-const coincidentTriangleModelEntry = (
-  await coincidentTriangleZipReader.getEntries()
-).find((entry) => entry.filename === '3D/3dmodel.model');
-assert.ok(coincidentTriangleModelEntry);
-const coincidentTriangleModelXml = await coincidentTriangleModelEntry.getData(
-  new TextWriter(),
+const coincidentTriangleModelXml = await getMeshModelXml(
+  await coincidentTriangleZipReader.getEntries(),
 );
 assert.equal(coincidentTriangleModelXml.match(/<triangle /g)?.length, 3);
 await coincidentTriangleZipReader.close();
@@ -419,12 +515,8 @@ const recolorAfterRepairZipReader = new ZipReader(
 );
 const recolorAfterRepairEntries =
   await recolorAfterRepairZipReader.getEntries();
-const recolorAfterRepairModelEntry = recolorAfterRepairEntries.find(
-  (entry) => entry.filename === '3D/3dmodel.model',
-);
-assert.ok(recolorAfterRepairModelEntry);
-const recolorAfterRepairModelXml = await recolorAfterRepairModelEntry.getData(
-  new TextWriter(),
+const recolorAfterRepairModelXml = await getMeshModelXml(
+  recolorAfterRepairEntries,
 );
 assert.equal(recolorAfterRepairModelXml.match(/<triangle /g)?.length, 1);
 assert.match(recolorAfterRepairModelXml, /<m:color color="#00FF00FF"\/>/);

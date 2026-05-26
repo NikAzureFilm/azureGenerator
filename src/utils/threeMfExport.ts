@@ -15,10 +15,15 @@ const CORE_NAMESPACE =
   'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
 const MATERIAL_NAMESPACE =
   'http://schemas.microsoft.com/3dmanufacturing/material/2015/02';
+const PRODUCTION_NAMESPACE =
+  'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+const SLIC3R_NAMESPACE = 'http://schemas.slic3r.org/3mf/2017/06';
 const RELATIONSHIPS_NAMESPACE =
   'http://schemas.openxmlformats.org/package/2006/relationships';
 const CONTENT_TYPES_NAMESPACE =
   'http://schemas.openxmlformats.org/package/2006/content-types';
+const BAMBU_OBJECT_MODEL_PATH = '3D/Objects/Object_1_1.model';
+const BAMBU_OBJECT_MODEL_REL_TARGET = '/3D/Objects/Object_1_1.model';
 const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
   '4',
   '8',
@@ -39,6 +44,8 @@ const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
 ];
 const VERTEX_KEY_PRECISION = 1e-6;
 const DEGENERATE_TRIANGLE_AREA_SQUARED = 1e-20;
+const SMALL_COLOR_ISLAND_TRIANGLE_COUNT = 4;
+const SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED = 0.03;
 
 type VectorTuple = [number, number, number];
 
@@ -82,8 +89,25 @@ type RepairedSceneGeometry = {
 type ThreeMfPackageParts = {
   contentTypesXml: string;
   relationshipsXml: string;
-  modelXml: string;
+  modelRelationshipsXml: string;
+  rootModelXml: string;
+  objectModelXml: string;
+  modelSettingsConfig: string;
+  sliceInfoConfig: string;
   projectSettingsConfig: string;
+};
+
+export type ThreeMfMeshTopology = {
+  vertexCount: number;
+  weldedVertexCount: number;
+  triangleCount: number;
+  invalidVertexReferenceCount: number;
+  degenerateTriangleCount: number;
+  uniqueEdges: number;
+  edgeUseHistogram: Record<number, number>;
+  boundaryEdges: number;
+  overSharedEdges: number;
+  materialTransitionEdges: number;
 };
 
 type ZipTextEntry = {
@@ -106,14 +130,20 @@ export function buildThreeMfContentTypesXml(): string {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
   <Default Extension="config" ContentType="application/octet-stream"/>
-  <Override PartName="/3D/3dmodel.model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
 </Types>`);
 }
 
 export function buildThreeMfRelationshipsXml(): string {
   return xmlDeclaration(`\
 <Relationships xmlns="${RELATIONSHIPS_NAMESPACE}">
-  <Relationship Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/3dmodel.model"/>
+  <Relationship Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/3dmodel.model"/>
+</Relationships>`);
+}
+
+export function buildThreeMfModelRelationshipsXml(): string {
+  return xmlDeclaration(`\
+<Relationships xmlns="${RELATIONSHIPS_NAMESPACE}">
+  <Relationship Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="${BAMBU_OBJECT_MODEL_REL_TARGET}"/>
 </Relationships>`);
 }
 
@@ -146,11 +176,6 @@ export function buildThreeMfModelXml({
         normalizedPalette.length,
       );
       const paintColor = getBambuOrcaPaintColor(colorIndex);
-      // pid="1" references <basematerials>, which Bambu Studio honors as the
-      // per-triangle filament assignment. Pointing at <m:colorgroup> (pid="2")
-      // left every triangle on the object's default material and let the
-      // paint_color overlay collide with the slicer's auto color-parsing,
-      // producing the scrambled colors seen in Bambu Studio.
       return `        <triangle v1="${triangle.v1}" v2="${triangle.v2}" v3="${triangle.v3}" pid="1" p1="${colorIndex}" p2="${colorIndex}" p3="${colorIndex}" paint_color="${paintColor}"/>`;
     })
     .join('\n');
@@ -166,7 +191,7 @@ ${baseMaterials}
     <m:colorgroup id="2">
 ${colors}
     </m:colorgroup>
-    <object id="4" type="model" pid="1" pindex="0">
+    <object id="1" type="model" pid="1" pindex="0">
       <mesh>
         <vertices>
 ${vertexXml}
@@ -177,10 +202,70 @@ ${triangleXml}
       </mesh>
     </object>
   </resources>
-  <build>
-    <item objectid="4"/>
+</model>`);
+}
+
+export function buildThreeMfRootModelXml(modelName: string): string {
+  return xmlDeclaration(`\
+<model unit="millimeter" xml:lang="en-US" requiredextensions="p" xmlns="${CORE_NAMESPACE}" xmlns:slic3rpe="${SLIC3R_NAMESPACE}" xmlns:p="${PRODUCTION_NAMESPACE}">
+  <metadata name="Application">AzureFilm Generator</metadata>
+  <metadata name="BambuStudio:3mfVersion">1</metadata>
+  <metadata name="Title">${escapeXml(modelName)}</metadata>
+  <metadata name="Designer">AzureFilm Generator</metadata>
+  <resources>
+    <object id="2" p:UUID="00000001-61cb-4c03-9d28-80fed5dfa1dc" type="model">
+      <components>
+        <component p:path="${BAMBU_OBJECT_MODEL_REL_TARGET}" objectid="1" p:UUID="00010000-b206-40ff-9872-83e8017abed1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+      </components>
+    </object>
+  </resources>
+  <build p:UUID="2c7c17d8-22b5-4d84-8835-1976022ea369">
+    <item objectid="2" p:UUID="00000002-b1ec-4553-aec9-835e5b724bb4" printable="1"/>
   </build>
 </model>`);
+}
+
+export function buildThreeMfModelSettingsConfig(modelName: string): string {
+  return xmlDeclaration(`\
+<config>
+  <object id="2">
+    <metadata key="name" value="${escapeXml(modelName)}"/>
+    <metadata key="extruder" value="1"/>
+    <part id="1" subtype="normal_part">
+      <metadata key="name" value="${escapeXml(modelName)}"/>
+      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>
+      <metadata key="source_file" value="${escapeXml(modelName)}.3mf"/>
+      <metadata key="source_object_id" value="0"/>
+      <metadata key="source_volume_id" value="0"/>
+      <metadata key="source_offset_x" value="0"/>
+      <metadata key="source_offset_y" value="0"/>
+      <metadata key="source_offset_z" value="0"/>
+      <mesh_stat edges_fixed="0" degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>
+    </part>
+  </object>
+  <plate>
+    <metadata key="plater_id" value="1"/>
+    <metadata key="plater_name" value=""/>
+    <metadata key="locked" value="false"/>
+    <model_instance>
+      <metadata key="object_id" value="2"/>
+      <metadata key="instance_id" value="0"/>
+      <metadata key="identify_id" value="8"/>
+    </model_instance>
+  </plate>
+  <assemble>
+  </assemble>
+</config>`);
+}
+
+export function buildThreeMfSliceInfoConfig(): string {
+  return xmlDeclaration(`\
+<config>
+  <header>
+    <header_item key="X-BBL-Client-Type" value="slicer"/>
+    <header_item key="X-BBL-Client-Version" value="01.08.02.56"/>
+  </header>
+</config>`);
 }
 
 export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
@@ -191,8 +276,9 @@ export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
     {
       name: 'project_settings',
       from: 'project',
-      version: '01.10.02.76',
+      version: '01.08.02.56',
       filament_colour: normalizedPalette,
+      default_filament_colour: normalizedPalette,
       filament_type: perFilament('PLA'),
       filament_settings_id: perFilament('Generic PLA'),
       filament_vendor: perFilament('Generic'),
@@ -200,12 +286,18 @@ export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
       filament_density: perFilament('1.24'),
       filament_cost: perFilament('20'),
       filament_ids: perFilament(''),
+      filament_is_support: perFilament('0'),
+      filament_soluble: perFilament('0'),
+      filament_minimal_purge_on_wipe_tower: perFilament('15'),
+      filament_start_gcode: perFilament(' '),
+      filament_end_gcode: perFilament(' '),
       filament_max_volumetric_speed: perFilament('12'),
       filament_flow_ratio: perFilament('0.98'),
       nozzle_temperature: perFilament('220'),
       nozzle_temperature_initial_layer: perFilament('220'),
       nozzle_temperature_range_high: perFilament('240'),
       nozzle_temperature_range_low: perFilament('190'),
+      nozzle_diameter: ['0.4'],
       single_extruder_multi_material: '1',
     },
     null,
@@ -243,26 +335,34 @@ export async function createThreeMfBlobFromScene({
     targetColorCount,
   );
 
-  const triangles = coloredTriangles.map((triangle) => ({
+  const indexedTriangles = coloredTriangles.map((triangle) => ({
     v1: triangle.v1,
     v2: triangle.v2,
     v3: triangle.v3,
     colorIndex: findNearestPaletteIndex(triangle.color, palette),
   }));
+  const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
+    palette,
+    smoothTriangleColorIndexes(indexedTriangles, palette),
+  );
 
-  const modelXml = buildThreeMfModelXml({
+  const objectModelXml = buildThreeMfModelXml({
     modelName: filename,
     vertices: geometry.vertices,
     triangles,
-    palette: palette.map(colorToHex),
+    palette: usedPalette.map(colorToHex),
   });
 
   const packageParts = {
     contentTypesXml: buildThreeMfContentTypesXml(),
     relationshipsXml: buildThreeMfRelationshipsXml(),
-    modelXml,
+    modelRelationshipsXml: buildThreeMfModelRelationshipsXml(),
+    rootModelXml: buildThreeMfRootModelXml(filename),
+    objectModelXml,
+    modelSettingsConfig: buildThreeMfModelSettingsConfig(filename),
+    sliceInfoConfig: buildThreeMfSliceInfoConfig(),
     projectSettingsConfig: buildThreeMfProjectSettingsConfig(
-      palette.map(colorToHex),
+      usedPalette.map(colorToHex),
     ),
   };
   validateThreeMfPackageParts(packageParts);
@@ -275,13 +375,30 @@ export async function createThreeMfBlobFromScene({
 async function createThreeMfPackage({
   contentTypesXml,
   relationshipsXml,
-  modelXml,
+  modelRelationshipsXml,
+  rootModelXml,
+  objectModelXml,
+  modelSettingsConfig,
+  sliceInfoConfig,
   projectSettingsConfig,
 }: ThreeMfPackageParts): Promise<Blob> {
   const zipWriter = new ZipWriter(new BlobWriter('model/3mf'));
   await zipWriter.add('[Content_Types].xml', new TextReader(contentTypesXml));
   await zipWriter.add('_rels/.rels', new TextReader(relationshipsXml));
-  await zipWriter.add('3D/3dmodel.model', new TextReader(modelXml));
+  await zipWriter.add(
+    '3D/_rels/3dmodel.model.rels',
+    new TextReader(modelRelationshipsXml),
+  );
+  await zipWriter.add('3D/3dmodel.model', new TextReader(rootModelXml));
+  await zipWriter.add(BAMBU_OBJECT_MODEL_PATH, new TextReader(objectModelXml));
+  await zipWriter.add(
+    'Metadata/model_settings.config',
+    new TextReader(modelSettingsConfig),
+  );
+  await zipWriter.add(
+    'Metadata/slice_info.config',
+    new TextReader(sliceInfoConfig),
+  );
   await zipWriter.add(
     'Metadata/project_settings.config',
     new TextReader(projectSettingsConfig),
@@ -297,6 +414,10 @@ export async function validateThreeMfBlob(blob: Blob): Promise<void> {
     const entriesByName = new Map<string, ZipTextEntry>(
       entries.map((entry) => [entry.filename, entry as ZipTextEntry]),
     );
+
+    const objectModelFilename = entriesByName.has(BAMBU_OBJECT_MODEL_PATH)
+      ? BAMBU_OBJECT_MODEL_PATH
+      : '3D/3dmodel.model';
 
     for (const filename of [
       '[Content_Types].xml',
@@ -321,6 +442,10 @@ export async function validateThreeMfBlob(blob: Blob): Promise<void> {
       entriesByName,
       '3D/3dmodel.model',
     );
+    const objectModelXml =
+      objectModelFilename === '3D/3dmodel.model'
+        ? modelXml
+        : await readRequiredZipText(entriesByName, objectModelFilename);
     const projectSettingsConfig = await readRequiredZipText(
       entriesByName,
       'Metadata/project_settings.config',
@@ -329,7 +454,23 @@ export async function validateThreeMfBlob(blob: Blob): Promise<void> {
     validateThreeMfPackageParts({
       contentTypesXml,
       relationshipsXml,
-      modelXml,
+      modelRelationshipsXml: entriesByName.has('3D/_rels/3dmodel.model.rels')
+        ? await readRequiredZipText(
+            entriesByName,
+            '3D/_rels/3dmodel.model.rels',
+          )
+        : '',
+      rootModelXml: modelXml,
+      objectModelXml,
+      modelSettingsConfig: entriesByName.has('Metadata/model_settings.config')
+        ? await readRequiredZipText(
+            entriesByName,
+            'Metadata/model_settings.config',
+          )
+        : '',
+      sliceInfoConfig: entriesByName.has('Metadata/slice_info.config')
+        ? await readRequiredZipText(entriesByName, 'Metadata/slice_info.config')
+        : '',
       projectSettingsConfig,
     });
   } finally {
@@ -337,10 +478,127 @@ export async function validateThreeMfBlob(blob: Blob): Promise<void> {
   }
 }
 
+export function analyzeThreeMfMeshTopology(
+  modelXml: string,
+  options: { weldTolerance?: number } = {},
+): ThreeMfMeshTopology {
+  const vertices: VectorTuple[] = [];
+  for (const match of modelXml.matchAll(/<vertex\b([^>]*)\/>/g)) {
+    const attributes = parseXmlAttributes(match[1]);
+    vertices.push([
+      Number.parseFloat(attributes.get('x') ?? '0'),
+      Number.parseFloat(attributes.get('y') ?? '0'),
+      Number.parseFloat(attributes.get('z') ?? '0'),
+    ]);
+  }
+
+  const remappedVertices = remapTopologyVertices(
+    vertices,
+    options.weldTolerance,
+  );
+  const triangles: Array<{
+    vertices: [number, number, number];
+    materialIndex: number | null;
+  }> = [];
+  let invalidVertexReferenceCount = 0;
+  let degenerateTriangleCount = 0;
+
+  for (const match of modelXml.matchAll(/<triangle\b([^>]*)\/>/g)) {
+    const attributes = parseXmlAttributes(match[1]);
+    const rawVertexIndexes = ['v1', 'v2', 'v3'].map((name) =>
+      Number.parseInt(attributes.get(name) ?? '', 10),
+    );
+
+    if (
+      rawVertexIndexes.some(
+        (index) =>
+          !Number.isInteger(index) || index < 0 || index >= vertices.length,
+      )
+    ) {
+      invalidVertexReferenceCount += 1;
+      continue;
+    }
+
+    const vertexIndexes = rawVertexIndexes.map(
+      (index) => remappedVertices.vertexIndexes[index],
+    ) as [number, number, number];
+    if (new Set(vertexIndexes).size !== 3) {
+      degenerateTriangleCount += 1;
+    }
+
+    triangles.push({
+      vertices: vertexIndexes,
+      materialIndex: Number.isInteger(
+        Number.parseInt(attributes.get('p1') ?? '', 10),
+      )
+        ? Number.parseInt(attributes.get('p1') ?? '', 10)
+        : null,
+    });
+  }
+
+  const edgeUseCounts = new Map<string, number>();
+  const edgeMaterialIndexes = new Map<string, Set<number>>();
+  for (const triangle of triangles) {
+    if (new Set(triangle.vertices).size !== 3) {
+      continue;
+    }
+
+    for (const [a, b] of [
+      [triangle.vertices[0], triangle.vertices[1]],
+      [triangle.vertices[1], triangle.vertices[2]],
+      [triangle.vertices[2], triangle.vertices[0]],
+    ]) {
+      const edgeKey = getEdgeKey(a, b);
+      edgeUseCounts.set(edgeKey, (edgeUseCounts.get(edgeKey) ?? 0) + 1);
+      if (triangle.materialIndex !== null) {
+        const materialIndexes = edgeMaterialIndexes.get(edgeKey) ?? new Set();
+        materialIndexes.add(triangle.materialIndex);
+        edgeMaterialIndexes.set(edgeKey, materialIndexes);
+      }
+    }
+  }
+
+  const edgeUseHistogram: Record<number, number> = {};
+  let boundaryEdges = 0;
+  let overSharedEdges = 0;
+  for (const count of edgeUseCounts.values()) {
+    edgeUseHistogram[count] = (edgeUseHistogram[count] ?? 0) + 1;
+    if (count === 1) {
+      boundaryEdges += 1;
+    } else if (count > 2) {
+      overSharedEdges += 1;
+    }
+  }
+
+  let materialTransitionEdges = 0;
+  for (const materialIndexes of edgeMaterialIndexes.values()) {
+    if (materialIndexes.size > 1) {
+      materialTransitionEdges += 1;
+    }
+  }
+
+  return {
+    vertexCount: vertices.length,
+    weldedVertexCount: remappedVertices.vertexCount,
+    triangleCount: triangles.length,
+    invalidVertexReferenceCount,
+    degenerateTriangleCount,
+    uniqueEdges: edgeUseCounts.size,
+    edgeUseHistogram,
+    boundaryEdges,
+    overSharedEdges,
+    materialTransitionEdges,
+  };
+}
+
 function validateThreeMfPackageParts({
   contentTypesXml,
   relationshipsXml,
-  modelXml,
+  modelRelationshipsXml,
+  rootModelXml,
+  objectModelXml,
+  modelSettingsConfig,
+  sliceInfoConfig,
   projectSettingsConfig,
 }: ThreeMfPackageParts): void {
   if (
@@ -355,22 +613,41 @@ function validateThreeMfPackageParts({
     throw new Error('3MF package is missing the 3D model relationship');
   }
 
-  if (!modelXml.includes(`xmlns="${CORE_NAMESPACE}"`)) {
+  if (!rootModelXml.includes(`xmlns="${CORE_NAMESPACE}"`)) {
+    throw new Error('3MF root model is missing the core namespace');
+  }
+
+  if (
+    modelRelationshipsXml &&
+    !modelRelationshipsXml.includes(`Target="${BAMBU_OBJECT_MODEL_REL_TARGET}"`)
+  ) {
+    throw new Error('3MF package is missing the Bambu object relationship');
+  }
+
+  if (modelSettingsConfig && !modelSettingsConfig.includes('<mesh_stat ')) {
+    throw new Error('3MF package is missing Bambu model mesh stats');
+  }
+
+  if (sliceInfoConfig && !sliceInfoConfig.includes('X-BBL-Client-Version')) {
+    throw new Error('3MF package is missing Bambu slice metadata');
+  }
+
+  if (!objectModelXml.includes(`xmlns="${CORE_NAMESPACE}"`)) {
     throw new Error('3MF model is missing the core namespace');
   }
 
-  if (!modelXml.includes(`xmlns:m="${MATERIAL_NAMESPACE}"`)) {
+  if (!objectModelXml.includes(`xmlns:m="${MATERIAL_NAMESPACE}"`)) {
     throw new Error('3MF model is missing the material namespace');
   }
 
-  const resourceMaterialCounts = getMaterialResourceCounts(modelXml);
-  const vertexCount = modelXml.match(/<vertex\b/g)?.length ?? 0;
+  const resourceMaterialCounts = getMaterialResourceCounts(objectModelXml);
+  const vertexCount = objectModelXml.match(/<vertex\b/g)?.length ?? 0;
   if (vertexCount === 0) {
     throw new Error('3MF model has no vertices');
   }
 
   const objectIds = new Set<string>();
-  for (const match of modelXml.matchAll(/<object\b([^>]*)>/g)) {
+  for (const match of objectModelXml.matchAll(/<object\b([^>]*)>/g)) {
     const attributes = parseXmlAttributes(match[1]);
     const objectId = attributes.get('id');
     if (objectId) {
@@ -392,15 +669,25 @@ function validateThreeMfPackageParts({
     throw new Error('3MF model has no object resources');
   }
 
-  for (const match of modelXml.matchAll(/<item\b([^>]*)\/>/g)) {
+  const rootObjectIds = new Set<string>();
+  for (const match of rootModelXml.matchAll(/<object\b([^>]*)>/g)) {
+    const objectId = parseXmlAttributes(match[1]).get('id');
+    if (objectId) {
+      rootObjectIds.add(objectId);
+    }
+  }
+
+  for (const match of rootModelXml.matchAll(/<item\b([^>]*)\/>/g)) {
     const objectId = parseXmlAttributes(match[1]).get('objectid');
-    if (!objectId || !objectIds.has(objectId)) {
-      throw new Error(`3MF build item references missing object ${objectId}`);
+    if (!objectId || !rootObjectIds.has(objectId)) {
+      throw new Error(
+        `3MF build item references missing root object ${objectId}`,
+      );
     }
   }
 
   let triangleCount = 0;
-  for (const match of modelXml.matchAll(/<triangle\b([^>]*)\/>/g)) {
+  for (const match of objectModelXml.matchAll(/<triangle\b([^>]*)\/>/g)) {
     triangleCount += 1;
     const attributes = parseXmlAttributes(match[1]);
     const vertexIndexes = ['v1', 'v2', 'v3'].map((name) =>
@@ -432,13 +719,22 @@ function validateThreeMfPackageParts({
       const materialIndex = Number.parseInt(attributes.get(name) ?? '', 10);
       validateMaterialIndex(pid, materialIndex, resourceMaterialCounts);
     }
+
+    const materialIndex = Number.parseInt(attributes.get('p1') ?? '', 10);
+    const paintColor = attributes.get('paint_color');
+    const expectedPaintColor = getBambuOrcaPaintColor(materialIndex);
+    if (paintColor !== expectedPaintColor) {
+      throw new Error(
+        `3MF triangle paint_color ${paintColor} does not match material slot ${expectedPaintColor}`,
+      );
+    }
   }
 
   if (triangleCount === 0) {
     throw new Error('3MF model has no triangles');
   }
 
-  validateProjectSettingsColors(projectSettingsConfig, modelXml);
+  validateProjectSettingsColors(projectSettingsConfig, objectModelXml);
 }
 
 async function readRequiredZipText(
@@ -694,6 +990,177 @@ function getNearestTriangleColor(
   });
 
   return nearestTriangle.color.clone();
+}
+
+function smoothTriangleColorIndexes(
+  triangles: ThreeMfTriangle[],
+  palette: THREE.Color[],
+): ThreeMfTriangle[] {
+  if (triangles.length === 0 || palette.length <= 1) {
+    return triangles;
+  }
+
+  const adjacency = buildTriangleAdjacency(triangles);
+  const colorIndexes = triangles.map((triangle) => triangle.colorIndex);
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    let changed = false;
+    const components = getSameColorTriangleComponents(colorIndexes, adjacency);
+
+    for (const component of components) {
+      if (
+        component.triangleIndexes.length > SMALL_COLOR_ISLAND_TRIANGLE_COUNT
+      ) {
+        continue;
+      }
+
+      const neighborCounts = new Map<number, number>();
+      for (const triangleIndex of component.triangleIndexes) {
+        for (const neighborIndex of adjacency[triangleIndex]) {
+          const neighborColorIndex = colorIndexes[neighborIndex];
+          if (neighborColorIndex !== component.colorIndex) {
+            neighborCounts.set(
+              neighborColorIndex,
+              (neighborCounts.get(neighborColorIndex) ?? 0) + 1,
+            );
+          }
+        }
+      }
+
+      const replacement = [...neighborCounts.entries()].sort(
+        (a, b) => b[1] - a[1],
+      )[0];
+      if (!replacement) {
+        continue;
+      }
+
+      const [replacementColorIndex] = replacement;
+      if (
+        colorDistanceSquared(
+          palette[component.colorIndex],
+          palette[replacementColorIndex],
+        ) > SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED
+      ) {
+        continue;
+      }
+
+      for (const triangleIndex of component.triangleIndexes) {
+        colorIndexes[triangleIndex] = replacementColorIndex;
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  return triangles.map((triangle, index) => ({
+    ...triangle,
+    colorIndex: colorIndexes[index],
+  }));
+}
+
+function removeUnusedPaletteEntries(
+  palette: THREE.Color[],
+  triangles: ThreeMfTriangle[],
+): { palette: THREE.Color[]; triangles: ThreeMfTriangle[] } {
+  const usedIndexes = [
+    ...new Set(triangles.map((triangle) => triangle.colorIndex)),
+  ].sort((a, b) => a - b);
+  const remap = new Map<number, number>();
+  usedIndexes.forEach((sourceIndex, targetIndex) => {
+    remap.set(sourceIndex, targetIndex);
+  });
+
+  return {
+    palette: usedIndexes.map((index) => palette[index].clone()),
+    triangles: triangles.map((triangle) => ({
+      ...triangle,
+      colorIndex: remap.get(triangle.colorIndex) ?? 0,
+    })),
+  };
+}
+
+function buildTriangleAdjacency(
+  triangles: Array<Omit<ThreeMfTriangle, 'colorIndex'>>,
+): number[][] {
+  const edgeToTriangleIndexes = new Map<string, number[]>();
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const edgeKey = getEdgeKey(a, b);
+      const triangleIndexes = edgeToTriangleIndexes.get(edgeKey) ?? [];
+      triangleIndexes.push(triangleIndex);
+      edgeToTriangleIndexes.set(edgeKey, triangleIndexes);
+    }
+  });
+
+  const adjacency = Array.from(
+    { length: triangles.length },
+    () => new Set<number>(),
+  );
+  for (const triangleIndexes of edgeToTriangleIndexes.values()) {
+    for (const triangleIndex of triangleIndexes) {
+      for (const neighborIndex of triangleIndexes) {
+        if (triangleIndex !== neighborIndex) {
+          adjacency[triangleIndex].add(neighborIndex);
+        }
+      }
+    }
+  }
+
+  return adjacency.map((neighbors) => [...neighbors]);
+}
+
+function getSameColorTriangleComponents(
+  colorIndexes: number[],
+  adjacency: number[][],
+): Array<{ colorIndex: number; triangleIndexes: number[] }> {
+  const visited = new Set<number>();
+  const components: Array<{ colorIndex: number; triangleIndexes: number[] }> =
+    [];
+
+  for (
+    let triangleIndex = 0;
+    triangleIndex < colorIndexes.length;
+    triangleIndex += 1
+  ) {
+    if (visited.has(triangleIndex)) {
+      continue;
+    }
+
+    const colorIndex = colorIndexes[triangleIndex];
+    const component = { colorIndex, triangleIndexes: [] as number[] };
+    const stack = [triangleIndex];
+    visited.add(triangleIndex);
+
+    while (stack.length > 0) {
+      const currentIndex = stack.pop() as number;
+      component.triangleIndexes.push(currentIndex);
+
+      for (const neighborIndex of adjacency[currentIndex]) {
+        if (
+          !visited.has(neighborIndex) &&
+          colorIndexes[neighborIndex] === colorIndex
+        ) {
+          visited.add(neighborIndex);
+          stack.push(neighborIndex);
+        }
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+
+function colorDistanceSquared(a: THREE.Color, b: THREE.Color): number {
+  return (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2;
 }
 
 function isDegenerateTriangle(
@@ -1027,6 +1494,7 @@ function validateProjectSettingsColors(
 ): void {
   const projectSettings = JSON.parse(projectSettingsConfig) as {
     filament_colour?: unknown;
+    [key: string]: unknown;
   };
 
   if (!Array.isArray(projectSettings.filament_colour)) {
@@ -1053,6 +1521,35 @@ function validateProjectSettingsColors(
       );
     }
   });
+
+  for (const key of [
+    'default_filament_colour',
+    'filament_type',
+    'filament_settings_id',
+    'filament_vendor',
+    'filament_diameter',
+    'filament_density',
+    'filament_cost',
+    'filament_ids',
+    'filament_is_support',
+    'filament_soluble',
+    'filament_minimal_purge_on_wipe_tower',
+    'filament_start_gcode',
+    'filament_end_gcode',
+    'filament_max_volumetric_speed',
+    'filament_flow_ratio',
+    'nozzle_temperature',
+    'nozzle_temperature_initial_layer',
+    'nozzle_temperature_range_high',
+    'nozzle_temperature_range_low',
+  ]) {
+    const value = projectSettings[key];
+    if (!Array.isArray(value) || value.length !== filamentColors.length) {
+      throw new Error(
+        `3MF project settings ${key} count does not match materials`,
+      );
+    }
+  }
 }
 
 function parseXmlAttributes(source: string): Map<string, string> {
@@ -1110,6 +1607,37 @@ function getTriangleCentroid(
     (a[1] + b[1] + c[1]) / 3,
     (a[2] + b[2] + c[2]) / 3,
   );
+}
+
+function remapTopologyVertices(
+  vertices: VectorTuple[],
+  weldTolerance = 0,
+): { vertexIndexes: number[]; vertexCount: number } {
+  if (weldTolerance <= 0) {
+    return {
+      vertexIndexes: vertices.map((_, index) => index),
+      vertexCount: vertices.length,
+    };
+  }
+
+  const vertexIndexes: number[] = [];
+  const weldedVertexIndexes = new Map<string, number>();
+  for (const vertex of vertices) {
+    const key = vertex
+      .map((value) => Math.floor(value / weldTolerance))
+      .join(',');
+    let weldedIndex = weldedVertexIndexes.get(key);
+    if (weldedIndex === undefined) {
+      weldedIndex = weldedVertexIndexes.size;
+      weldedVertexIndexes.set(key, weldedIndex);
+    }
+    vertexIndexes.push(weldedIndex);
+  }
+
+  return {
+    vertexIndexes,
+    vertexCount: weldedVertexIndexes.size,
+  };
 }
 
 function getEdgeKey(a: number, b: number): string {

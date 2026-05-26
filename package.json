@@ -32,6 +32,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build && node scripts/prepare-vercel-static.mjs",
     "vercel-build": "npm run build",
+    "test:3mf": "node --experimental-strip-types src/utils/threeMfExport.test.mjs",
     "lint": "eslint . --ignore-pattern 'supabase/**'",
     "typecheck": "tsc -b --noEmit",
     "lint:supabase": "deno lint supabase",
