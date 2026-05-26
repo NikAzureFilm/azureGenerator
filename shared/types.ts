@@ -12,12 +12,24 @@ export type MultiviewSlot = 'front' | 'left' | 'back' | 'right';
 
 export type MultiviewImages = Partial<Record<MultiviewSlot, string>>;
 
+export type SemanticMaterialClass = {
+  id: number;
+  name: string;
+  color: string;
+};
+
+export type SemanticMaterialMap = {
+  classes: SemanticMaterialClass[];
+  triangleMaterialIds?: number[];
+};
+
 export type Prompt = {
   text?: string;
   images?: string[];
   mesh?: string;
   model?: Model;
   multiviewImages?: MultiviewImages;
+  semanticMaterialMap?: SemanticMaterialMap;
 };
 
 export type Message = Omit<
@@ -76,6 +88,8 @@ export type Content = {
   preferredFormat?: 'glb' | 'fbx';
   // 4-slot labeled images for the 'multiview' model (front/left/back/right)
   multiviewImages?: MultiviewImages;
+  // Optional semantic material classes/triangle ids used by 3MF export.
+  semanticMaterialMap?: SemanticMaterialMap;
   // Image provider used when creating seed/reference images for mesh generation.
   imageGenerationModel?: ImageGenerationModel;
 };

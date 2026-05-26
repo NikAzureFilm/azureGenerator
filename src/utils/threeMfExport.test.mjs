@@ -499,6 +499,84 @@ const noisySlotSettings = JSON.parse(
 assert.deepEqual(noisySlotSettings.filament_colour, ['#5B7F22']);
 await noisySlotZipReader.close();
 
+const semanticMapScene = new THREE.Scene();
+const semanticMapGeometry = new THREE.BufferGeometry();
+semanticMapGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [
+      0, 0, 0, 1, 0, 0, 0, 1, 0,
+      2, 0, 0, 3, 0, 0, 2, 1, 0,
+      4, 0, 0, 5, 0, 0, 4, 1, 0,
+      6, 0, 0, 7, 0, 0, 6, 1, 0,
+    ],
+    3,
+  ),
+);
+semanticMapGeometry.setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+semanticMapScene.add(
+  new THREE.Mesh(
+    semanticMapGeometry,
+    new THREE.MeshStandardMaterial({ color: '#808080' }),
+  ),
+);
+const semanticMapBlob = await createThreeMfBlobFromScene({
+  scene: semanticMapScene,
+  filename: 'semantic-map',
+  colorCount: 4,
+  semanticMaterialMap: {
+    classes: [
+      { id: 0, name: 'silver', color: '#B8B8B8' },
+      { id: 1, name: 'green enamel', color: '#A9C83A' },
+    ],
+    triangleMaterialIds: [1, 0, 1, 0],
+  },
+});
+const semanticMapZipReader = new ZipReader(new BlobReader(semanticMapBlob));
+const semanticMapEntries = await semanticMapZipReader.getEntries();
+const semanticMapModelXml = await getMeshModelXml(semanticMapEntries);
+const semanticMaterialIndexes = [
+  ...semanticMapModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(semanticMaterialIndexes, [1, 0, 1, 0]);
+const semanticMapSettings = JSON.parse(
+  await getZipText(semanticMapEntries, 'Metadata/project_settings.config'),
+);
+assert.deepEqual(semanticMapSettings.filament_colour, ['#B8B8B8', '#A9C83A']);
+await semanticMapZipReader.close();
+
+const embeddedSemanticScene = new THREE.Scene();
+const embeddedSemanticGeometry = semanticMapGeometry.clone();
+embeddedSemanticGeometry.userData.semanticMaterialIds = [1, 0, 1, 0];
+embeddedSemanticScene.add(
+  new THREE.Mesh(
+    embeddedSemanticGeometry,
+    new THREE.MeshStandardMaterial({ color: '#808080' }),
+  ),
+);
+const embeddedSemanticBlob = await createThreeMfBlobFromScene({
+  scene: embeddedSemanticScene,
+  filename: 'embedded-semantic-map',
+  colorCount: 4,
+  semanticMaterialMap: {
+    classes: [
+      { id: 0, name: 'silver', color: '#B8B8B8' },
+      { id: 1, name: 'green enamel', color: '#A9C83A' },
+    ],
+  },
+});
+const embeddedSemanticZipReader = new ZipReader(
+  new BlobReader(embeddedSemanticBlob),
+);
+const embeddedSemanticModelXml = await getMeshModelXml(
+  await embeddedSemanticZipReader.getEntries(),
+);
+const embeddedSemanticIndexes = [
+  ...embeddedSemanticModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(embeddedSemanticIndexes, [1, 0, 1, 0]);
+await embeddedSemanticZipReader.close();
+
 const cubeScene = new THREE.Scene();
 cubeScene.add(
   new THREE.Mesh(

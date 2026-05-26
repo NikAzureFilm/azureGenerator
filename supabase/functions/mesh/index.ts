@@ -11,7 +11,12 @@ import {
   INSTRUCTIONS_3D as instructions3D,
   type GptImageQuality,
 } from '../_shared/imageGen.ts';
-import { Model, MeshFileType, type MultiviewImages } from '@shared/types.ts';
+import {
+  Model,
+  MeshFileType,
+  type MultiviewImages,
+  type SemanticMaterialMap,
+} from '@shared/types.ts';
 import {
   getImageGenerationProvider,
   normalizeImageGenerationModel,
@@ -605,6 +610,7 @@ Deno.serve(async (req) => {
       parentMessageId,
       imageGenerationModel,
       multiviewImages,
+      semanticMaterialMap,
     }: {
       images?: string[];
       mesh?: string;
@@ -619,6 +625,7 @@ Deno.serve(async (req) => {
       parentMessageId?: string;
       imageGenerationModel?: ImageGenerationModel;
       multiviewImages?: MultiviewImages;
+      semanticMaterialMap?: SemanticMaterialMap;
     } = requestBody;
 
     debugLog('Model parameter extracted:', model);
@@ -1010,6 +1017,7 @@ Deno.serve(async (req) => {
           ...(model && { model: model }),
           ...(imageGenerationModel && { imageGenerationModel }),
           ...(multiviewImages && { multiviewImages }),
+          ...(semanticMaterialMap && { semanticMaterialMap }),
         },
       })
       .select()

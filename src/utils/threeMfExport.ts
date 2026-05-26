@@ -57,6 +57,17 @@ export type ThreeMfTriangle = {
   colorIndex: number;
 };
 
+export type ThreeMfSemanticMaterialClass = {
+  id: number;
+  name: string;
+  color: string;
+};
+
+export type ThreeMfSemanticMaterialMap = {
+  classes: ThreeMfSemanticMaterialClass[];
+  triangleMaterialIds?: number[];
+};
+
 export type ThreeMfModelInput = {
   modelName: string;
   vertices: VectorTuple[];
@@ -78,7 +89,10 @@ type TexturePixels = {
 type SceneGeometry = {
   vertices: VectorTuple[];
   triangles: Array<
-    Omit<ThreeMfTriangle, 'colorIndex'> & { color: THREE.Color }
+    Omit<ThreeMfTriangle, 'colorIndex'> & {
+      color: THREE.Color;
+      semanticMaterialId?: number;
+    }
   >;
 };
 
@@ -310,13 +324,18 @@ export async function createThreeMfBlobFromScene({
   scene,
   filename,
   colorCount,
+  semanticMaterialMap,
 }: {
   scene: THREE.Scene;
   filename: string;
   colorCount: number;
+  semanticMaterialMap?: ThreeMfSemanticMaterialMap | null;
 }): Promise<Blob> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
-  const sourceGeometry = extractSceneGeometry(scene);
+  const sourceGeometry = applySemanticMaterialMap(
+    extractSceneGeometry(scene),
+    semanticMaterialMap,
+  );
   // Run the printable repair pass before palette quantization and 3MF color ids.
   const geometry = repairSceneGeometryForThreeMfExport(sourceGeometry);
 
@@ -328,23 +347,33 @@ export async function createThreeMfBlobFromScene({
     geometry,
     sourceGeometry,
   );
-  const palette = quantizeTriangleColors(
-    coloredTriangles.map((triangle) => ({
-      color: triangle.color,
-      weight: getTriangleArea(geometry.vertices, triangle),
-    })),
-    targetColorCount,
+  const semanticAssignments = buildSemanticMaterialAssignments(
+    coloredTriangles,
+    semanticMaterialMap,
   );
+  const palette =
+    semanticAssignments?.palette ??
+    quantizeTriangleColors(
+      coloredTriangles.map((triangle) => ({
+        color: triangle.color,
+        weight: getTriangleArea(geometry.vertices, triangle),
+      })),
+      targetColorCount,
+    );
 
-  const indexedTriangles = coloredTriangles.map((triangle) => ({
+  const indexedTriangles = coloredTriangles.map((triangle, index) => ({
     v1: triangle.v1,
     v2: triangle.v2,
     v3: triangle.v3,
-    colorIndex: findNearestPaletteIndex(triangle.color, palette),
+    colorIndex:
+      semanticAssignments?.colorIndexes[index] ??
+      findNearestPaletteIndex(triangle.color, palette),
   }));
   const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
     palette,
-    smoothTriangleColorIndexes(indexedTriangles, palette),
+    semanticAssignments
+      ? indexedTriangles
+      : smoothTriangleColorIndexes(indexedTriangles, palette),
   );
 
   const objectModelXml = buildThreeMfModelXml({
@@ -772,6 +801,8 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
     const groups = geometry.groups.length
       ? geometry.groups
       : [{ start: 0, count: getIndexCount(geometry), materialIndex: 0 }];
+    const embeddedSemanticMaterialIds =
+      getEmbeddedSemanticMaterialIds(geometry);
 
     const getOrCreateVertexIndex = (sourceIndex: number): number => {
       const vertex = readWorldVertex(position, sourceIndex, matrixWorld);
@@ -816,12 +847,47 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
           v2,
           v3,
           color: triangleColor,
+          semanticMaterialId:
+            embeddedSemanticMaterialIds?.[Math.floor(offset / 3)],
         });
       }
     }
   });
 
   return { vertices, triangles };
+}
+
+function getEmbeddedSemanticMaterialIds(
+  geometry: THREE.BufferGeometry,
+): number[] | null {
+  const semanticMaterialIds = geometry.userData.semanticMaterialIds;
+  if (
+    Array.isArray(semanticMaterialIds) &&
+    semanticMaterialIds.every((id) => Number.isInteger(id))
+  ) {
+    return semanticMaterialIds;
+  }
+
+  return null;
+}
+
+function applySemanticMaterialMap(
+  geometry: SceneGeometry,
+  semanticMaterialMap: ThreeMfSemanticMaterialMap | null | undefined,
+): SceneGeometry {
+  if (
+    !isUsableSemanticMaterialMap(semanticMaterialMap, geometry.triangles.length)
+  ) {
+    return geometry;
+  }
+
+  return {
+    vertices: geometry.vertices,
+    triangles: geometry.triangles.map((triangle, index) => ({
+      ...triangle,
+      semanticMaterialId: semanticMaterialMap.triangleMaterialIds?.[index],
+    })),
+  };
 }
 
 function repairSceneGeometryForThreeMfExport(
@@ -936,8 +1002,72 @@ function assignColorsToRepairedTriangles(
     return {
       ...triangle,
       color,
+      semanticMaterialId: exactSourceTriangles?.length
+        ? getDominantTriangleSemanticMaterialId(exactSourceTriangles)
+        : getNearestTriangleSemanticMaterialId(
+            triangle,
+            repairedGeometry.vertices,
+            sourceGeometry,
+          ),
     };
   });
+}
+
+function getDominantTriangleSemanticMaterialId(
+  triangles: SceneGeometry['triangles'],
+): number | undefined {
+  const countsByMaterialId = new Map<
+    number,
+    { materialId: number; count: number; firstIndex: number }
+  >();
+
+  triangles.forEach((triangle, index) => {
+    if (triangle.semanticMaterialId === undefined) {
+      return;
+    }
+    const existing = countsByMaterialId.get(triangle.semanticMaterialId);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    countsByMaterialId.set(triangle.semanticMaterialId, {
+      materialId: triangle.semanticMaterialId,
+      count: 1,
+      firstIndex: index,
+    });
+  });
+
+  return [...countsByMaterialId.values()].sort(
+    (a, b) => b.count - a.count || a.firstIndex - b.firstIndex,
+  )[0]?.materialId;
+}
+
+function getNearestTriangleSemanticMaterialId(
+  triangle: RepairedSceneGeometry['triangles'][number],
+  vertices: VectorTuple[],
+  sourceGeometry: SceneGeometry,
+): number | undefined {
+  const centroid = getTriangleCentroid(vertices, triangle);
+  let nearestTriangle: SceneGeometry['triangles'][number] | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  sourceGeometry.triangles.forEach((sourceTriangle) => {
+    if (sourceTriangle.semanticMaterialId === undefined) {
+      return;
+    }
+    const sourceCentroid = getTriangleCentroid(
+      sourceGeometry.vertices,
+      sourceTriangle,
+    );
+    const distance = centroid.distanceToSquared(sourceCentroid);
+    if (distance < nearestDistance) {
+      nearestTriangle = sourceTriangle;
+      nearestDistance = distance;
+    }
+  });
+
+  return nearestTriangle?.semanticMaterialId;
 }
 
 function getDominantTriangleColor(
@@ -991,6 +1121,81 @@ function getNearestTriangleColor(
   });
 
   return nearestTriangle.color.clone();
+}
+
+function buildSemanticMaterialAssignments(
+  triangles: SceneGeometry['triangles'],
+  semanticMaterialMap: ThreeMfSemanticMaterialMap | null | undefined,
+): { palette: THREE.Color[]; colorIndexes: number[] } | null {
+  if (!semanticMaterialMap) {
+    return null;
+  }
+
+  if (
+    !triangles.some((triangle) => triangle.semanticMaterialId !== undefined)
+  ) {
+    return null;
+  }
+
+  const classes = semanticMaterialMap.classes
+    .map((materialClass) => ({
+      ...materialClass,
+      normalizedColor: normalizeSemanticColor(materialClass.color),
+    }))
+    .filter(
+      (
+        materialClass,
+      ): materialClass is ThreeMfSemanticMaterialClass & {
+        normalizedColor: string;
+      } =>
+        Number.isInteger(materialClass.id) &&
+        typeof materialClass.name === 'string' &&
+        materialClass.name.length > 0 &&
+        materialClass.normalizedColor !== null,
+    );
+
+  const classIndexesById = new Map<number, number>();
+  const palette: THREE.Color[] = [];
+  for (const materialClass of classes) {
+    if (classIndexesById.has(materialClass.id)) {
+      continue;
+    }
+    classIndexesById.set(materialClass.id, palette.length);
+    palette.push(new THREE.Color(materialClass.normalizedColor));
+  }
+
+  if (palette.length === 0) {
+    return null;
+  }
+
+  const colorIndexes = triangles.map((triangle) => {
+    if (triangle.semanticMaterialId === undefined) {
+      return findNearestPaletteIndex(triangle.color, palette);
+    }
+    return (
+      classIndexesById.get(triangle.semanticMaterialId) ??
+      findNearestPaletteIndex(triangle.color, palette)
+    );
+  });
+
+  return { palette, colorIndexes };
+}
+
+function isUsableSemanticMaterialMap(
+  semanticMaterialMap: ThreeMfSemanticMaterialMap | null | undefined,
+  triangleCount: number,
+): semanticMaterialMap is ThreeMfSemanticMaterialMap {
+  return (
+    !!semanticMaterialMap &&
+    Array.isArray(semanticMaterialMap.classes) &&
+    Array.isArray(semanticMaterialMap.triangleMaterialIds) &&
+    semanticMaterialMap.triangleMaterialIds.length === triangleCount
+  );
+}
+
+function normalizeSemanticColor(color: string): string | null {
+  const match = color.trim().match(/^#?([0-9a-fA-F]{6})$/);
+  return match ? `#${match[1].toUpperCase()}` : null;
 }
 
 function smoothTriangleColorIndexes(

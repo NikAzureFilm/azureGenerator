@@ -30,6 +30,7 @@ import { extractAndDownloadTextures } from '@/utils/textureExtraction';
 import {
   MAX_THREE_MF_COLOR_COUNT,
   createThreeMfBlobFromScene,
+  type ThreeMfSemanticMaterialMap,
 } from '@/utils/threeMfExport';
 
 // Default values for material controls
@@ -40,6 +41,40 @@ const THREE_MF_COLOR_OPTIONS = Array.from(
   { length: MAX_THREE_MF_COLOR_COUNT },
   (_, index) => index + 1,
 );
+
+function getThreeMfSemanticMaterialMap(
+  value: unknown,
+): ThreeMfSemanticMaterialMap | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Partial<ThreeMfSemanticMaterialMap>;
+  if (!Array.isArray(candidate.classes)) {
+    return null;
+  }
+
+  const classes = candidate.classes.filter(
+    (materialClass) =>
+      materialClass &&
+      typeof materialClass === 'object' &&
+      Number.isInteger(materialClass.id) &&
+      typeof materialClass.name === 'string' &&
+      /^#?[0-9a-fA-F]{6}$/.test(materialClass.color),
+  );
+  const triangleMaterialIds = Array.isArray(candidate.triangleMaterialIds)
+    ? candidate.triangleMaterialIds.filter((id) => Number.isInteger(id))
+    : undefined;
+
+  if (classes.length === 0) {
+    return null;
+  }
+
+  return {
+    classes,
+    ...(triangleMaterialIds?.length ? { triangleMaterialIds } : {}),
+  };
+}
 
 // Reusable download menu items component
 export function DownloadMenu({
@@ -107,6 +142,11 @@ export function DownloadMenu({
     meshData.id,
   ]);
 
+  const semanticMaterialMap = useMemo(
+    () => getThreeMfSemanticMaterialMap(meshData.prompt.semanticMaterialMap),
+    [meshData.prompt.semanticMaterialMap],
+  );
+
   const downloadSTL = useCallback(() => {
     posthog.capture('3d_model_download', {
       meshId: meshData.id,
@@ -173,6 +213,7 @@ export function DownloadMenu({
             scene: processedScene,
             filename,
             colorCount,
+            semanticMaterialMap,
           });
 
           const url = URL.createObjectURL(threeMfBlob);
@@ -213,7 +254,7 @@ export function DownloadMenu({
         }
       }, 0);
     },
-    [conversation.id, filename, gltf, meshData, toast],
+    [conversation.id, filename, gltf, meshData, semanticMaterialMap, toast],
   );
 
   const downloadOBJ = useCallback(() => {
