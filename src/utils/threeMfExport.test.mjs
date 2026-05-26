@@ -625,6 +625,56 @@ const targetPaletteIndexes = [
 assert.deepEqual(targetPaletteIndexes, [0, 0, 3, 2, 1, 3]);
 await targetPaletteZipReader.close();
 
+const badgeRecoveryScene = new THREE.Scene();
+const badgeRecoveryGeometry = new THREE.BufferGeometry();
+badgeRecoveryGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [
+      -0.2, -0.2, 0, 0.2, -0.2, 0, 0, 0.2, 0,
+      -0.2, -0.2, 0.35, 0.2, -0.2, 0.35, 0, 0.2, 0.35,
+      -0.9, -0.9, 0, -0.7, -0.9, 0, -0.8, -0.7, 0,
+      0.35, -0.2, 0, 0.55, -0.2, 0, 0.45, 0, 0,
+      0.6, -0.2, 0, 0.8, -0.2, 0, 0.7, 0, 0,
+      0.25, 0, 0,
+    ],
+    3,
+  ),
+);
+badgeRecoveryGeometry.setIndex([
+  0, 1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13, 14, 9, 11, 15,
+]);
+badgeRecoveryGeometry.addGroup(0, 3, 0);
+badgeRecoveryGeometry.addGroup(3, 3, 0);
+badgeRecoveryGeometry.addGroup(6, 3, 0);
+badgeRecoveryGeometry.addGroup(9, 3, 1);
+badgeRecoveryGeometry.addGroup(12, 3, 2);
+badgeRecoveryGeometry.addGroup(15, 3, 0);
+badgeRecoveryScene.add(
+  new THREE.Mesh(badgeRecoveryGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ECEDEC' }),
+    new THREE.MeshStandardMaterial({ color: '#050505' }),
+    new THREE.MeshStandardMaterial({ color: '#FEDB12' }),
+  ]),
+);
+const badgeRecoveryBlob = await createThreeMfBlobFromScene({
+  scene: badgeRecoveryScene,
+  filename: 'badge-semantic-recovery',
+  colorCount: 4,
+  targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
+});
+const badgeRecoveryZipReader = new ZipReader(
+  new BlobReader(badgeRecoveryBlob),
+);
+const badgeRecoveryModelXml = await getMeshModelXml(
+  await badgeRecoveryZipReader.getEntries(),
+);
+const badgeRecoveryIndexes = [
+  ...badgeRecoveryModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0]);
+await badgeRecoveryZipReader.close();
+
 const cubeScene = new THREE.Scene();
 cubeScene.add(
   new THREE.Mesh(

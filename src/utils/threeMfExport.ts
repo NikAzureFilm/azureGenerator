@@ -382,11 +382,19 @@ export async function createThreeMfBlobFromScene({
       targetPaletteAssignments?.colorIndexes[index] ??
       findNearestPaletteIndex(triangle.color, palette),
   }));
+  const recoveredTriangles =
+    targetPaletteAssignments && !semanticAssignments
+      ? recoverBadgeTargetMaterialRegions(
+          indexedTriangles,
+          geometry.vertices,
+          palette,
+        )
+      : indexedTriangles;
   const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
     palette,
     semanticAssignments
-      ? indexedTriangles
-      : smoothTriangleColorIndexes(indexedTriangles, palette),
+      ? recoveredTriangles
+      : smoothTriangleColorIndexes(recoveredTriangles, palette),
   );
 
   const objectModelXml = buildThreeMfModelXml({
@@ -1322,6 +1330,172 @@ function isHueBetween(hue: number, min: number, max: number): boolean {
 function getHueDistance(a: number, b: number): number {
   const distance = Math.abs(a - b);
   return Math.min(distance, 1 - distance);
+}
+
+function recoverBadgeTargetMaterialRegions(
+  triangles: ThreeMfTriangle[],
+  vertices: VectorTuple[],
+  palette: THREE.Color[],
+): ThreeMfTriangle[] {
+  if (triangles.length === 0 || palette.length < 4) {
+    return triangles;
+  }
+
+  const roles = getTargetPaletteRoles(palette);
+  if (
+    roles.lightNeutral === undefined ||
+    roles.green === undefined ||
+    roles.dark === undefined
+  ) {
+    return triangles;
+  }
+  const lightNeutralColorIndex = roles.lightNeutral;
+  const greenColorIndex = roles.green;
+  const darkColorIndex = roles.dark;
+  const yellowColorIndex = roles.yellow;
+
+  const bounds = getVectorBounds(vertices);
+  const frontTriangleStats = triangles
+    .map((triangle) => ({
+      triangle,
+      normalZ: getTriangleNormalZ(vertices, triangle),
+      centroid: getTriangleCentroid(vertices, triangle),
+    }))
+    .filter((stats) => stats.normalZ > 0.5);
+  if (frontTriangleStats.length === 0) {
+    return triangles;
+  }
+
+  const raisedZThreshold = getQuantile(
+    frontTriangleStats.map((stats) => stats.centroid.z),
+    0.76,
+  );
+  const adjacency = buildTriangleAdjacency(triangles);
+
+  return triangles.map((triangle, triangleIndex) => {
+    if (
+      triangle.colorIndex === darkColorIndex ||
+      triangle.colorIndex === yellowColorIndex ||
+      triangle.colorIndex === greenColorIndex
+    ) {
+      return triangle;
+    }
+
+    if (triangle.colorIndex !== lightNeutralColorIndex) {
+      return triangle;
+    }
+
+    const normalZ = getTriangleNormalZ(vertices, triangle);
+    if (normalZ <= 0.5) {
+      return triangle;
+    }
+
+    const centroid = getTriangleCentroid(vertices, triangle);
+    if (
+      hasNeighborWithColorIndex(
+        adjacency,
+        triangles,
+        triangleIndex,
+        darkColorIndex,
+      ) ||
+      centroid.z >= raisedZThreshold ||
+      isNearProjectedOuterBadgeEdge(centroid, bounds)
+    ) {
+      return triangle;
+    }
+
+    return {
+      ...triangle,
+      colorIndex: greenColorIndex,
+    };
+  });
+}
+
+function hasNeighborWithColorIndex(
+  adjacency: number[][],
+  triangles: ThreeMfTriangle[],
+  triangleIndex: number,
+  colorIndex: number | undefined,
+): boolean {
+  if (colorIndex === undefined) {
+    return false;
+  }
+
+  return adjacency[triangleIndex].some(
+    (neighborIndex) => triangles[neighborIndex]?.colorIndex === colorIndex,
+  );
+}
+
+function getVectorBounds(vertices: VectorTuple[]): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+} {
+  return vertices.reduce(
+    (bounds, vertex) => ({
+      minX: Math.min(bounds.minX, vertex[0]),
+      maxX: Math.max(bounds.maxX, vertex[0]),
+      minY: Math.min(bounds.minY, vertex[1]),
+      maxY: Math.max(bounds.maxY, vertex[1]),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    },
+  );
+}
+
+function isNearProjectedOuterBadgeEdge(
+  centroid: THREE.Vector3,
+  bounds: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  },
+): boolean {
+  const halfWidth = Math.max((bounds.maxX - bounds.minX) / 2, 1e-6);
+  const halfHeight = Math.max((bounds.maxY - bounds.minY) / 2, 1e-6);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const normalizedX = Math.abs((centroid.x - centerX) / halfWidth);
+  const normalizedY = Math.abs((centroid.y - centerY) / halfHeight);
+  return Math.max(normalizedX, normalizedY) >= 0.78;
+}
+
+function getTriangleNormalZ(
+  vertices: VectorTuple[],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+): number {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+  if (!a || !b || !c) {
+    return 0;
+  }
+
+  const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  const normal = ab.cross(ac);
+  const length = normal.length();
+  return length > 0 ? normal.z / length : 0;
+}
+
+function getQuantile(values: number[], quantile: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sortedValues = values.slice().sort((a, b) => a - b);
+  return sortedValues[
+    clampIndex(
+      Math.ceil((sortedValues.length - 1) * quantile),
+      sortedValues.length,
+    )
+  ];
 }
 
 function isUsableSemanticMaterialMap(
