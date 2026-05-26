@@ -68,6 +68,8 @@ export type ThreeMfSemanticMaterialMap = {
   triangleMaterialIds?: number[];
 };
 
+export type ThreeMfTargetMaterialPalette = string[];
+
 export type ThreeMfModelInput = {
   modelName: string;
   vertices: VectorTuple[];
@@ -325,11 +327,13 @@ export async function createThreeMfBlobFromScene({
   filename,
   colorCount,
   semanticMaterialMap,
+  targetMaterialPalette,
 }: {
   scene: THREE.Scene;
   filename: string;
   colorCount: number;
   semanticMaterialMap?: ThreeMfSemanticMaterialMap | null;
+  targetMaterialPalette?: ThreeMfTargetMaterialPalette | null;
 }): Promise<Blob> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
   const sourceGeometry = applySemanticMaterialMap(
@@ -351,8 +355,16 @@ export async function createThreeMfBlobFromScene({
     coloredTriangles,
     semanticMaterialMap,
   );
+  const targetPaletteAssignments = semanticAssignments
+    ? null
+    : buildTargetMaterialPaletteAssignments(
+        coloredTriangles,
+        targetMaterialPalette,
+        targetColorCount,
+      );
   const palette =
     semanticAssignments?.palette ??
+    targetPaletteAssignments?.palette ??
     quantizeTriangleColors(
       coloredTriangles.map((triangle) => ({
         color: triangle.color,
@@ -367,6 +379,7 @@ export async function createThreeMfBlobFromScene({
     v3: triangle.v3,
     colorIndex:
       semanticAssignments?.colorIndexes[index] ??
+      targetPaletteAssignments?.colorIndexes[index] ??
       findNearestPaletteIndex(triangle.color, palette),
   }));
   const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
@@ -1179,6 +1192,136 @@ function buildSemanticMaterialAssignments(
   });
 
   return { palette, colorIndexes };
+}
+
+function buildTargetMaterialPaletteAssignments(
+  triangles: SceneGeometry['triangles'],
+  targetMaterialPalette: ThreeMfTargetMaterialPalette | null | undefined,
+  targetColorCount: number,
+): { palette: THREE.Color[]; colorIndexes: number[] } | null {
+  const palette = normalizeTargetMaterialPalette(
+    targetMaterialPalette,
+    targetColorCount,
+  );
+  if (!palette) {
+    return null;
+  }
+
+  return {
+    palette,
+    colorIndexes: triangles.map((triangle) =>
+      findNearestTargetMaterialPaletteIndex(triangle.color, palette),
+    ),
+  };
+}
+
+function normalizeTargetMaterialPalette(
+  targetMaterialPalette: ThreeMfTargetMaterialPalette | null | undefined,
+  targetColorCount: number,
+): THREE.Color[] | null {
+  if (!Array.isArray(targetMaterialPalette)) {
+    return null;
+  }
+
+  const normalizedColors = [
+    ...new Set(
+      targetMaterialPalette
+        .map((color) => normalizeSemanticColor(color))
+        .filter((color): color is string => color !== null),
+    ),
+  ].slice(0, targetColorCount);
+
+  if (normalizedColors.length < 2) {
+    return null;
+  }
+
+  return normalizedColors.map((color) => new THREE.Color(color));
+}
+
+function findNearestTargetMaterialPaletteIndex(
+  color: THREE.Color,
+  palette: THREE.Color[],
+): number {
+  const roles = getTargetPaletteRoles(palette);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  const brightness = perceivedBrightness(color);
+  const maxChannel = Math.max(color.r, color.g, color.b);
+
+  if (roles.dark !== undefined && (maxChannel <= 0.24 || brightness <= 0.18)) {
+    return roles.dark;
+  }
+
+  if (hsl.s >= 0.25) {
+    if (roles.yellow !== undefined && isHueBetween(hsl.h, 0.11, 0.19)) {
+      return roles.yellow;
+    }
+
+    if (roles.green !== undefined && isHueBetween(hsl.h, 0.19, 0.47)) {
+      return roles.green;
+    }
+  }
+
+  if (roles.lightNeutral !== undefined && hsl.s <= 0.22 && brightness >= 0.42) {
+    return roles.lightNeutral;
+  }
+
+  return findNearestPaletteIndex(color, palette);
+}
+
+function getTargetPaletteRoles(palette: THREE.Color[]): {
+  dark?: number;
+  lightNeutral?: number;
+  green?: number;
+  yellow?: number;
+} {
+  const colorStats = palette.map((color, index) => {
+    const hsl = { h: 0, s: 0, l: 0 };
+    color.getHSL(hsl);
+    return {
+      index,
+      hsl,
+      brightness: perceivedBrightness(color),
+    };
+  });
+
+  const dark = colorStats
+    .slice()
+    .sort((a, b) => a.brightness - b.brightness)[0]?.index;
+  const lightNeutral =
+    colorStats
+      .filter((entry) => entry.hsl.s <= 0.24)
+      .sort((a, b) => b.brightness - a.brightness)[0]?.index ??
+    colorStats.slice().sort((a, b) => b.brightness - a.brightness)[0]?.index;
+  const yellow = getClosestHueRole(colorStats, 0.16);
+  const green = getClosestHueRole(colorStats, 0.27);
+
+  return { dark, lightNeutral, green, yellow };
+}
+
+function getClosestHueRole(
+  colorStats: Array<{
+    index: number;
+    hsl: { h: number; s: number; l: number };
+    brightness: number;
+  }>,
+  targetHue: number,
+): number | undefined {
+  return colorStats
+    .filter((entry) => entry.hsl.s >= 0.25)
+    .sort(
+      (a, b) =>
+        getHueDistance(a.hsl.h, targetHue) - getHueDistance(b.hsl.h, targetHue),
+    )[0]?.index;
+}
+
+function isHueBetween(hue: number, min: number, max: number): boolean {
+  return hue >= min && hue < max;
+}
+
+function getHueDistance(a: number, b: number): number {
+  const distance = Math.abs(a - b);
+  return Math.min(distance, 1 - distance);
 }
 
 function isUsableSemanticMaterialMap(

@@ -577,6 +577,54 @@ const embeddedSemanticIndexes = [
 assert.deepEqual(embeddedSemanticIndexes, [1, 0, 1, 0]);
 await embeddedSemanticZipReader.close();
 
+const targetPaletteScene = new THREE.Scene();
+[
+  '#F2F2EE',
+  '#E8E9E5',
+  '#C7CF3D',
+  '#728A18',
+  '#070707',
+  '#FEDB12',
+].forEach((color, index) => {
+  const targetPaletteGeometry = new THREE.BufferGeometry();
+  const x = index * 2;
+  targetPaletteGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([x, 0, 0, x + 1, 0, 0, x, 1, 0], 3),
+  );
+  targetPaletteScene.add(
+    new THREE.Mesh(
+      targetPaletteGeometry,
+      new THREE.MeshStandardMaterial({ color }),
+    ),
+  );
+});
+const targetPaletteBlob = await createThreeMfBlobFromScene({
+  scene: targetPaletteScene,
+  filename: 'target-material-palette',
+  colorCount: 4,
+  targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
+});
+const targetPaletteZipReader = new ZipReader(
+  new BlobReader(targetPaletteBlob),
+);
+const targetPaletteEntries = await targetPaletteZipReader.getEntries();
+const targetPaletteModelXml = await getMeshModelXml(targetPaletteEntries);
+const targetPaletteSettings = JSON.parse(
+  await getZipText(targetPaletteEntries, 'Metadata/project_settings.config'),
+);
+assert.deepEqual(targetPaletteSettings.filament_colour, [
+  '#D8D8D2',
+  '#111111',
+  '#6E8E18',
+  '#FFD600',
+]);
+const targetPaletteIndexes = [
+  ...targetPaletteModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(targetPaletteIndexes, [0, 0, 3, 2, 1, 3]);
+await targetPaletteZipReader.close();
+
 const cubeScene = new THREE.Scene();
 cubeScene.add(
   new THREE.Mesh(
