@@ -44,7 +44,8 @@ const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
 ];
 const VERTEX_KEY_PRECISION = 1e-6;
 const DEGENERATE_TRIANGLE_AREA_SQUARED = 1e-20;
-const SMALL_COLOR_ISLAND_TRIANGLE_COUNT = 4;
+const SMALL_COLOR_ISLAND_TRIANGLE_COUNT = 24;
+const MIN_DISSIMILAR_COLOR_SMOOTH_TRIANGLE_COUNT = 32;
 const SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED = 0.03;
 
 type VectorTuple = [number, number, number];
@@ -330,7 +331,7 @@ export async function createThreeMfBlobFromScene({
   const palette = quantizeTriangleColors(
     coloredTriangles.map((triangle) => ({
       color: triangle.color,
-      weight: 1,
+      weight: getTriangleArea(geometry.vertices, triangle),
     })),
     targetColorCount,
   );
@@ -1035,11 +1036,14 @@ function smoothTriangleColorIndexes(
       }
 
       const [replacementColorIndex] = replacement;
-      if (
+      const isSimilarColorIsland =
         colorDistanceSquared(
           palette[component.colorIndex],
           palette[replacementColorIndex],
-        ) > SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED
+        ) <= SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED;
+      if (
+        !isSimilarColorIsland &&
+        triangles.length < MIN_DISSIMILAR_COLOR_SMOOTH_TRIANGLE_COUNT
       ) {
         continue;
       }
@@ -1167,17 +1171,34 @@ function isDegenerateTriangle(
   triangle: SceneGeometry['triangles'][number],
   vertices: VectorTuple[],
 ): boolean {
+  return (
+    getTriangleAreaSquared(vertices, triangle) <=
+    DEGENERATE_TRIANGLE_AREA_SQUARED
+  );
+}
+
+function getTriangleArea(
+  vertices: VectorTuple[],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+): number {
+  return Math.sqrt(getTriangleAreaSquared(vertices, triangle)) / 2;
+}
+
+function getTriangleAreaSquared(
+  vertices: VectorTuple[],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+): number {
   const a = vertices[triangle.v1];
   const b = vertices[triangle.v2];
   const c = vertices[triangle.v3];
 
   if (!a || !b || !c) {
-    return true;
+    return 0;
   }
 
   const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
   const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
-  return ab.cross(ac).lengthSq() <= DEGENERATE_TRIANGLE_AREA_SQUARED;
+  return ab.cross(ac).lengthSq();
 }
 
 function sampleTriangleColor({

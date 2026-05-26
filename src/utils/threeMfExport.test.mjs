@@ -29,6 +29,94 @@ async function getMeshModelXml(entries) {
   return getZipText(entries, '3D/Objects/Object_1_1.model');
 }
 
+function getMaterialRegionStats(modelXml) {
+  const triangles = [...modelXml.matchAll(/<triangle\b([^>]*)\/>/g)].map(
+    (match) => {
+      const attributes = Object.fromEntries(
+        [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+          attributeMatch[1],
+          attributeMatch[2],
+        ]),
+      );
+      return {
+        vertices: [
+          Number(attributes.v1),
+          Number(attributes.v2),
+          Number(attributes.v3),
+        ],
+        colorIndex: Number(attributes.p1 ?? 0),
+      };
+    },
+  );
+  const edgeToTriangleIndexes = new Map();
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const [a, b] of [
+      [triangle.vertices[0], triangle.vertices[1]],
+      [triangle.vertices[1], triangle.vertices[2]],
+      [triangle.vertices[2], triangle.vertices[0]],
+    ]) {
+      const key = [a, b].sort((left, right) => left - right).join('-');
+      const indexes = edgeToTriangleIndexes.get(key) ?? [];
+      indexes.push(triangleIndex);
+      edgeToTriangleIndexes.set(key, indexes);
+    }
+  });
+
+  const adjacency = Array.from({ length: triangles.length }, () => []);
+  let materialTransitionEdges = 0;
+  for (const triangleIndexes of edgeToTriangleIndexes.values()) {
+    const colors = new Set(
+      triangleIndexes.map((triangleIndex) => triangles[triangleIndex].colorIndex),
+    );
+    if (colors.size > 1) {
+      materialTransitionEdges += 1;
+    }
+    for (const triangleIndex of triangleIndexes) {
+      for (const neighborIndex of triangleIndexes) {
+        if (triangleIndex !== neighborIndex) {
+          adjacency[triangleIndex].push(neighborIndex);
+        }
+      }
+    }
+  }
+
+  const visited = new Set();
+  let componentCount = 0;
+  let smallComponentCount = 0;
+  for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
+    if (visited.has(triangleIndex)) {
+      continue;
+    }
+    componentCount += 1;
+    const colorIndex = triangles[triangleIndex].colorIndex;
+    const stack = [triangleIndex];
+    visited.add(triangleIndex);
+    let size = 0;
+    while (stack.length > 0) {
+      const currentIndex = stack.pop();
+      size += 1;
+      for (const neighborIndex of adjacency[currentIndex]) {
+        if (
+          !visited.has(neighborIndex) &&
+          triangles[neighborIndex].colorIndex === colorIndex
+        ) {
+          visited.add(neighborIndex);
+          stack.push(neighborIndex);
+        }
+      }
+    }
+    if (size <= 8) {
+      smallComponentCount += 1;
+    }
+  }
+
+  return {
+    componentCount,
+    materialTransitionEdges,
+    smallComponentCount,
+  };
+}
+
 assert.equal(clampThreeMfColorCount(0), 1);
 assert.equal(clampThreeMfColorCount(4), 4);
 assert.equal(clampThreeMfColorCount(20), 16);
@@ -187,6 +275,57 @@ assert.match(
 );
 await zipReader.close();
 
+const areaWeightedScene = new THREE.Scene();
+const largeRedGeometry = new THREE.BufferGeometry();
+largeRedGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [0, 0, 0, 1000, 0, 0, 1000, 1000, 0, 0, 1000, 0],
+    3,
+  ),
+);
+largeRedGeometry.setIndex([0, 1, 2, 0, 2, 3]);
+areaWeightedScene.add(
+  new THREE.Mesh(
+    largeRedGeometry,
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+  ),
+);
+const tinyBlueGeometry = new THREE.BufferGeometry();
+const tinyBluePositions = [];
+const tinyBlueIndexes = [];
+for (let index = 0; index < 100; index += 1) {
+  const base = tinyBluePositions.length / 3;
+  const x = 2000 + index * 0.01;
+  tinyBluePositions.push(x, 0, 0, x + 0.001, 0, 0, x, 0.001, 0);
+  tinyBlueIndexes.push(base, base + 1, base + 2);
+}
+tinyBlueGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(tinyBluePositions, 3),
+);
+tinyBlueGeometry.setIndex(tinyBlueIndexes);
+areaWeightedScene.add(
+  new THREE.Mesh(
+    tinyBlueGeometry,
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+  ),
+);
+const areaWeightedBlob = await createThreeMfBlobFromScene({
+  scene: areaWeightedScene,
+  filename: 'area-weighted-palette',
+  colorCount: 1,
+});
+const areaWeightedZipReader = new ZipReader(new BlobReader(areaWeightedBlob));
+const areaWeightedSettings = JSON.parse(
+  await getZipText(
+    await areaWeightedZipReader.getEntries(),
+    'Metadata/project_settings.config',
+  ),
+);
+assert.deepEqual(areaWeightedSettings.filament_colour, ['#FF0000']);
+await areaWeightedZipReader.close();
+
 const squareScene = new THREE.Scene();
 const squareGeometry = new THREE.BufferGeometry();
 squareGeometry.setAttribute(
@@ -288,6 +427,77 @@ const noisySurfaceSettings = JSON.parse(
 );
 assert.equal(noisySurfaceSettings.filament_colour.length, 1);
 await noisySurfaceZipReader.close();
+
+const noisySlotScene = new THREE.Scene();
+const noisySlotGeometry = new THREE.BufferGeometry();
+const noisySlotPositions = [];
+const noisySlotIndexes = [];
+const noisySlotGroups = [];
+const noisyGridSize = 8;
+for (let y = 0; y <= noisyGridSize; y += 1) {
+  for (let x = 0; x <= noisyGridSize; x += 1) {
+    noisySlotPositions.push(x, y, 0);
+  }
+}
+const noisyVertexIndex = (x, y) => y * (noisyGridSize + 1) + x;
+for (let y = 0; y < noisyGridSize; y += 1) {
+  for (let x = 0; x < noisyGridSize; x += 1) {
+    const firstTriangleOffset = noisySlotIndexes.length;
+    const materialIndex = (x + y) % 5 === 0 ? ((x + y) % 3) + 1 : 0;
+    noisySlotIndexes.push(
+      noisyVertexIndex(x, y),
+      noisyVertexIndex(x + 1, y),
+      noisyVertexIndex(x + 1, y + 1),
+      noisyVertexIndex(x, y),
+      noisyVertexIndex(x + 1, y + 1),
+      noisyVertexIndex(x, y + 1),
+    );
+    noisySlotGroups.push({
+      start: firstTriangleOffset,
+      count: 3,
+      materialIndex,
+    });
+    noisySlotGroups.push({
+      start: firstTriangleOffset + 3,
+      count: 3,
+      materialIndex: 0,
+    });
+  }
+}
+noisySlotGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(noisySlotPositions, 3),
+);
+noisySlotGeometry.setIndex(noisySlotIndexes);
+noisySlotGeometry.clearGroups();
+for (const group of noisySlotGroups) {
+  noisySlotGeometry.addGroup(group.start, group.count, group.materialIndex);
+}
+noisySlotScene.add(
+  new THREE.Mesh(noisySlotGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#5b7f22' }),
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+    new THREE.MeshStandardMaterial({ color: '#ffff00' }),
+  ]),
+);
+const noisySlotBlob = await createThreeMfBlobFromScene({
+  scene: noisySlotScene,
+  filename: 'noisy-bambu-slot-surface',
+  colorCount: 4,
+});
+const noisySlotZipReader = new ZipReader(new BlobReader(noisySlotBlob));
+const noisySlotEntries = await noisySlotZipReader.getEntries();
+const noisySlotModelXml = await getMeshModelXml(noisySlotEntries);
+const noisySlotStats = getMaterialRegionStats(noisySlotModelXml);
+assert.equal(noisySlotStats.materialTransitionEdges, 0);
+assert.equal(noisySlotStats.componentCount, 1);
+assert.equal(noisySlotStats.smallComponentCount, 0);
+const noisySlotSettings = JSON.parse(
+  await getZipText(noisySlotEntries, 'Metadata/project_settings.config'),
+);
+assert.deepEqual(noisySlotSettings.filament_colour, ['#5B7F22']);
+await noisySlotZipReader.close();
 
 const cubeScene = new THREE.Scene();
 cubeScene.add(
