@@ -675,6 +675,115 @@ const badgeRecoveryIndexes = [
 assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0]);
 await badgeRecoveryZipReader.close();
 
+const namedMaterialScene = new THREE.Scene();
+[
+  'green_enamel_field',
+  'light_silver_raised_text',
+  'black_ball_panels',
+  'yellow_accent_stripe',
+].forEach((name, index) => {
+  const namedGeometry = new THREE.BufferGeometry();
+  const x = index * 2;
+  namedGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([x, 0, 0, x + 1, 0, 0, x, 1, 0], 3),
+  );
+  namedMaterialScene.add(
+    new THREE.Mesh(
+      namedGeometry,
+      new THREE.MeshStandardMaterial({ color: '#ECEDEC', name }),
+    ),
+  );
+});
+const namedMaterialBlob = await createThreeMfBlobFromScene({
+  scene: namedMaterialScene,
+  filename: 'named-material-regions',
+  colorCount: 4,
+  targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
+});
+const namedMaterialZipReader = new ZipReader(
+  new BlobReader(namedMaterialBlob),
+);
+const namedMaterialModelXml = await getMeshModelXml(
+  await namedMaterialZipReader.getEntries(),
+);
+const namedMaterialIndexes = [
+  ...namedMaterialModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(namedMaterialIndexes, [2, 0, 1, 3]);
+await namedMaterialZipReader.close();
+
+const adjacentNamedMaterialScene = new THREE.Scene();
+const adjacentNamedMaterialGeometry = new THREE.BufferGeometry();
+const adjacentNamedMaterialVertices = [];
+const adjacentNamedMaterialIndexesSource = [];
+for (let x = 0; x <= 6; x += 1) {
+  adjacentNamedMaterialVertices.push(x, 0, 0, x, 1, 0);
+}
+for (let x = 0; x < 5; x += 1) {
+  const bottomLeft = x * 2;
+  const topLeft = bottomLeft + 1;
+  const bottomRight = bottomLeft + 2;
+  const topRight = bottomLeft + 3;
+  adjacentNamedMaterialIndexesSource.push(
+    bottomLeft,
+    bottomRight,
+    topLeft,
+    topLeft,
+    bottomRight,
+    topRight,
+  );
+}
+const adjacentNamedMaterialGreenIndexCount =
+  adjacentNamedMaterialIndexesSource.length;
+adjacentNamedMaterialIndexesSource.push(10, 12, 11);
+adjacentNamedMaterialGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(adjacentNamedMaterialVertices, 3),
+);
+adjacentNamedMaterialGeometry.setIndex(adjacentNamedMaterialIndexesSource);
+adjacentNamedMaterialGeometry.addGroup(
+  0,
+  adjacentNamedMaterialGreenIndexCount,
+  0,
+);
+adjacentNamedMaterialGeometry.addGroup(
+  adjacentNamedMaterialGreenIndexCount,
+  3,
+  1,
+);
+adjacentNamedMaterialScene.add(
+  new THREE.Mesh(adjacentNamedMaterialGeometry, [
+    new THREE.MeshStandardMaterial({
+      color: '#ECEDEC',
+      name: 'green_enamel_field',
+    }),
+    new THREE.MeshStandardMaterial({
+      color: '#ECEDEC',
+      name: 'black_ball_panel',
+    }),
+  ]),
+);
+const adjacentNamedMaterialBlob = await createThreeMfBlobFromScene({
+  scene: adjacentNamedMaterialScene,
+  filename: 'adjacent-named-material-regions',
+  colorCount: 4,
+  targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
+});
+const adjacentNamedMaterialZipReader = new ZipReader(
+  new BlobReader(adjacentNamedMaterialBlob),
+);
+const adjacentNamedMaterialModelXml = await getMeshModelXml(
+  await adjacentNamedMaterialZipReader.getEntries(),
+);
+const adjacentNamedMaterialIndexes = [
+  ...adjacentNamedMaterialModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(adjacentNamedMaterialIndexes, [
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+]);
+await adjacentNamedMaterialZipReader.close();
+
 const cubeScene = new THREE.Scene();
 cubeScene.add(
   new THREE.Mesh(

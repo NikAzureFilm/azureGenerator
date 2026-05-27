@@ -47,6 +47,10 @@ const DEGENERATE_TRIANGLE_AREA_SQUARED = 1e-20;
 const SMALL_COLOR_ISLAND_TRIANGLE_COUNT = 24;
 const MIN_DISSIMILAR_COLOR_SMOOTH_TRIANGLE_COUNT = 32;
 const SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED = 0.03;
+const TARGET_MATERIAL_ID_SILVER = 0;
+const TARGET_MATERIAL_ID_BLACK = 1;
+const TARGET_MATERIAL_ID_GREEN = 2;
+const TARGET_MATERIAL_ID_YELLOW = 3;
 
 type VectorTuple = [number, number, number];
 
@@ -362,6 +366,9 @@ export async function createThreeMfBlobFromScene({
         targetMaterialPalette,
         targetColorCount,
       );
+  const hasAuthoritativeSemanticMaterialIds = coloredTriangles.some(
+    (triangle) => triangle.semanticMaterialId !== undefined,
+  );
   const palette =
     semanticAssignments?.palette ??
     targetPaletteAssignments?.palette ??
@@ -383,7 +390,9 @@ export async function createThreeMfBlobFromScene({
       findNearestPaletteIndex(triangle.color, palette),
   }));
   const recoveredTriangles =
-    targetPaletteAssignments && !semanticAssignments
+    targetPaletteAssignments &&
+    !semanticAssignments &&
+    !hasAuthoritativeSemanticMaterialIds
       ? recoverBadgeTargetMaterialRegions(
           indexedTriangles,
           geometry.vertices,
@@ -392,7 +401,7 @@ export async function createThreeMfBlobFromScene({
       : indexedTriangles;
   const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
     palette,
-    semanticAssignments
+    semanticAssignments || hasAuthoritativeSemanticMaterialIds
       ? recoveredTriangles
       : smoothTriangleColorIndexes(recoveredTriangles, palette),
   );
@@ -869,7 +878,8 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
           v3,
           color: triangleColor,
           semanticMaterialId:
-            embeddedSemanticMaterialIds?.[Math.floor(offset / 3)],
+            embeddedSemanticMaterialIds?.[Math.floor(offset / 3)] ??
+            getTargetMaterialIdFromMaterial(material),
         });
       }
     }
@@ -890,6 +900,36 @@ function getEmbeddedSemanticMaterialIds(
   }
 
   return null;
+}
+
+function getTargetMaterialIdFromMaterial(
+  material: THREE.Material | undefined,
+): number | undefined {
+  const materialName = material?.name
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ');
+  if (!materialName) {
+    return undefined;
+  }
+
+  if (/\b(black|dark|shadow)\b/.test(materialName)) {
+    return TARGET_MATERIAL_ID_BLACK;
+  }
+
+  if (/\b(yellow|gold|accent)\b/.test(materialName)) {
+    return TARGET_MATERIAL_ID_YELLOW;
+  }
+
+  if (/\b(green|lime|enamel|field)\b/.test(materialName)) {
+    return TARGET_MATERIAL_ID_GREEN;
+  }
+
+  if (/\b(silver|grey|gray|metal|chrome|white|light)\b/.test(materialName)) {
+    return TARGET_MATERIAL_ID_SILVER;
+  }
+
+  return undefined;
 }
 
 function applySemanticMaterialMap(
@@ -1218,9 +1258,38 @@ function buildTargetMaterialPaletteAssignments(
   return {
     palette,
     colorIndexes: triangles.map((triangle) =>
-      findNearestTargetMaterialPaletteIndex(triangle.color, palette),
+      triangle.semanticMaterialId !== undefined
+        ? findTargetPaletteIndexForSemanticMaterialId(
+            triangle.semanticMaterialId,
+            palette,
+          )
+        : findNearestTargetMaterialPaletteIndex(triangle.color, palette),
     ),
   };
+}
+
+function findTargetPaletteIndexForSemanticMaterialId(
+  semanticMaterialId: number,
+  palette: THREE.Color[],
+): number {
+  const roles = getTargetPaletteRoles(palette);
+  if (semanticMaterialId === TARGET_MATERIAL_ID_SILVER) {
+    return roles.lightNeutral ?? 0;
+  }
+
+  if (semanticMaterialId === TARGET_MATERIAL_ID_BLACK) {
+    return roles.dark ?? 0;
+  }
+
+  if (semanticMaterialId === TARGET_MATERIAL_ID_GREEN) {
+    return roles.green ?? 0;
+  }
+
+  if (semanticMaterialId === TARGET_MATERIAL_ID_YELLOW) {
+    return roles.yellow ?? 0;
+  }
+
+  return 0;
 }
 
 function normalizeTargetMaterialPalette(

@@ -241,6 +241,11 @@ const systemPrompt = `You are a helpful and practical assistant called "AzureFil
   You can modify the users prompt to make it better for the tool to use,
   but you should not change the users intent.
 
+  For printable multicolor badges, emblems, signs, logos, ornaments, and 2.5D reliefs,
+  preserve the user's requested print colors and ask the mesh tool for real separate/named material regions
+  such as light_silver_raised_border, light_silver_raised_text, green_enamel_field,
+  black_ball_panels, and yellow_accent_stripe instead of one baked texture.
+
   You may ask follow up questions to clarify the users intent,
   but you should not ask more than 2 follow up questions.`;
 
@@ -248,7 +253,7 @@ const tools: Anthropic.Messages.ToolUnion[] = [
   {
     name: 'create_mesh',
     description:
-      'When given just a text prompt, creates a 3D mesh from that text prompt. When given an array of image ids, creates a 3D mesh from those images. When given both, modifies the images and creates a 3D mesh from the modified images. When given a mesh id and a text prompt, edits the mesh with the text prompt.',
+      'When given just a text prompt, creates a 3D mesh from that text prompt. When given an array of image ids, creates a 3D mesh from those images. When given both, modifies the images and creates a 3D mesh from the modified images. When given a mesh id and a text prompt, edits the mesh with the text prompt. For printable multicolor assets, request separate or named material regions instead of one baked texture.',
     input_schema: {
       type: 'object',
       properties: {

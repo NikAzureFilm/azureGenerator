@@ -2089,15 +2089,12 @@ async function submitPreviewJob(
     // Combine all available images
     const allImages = [...(images || []), ...meshImages];
 
-    const imageGuidance =
-      'You are generating a fully textured and rendered 3D model. Output one centered 3D model or multiple centered objects, no text.  Plain white background (or an empty background which provides optimal contrast with the textures of the 3D model) , neutral lighting, and a soft shadow directly under the 3D model. Keep the entire object fully in-frame with 5–10% padding; no cropping. Make sure the description strongly impacts the form and shape of the 3D Model not just the surface texture';
-
     // If text exists, we generate an image from 4o then use that image to generate a mesh
     if (text && text.trim() !== '') {
       const newPrompt =
         allImages.length > 0
-          ? `Edit the provided image(s) to: ${text} Style: ${imageGuidance}`
-          : `Generate a new image: ${text} Style: ${imageGuidance}`;
+          ? `Edit the provided image(s) to: ${text} Style: ${instructions3D}`
+          : `Generate a new image: ${text} Style: ${instructions3D}`;
 
       const imageBytes = await generateImageWithFalFlux(
         supabaseClient,
