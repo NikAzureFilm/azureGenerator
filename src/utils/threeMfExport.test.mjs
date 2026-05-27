@@ -117,6 +117,62 @@ function getMaterialRegionStats(modelXml) {
   };
 }
 
+function installFakeCanvasDocument() {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement(tagName) {
+      assert.equal(tagName, 'canvas');
+      let image = null;
+      return {
+        width: 0,
+        height: 0,
+        getContext(type) {
+          assert.equal(type, '2d');
+          return {
+            drawImage(sourceImage) {
+              image = sourceImage;
+            },
+            getImageData() {
+              assert.ok(image?.data, 'fake texture image has pixel data');
+              return {
+                data: image.data,
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return () => {
+    if (previousDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+  };
+}
+
+function createDataTexture(width, height, getPixelColor) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const [r, g, b, a = 255] = getPixelColor(x, y);
+      const offset = (y * width + x) * 4;
+      data[offset] = r;
+      data[offset + 1] = g;
+      data[offset + 2] = b;
+      data[offset + 3] = a;
+    }
+  }
+
+  return new THREE.Texture({
+    width,
+    height,
+    data,
+  });
+}
+
 assert.equal(clampThreeMfColorCount(0), 1);
 assert.equal(clampThreeMfColorCount(4), 4);
 assert.equal(clampThreeMfColorCount(20), 16);
@@ -624,6 +680,49 @@ const targetPaletteIndexes = [
 ].map((match) => Number(match[1]));
 assert.deepEqual(targetPaletteIndexes, [0, 0, 3, 2, 1, 3]);
 await targetPaletteZipReader.close();
+
+const restoreCanvasDocument = installFakeCanvasDocument();
+try {
+  const texturedTriangleScene = new THREE.Scene();
+  const texturedTriangleGeometry = new THREE.BufferGeometry();
+  texturedTriangleGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0], 3),
+  );
+  texturedTriangleGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2),
+  );
+  const texture = createDataTexture(8, 8, (x, y) =>
+    x === 2 && y === 5 ? [255, 0, 0] : [0, 255, 0],
+  );
+  texturedTriangleScene.add(
+    new THREE.Mesh(
+      texturedTriangleGeometry,
+      new THREE.MeshStandardMaterial({ color: '#ffffff', map: texture }),
+    ),
+  );
+
+  const texturedTriangleBlob = await createThreeMfBlobFromScene({
+    scene: texturedTriangleScene,
+    filename: 'textured-triangle-majority',
+    colorCount: 2,
+    targetMaterialPalette: ['#00FF00', '#FF0000'],
+  });
+  const texturedTriangleZipReader = new ZipReader(
+    new BlobReader(texturedTriangleBlob),
+  );
+  const texturedTriangleSettings = JSON.parse(
+    await getZipText(
+      await texturedTriangleZipReader.getEntries(),
+      'Metadata/project_settings.config',
+    ),
+  );
+  assert.deepEqual(texturedTriangleSettings.filament_colour, ['#00FF00']);
+  await texturedTriangleZipReader.close();
+} finally {
+  restoreCanvasDocument();
+}
 
 const badgeRecoveryScene = new THREE.Scene();
 const badgeRecoveryGeometry = new THREE.BufferGeometry();

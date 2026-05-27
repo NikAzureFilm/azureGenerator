@@ -51,6 +51,21 @@ const TARGET_MATERIAL_ID_SILVER = 0;
 const TARGET_MATERIAL_ID_BLACK = 1;
 const TARGET_MATERIAL_ID_GREEN = 2;
 const TARGET_MATERIAL_ID_YELLOW = 3;
+const TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS: VectorTuple[] = [
+  [1 / 3, 1 / 3, 1 / 3],
+  [0.6, 0.2, 0.2],
+  [0.2, 0.6, 0.2],
+  [0.2, 0.2, 0.6],
+  [0.8, 0.1, 0.1],
+  [0.1, 0.8, 0.1],
+  [0.1, 0.1, 0.8],
+  [0.45, 0.45, 0.1],
+  [0.45, 0.1, 0.45],
+  [0.1, 0.45, 0.45],
+];
+const TEXTURE_DOMINANT_BUCKET_MIN_SHARE = 0.35;
+const TEXTURE_DOMINANT_BUCKET_MIN_SAMPLES = 2;
+const TEXTURE_SAMPLE_BUCKET_SCALE = 15;
 
 type VectorTuple = [number, number, number];
 
@@ -1845,32 +1860,124 @@ function sampleTextureColor(
   }
 
   try {
-    const uv = new THREE.Vector2();
-    for (const vertexIndex of vertexIndices) {
-      uv.x += uvAttribute.getX(vertexIndex);
-      uv.y += uvAttribute.getY(vertexIndex);
-    }
-    uv.multiplyScalar(1 / vertexIndices.length);
+    const samples = TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS.map(
+      (barycentricWeights) => {
+        const uv = getTriangleUvSample(
+          uvAttribute,
+          vertexIndices,
+          barycentricWeights,
+        );
+        return getTexturePixelColor(pixels, uv.x, uv.y);
+      },
+    );
 
-    const wrapU = wrapTextureCoordinate(uv.x);
-    const wrapV = wrapTextureCoordinate(uv.y);
-    const x = Math.min(
-      pixels.width - 1,
-      Math.max(0, Math.floor(wrapU * pixels.width)),
-    );
-    const y = Math.min(
-      pixels.height - 1,
-      Math.max(0, Math.floor((1 - wrapV) * pixels.height)),
-    );
-    const offset = (y * pixels.width + x) * 4;
-    return new THREE.Color(
-      pixels.data[offset] / 255,
-      pixels.data[offset + 1] / 255,
-      pixels.data[offset + 2] / 255,
-    );
+    return getDominantTextureSampleColor(samples);
   } catch {
     return null;
   }
+}
+
+function getTriangleUvSample(
+  uvAttribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  vertexIndices: [number, number, number],
+  barycentricWeights: VectorTuple,
+): THREE.Vector2 {
+  const uv = new THREE.Vector2();
+  vertexIndices.forEach((vertexIndex, index) => {
+    const weight = barycentricWeights[index];
+    uv.x += uvAttribute.getX(vertexIndex) * weight;
+    uv.y += uvAttribute.getY(vertexIndex) * weight;
+  });
+  return uv;
+}
+
+function getTexturePixelColor(
+  pixels: TexturePixels,
+  textureU: number,
+  textureV: number,
+): THREE.Color {
+  const wrapU = wrapTextureCoordinate(textureU);
+  const wrapV = wrapTextureCoordinate(textureV);
+  const x = Math.min(
+    pixels.width - 1,
+    Math.max(0, Math.floor(wrapU * pixels.width)),
+  );
+  const y = Math.min(
+    pixels.height - 1,
+    Math.max(0, Math.floor((1 - wrapV) * pixels.height)),
+  );
+  const offset = (y * pixels.width + x) * 4;
+  return new THREE.Color(
+    pixels.data[offset] / 255,
+    pixels.data[offset + 1] / 255,
+    pixels.data[offset + 2] / 255,
+  );
+}
+
+function getDominantTextureSampleColor(samples: THREE.Color[]): THREE.Color {
+  const average = getAverageColor(samples);
+  const buckets = new Map<
+    string,
+    { color: THREE.Color; count: number; firstIndex: number }
+  >();
+
+  samples.forEach((sample, index) => {
+    const key = getTextureSampleBucketKey(sample);
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.color.add(sample);
+      bucket.count += 1;
+      return;
+    }
+
+    buckets.set(key, {
+      color: sample.clone(),
+      count: 1,
+      firstIndex: index,
+    });
+  });
+
+  const dominantBucket = [...buckets.values()].sort(
+    (a, b) =>
+      b.count - a.count ||
+      getColorDistanceSquared(getAverageBucketColor(a), average) -
+        getColorDistanceSquared(getAverageBucketColor(b), average) ||
+      a.firstIndex - b.firstIndex,
+  )[0];
+
+  if (
+    dominantBucket &&
+    dominantBucket.count >= TEXTURE_DOMINANT_BUCKET_MIN_SAMPLES &&
+    dominantBucket.count / samples.length >= TEXTURE_DOMINANT_BUCKET_MIN_SHARE
+  ) {
+    return getAverageBucketColor(dominantBucket);
+  }
+
+  return average;
+}
+
+function getAverageColor(samples: THREE.Color[]): THREE.Color {
+  const average = new THREE.Color(0, 0, 0);
+  for (const sample of samples) {
+    average.add(sample);
+  }
+  return average.multiplyScalar(1 / Math.max(1, samples.length));
+}
+
+function getAverageBucketColor(bucket: { color: THREE.Color; count: number }) {
+  return bucket.color.clone().multiplyScalar(1 / Math.max(1, bucket.count));
+}
+
+function getTextureSampleBucketKey(color: THREE.Color): string {
+  return [
+    Math.round(color.r * TEXTURE_SAMPLE_BUCKET_SCALE),
+    Math.round(color.g * TEXTURE_SAMPLE_BUCKET_SCALE),
+    Math.round(color.b * TEXTURE_SAMPLE_BUCKET_SCALE),
+  ].join('-');
+}
+
+function getColorDistanceSquared(a: THREE.Color, b: THREE.Color): number {
+  return (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2;
 }
 
 function getTexturePixels(texture: THREE.Texture): TexturePixels | null {
@@ -1884,6 +1991,11 @@ function getTexturePixels(texture: THREE.Texture): TexturePixels | null {
     | ImageBitmap
     | undefined;
   if (!image || !('width' in image) || !('height' in image)) {
+    texturePixelCache.set(texture, null);
+    return null;
+  }
+
+  if (typeof document === 'undefined') {
     texturePixelCache.set(texture, null);
     return null;
   }
