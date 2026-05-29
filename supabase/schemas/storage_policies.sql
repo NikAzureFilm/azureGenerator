@@ -20,6 +20,17 @@ CREATE POLICY "Public conversations allow anyone to view images_select" ON stora
 
 CREATE POLICY "Public conversations allow anyone to view meshes_select" ON storage.objects FOR SELECT TO anon, authenticated USING (((bucket_id = 'meshes'::text) AND (EXISTS ( SELECT 1 FROM conversations WHERE ((conversations.privacy = 'public') AND ((conversations.id)::text = (storage.foldername(objects.name))[2]))))));
 
+-- CAD Artifacts
+CREATE POLICY "Give users access to own folder cad_artifacts_select" ON storage.objects FOR SELECT TO public USING (bucket_id = 'cad-artifacts' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
+
+CREATE POLICY "Give users access to own folder cad_artifacts_insert" ON storage.objects FOR INSERT TO public WITH CHECK (bucket_id = 'cad-artifacts' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
+
+CREATE POLICY "Give users access to own folder cad_artifacts_update" ON storage.objects FOR UPDATE TO public USING (bucket_id = 'cad-artifacts' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
+
+CREATE POLICY "Give users access to own folder cad_artifacts_delete" ON storage.objects FOR DELETE TO public USING (bucket_id = 'cad-artifacts' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
+
+CREATE POLICY "Public conversations allow anyone to view cad_artifacts_select" ON storage.objects FOR SELECT TO anon, authenticated USING (((bucket_id = 'cad-artifacts'::text) AND (EXISTS ( SELECT 1 FROM conversations WHERE ((conversations.privacy = 'public') AND ((conversations.id)::text = (storage.foldername(objects.name))[2]))))));
+
 -- Previews
 CREATE POLICY "Give users access to own folder previews_select" ON storage.objects FOR SELECT TO public USING (bucket_id = 'previews' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
 

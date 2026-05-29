@@ -16,6 +16,7 @@ import {
   CircleX,
   Wand2,
   Box,
+  FileCode2,
   Ruler,
   X,
   Sparkles,
@@ -29,6 +30,7 @@ import {
 import {
   Content,
   CreativeModel,
+  CadBackend,
   DEFAULT_CREATIVE_MODEL,
   MeshFileType,
   Model,
@@ -469,6 +471,7 @@ const VALID_IMAGE_FORMATS = [
 ];
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D object asset';
+const TEXT_TO_CAD_ENABLED = import.meta.env.VITE_TEXT_TO_CAD_ENABLED === 'true';
 
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
@@ -540,6 +543,7 @@ function TextAreaChat({
     null,
   );
   const [meshFilename, setMeshFilename] = useState<string | null>(null);
+  const [cadBackend, setCadBackend] = useState<CadBackend>('openscad');
 
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
@@ -829,6 +833,7 @@ function TextAreaChat({
       ...(type === 'creative' && {
         imageGenerationModel: selectedImageGenerationModel,
       }),
+      ...(type === 'parametric' && TEXT_TO_CAD_ENABLED && { cadBackend }),
     };
     if (type === 'creative') {
       content = {
@@ -1967,6 +1972,55 @@ function TextAreaChat({
                   </TooltipTrigger>
                   <TooltipContent>
                     Generate a mesh — figurines, organic shapes, sculpts
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+
+            {type === 'parametric' && TEXT_TO_CAD_ENABLED && (
+              <div className="flex items-center gap-0.5 rounded-lg border border-[#2a2a2a] bg-adam-background-2 p-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        cadBackend === 'openscad'
+                          ? 'bg-adam-blue/15 text-adam-blue'
+                          : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCadBackend('openscad');
+                      }}
+                    >
+                      <Ruler className="h-4 w-4" />
+                      <span className="hidden lg:inline">SCAD</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>Use editable OpenSCAD CAD</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        cadBackend === 'text-to-cad'
+                          ? 'bg-adam-blue/15 text-adam-blue'
+                          : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCadBackend('text-to-cad');
+                      }}
+                    >
+                      <FileCode2 className="h-4 w-4" />
+                      <span className="hidden lg:inline">STEP</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Use optional STEP-first text-to-CAD
                   </TooltipContent>
                 </Tooltip>
               </div>
