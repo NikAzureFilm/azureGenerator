@@ -3,14 +3,17 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
-import { Content, Model } from '@shared/types.ts';
+import { CadJobArtifact, Content, Model } from '@shared/types.ts';
 import {
   FEATURE_COSTS,
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
+import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
 
 initSentry();
 
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const TEXT_TO_CAD_WORKER_URL = Deno.env.get('TEXT_TO_CAD_WORKER_URL')?.trim();
 const TEXT_TO_CAD_WORKER_TOKEN = Deno.env
   .get('TEXT_TO_CAD_WORKER_TOKEN')
@@ -27,6 +30,109 @@ function workerConfigured(): boolean {
   return Boolean(TEXT_TO_CAD_WORKER_URL && TEXT_TO_CAD_WORKER_TOKEN);
 }
 
+function extractPythonSource(text: string): string {
+  const fence = text.match(/```(?:python)?\s*([\s\S]*?)```/);
+  const source = (fence?.[1] ?? text).trim();
+  if (!source.includes('def gen_step')) {
+    throw new Error('Generated CAD source did not define gen_step().');
+  }
+  return source;
+}
+
+function buildCadSystemPrompt(): string {
+  return `You generate build123d Python CAD source for STEP export.
+
+Return only Python source code. No markdown.
+
+Requirements:
+- Use millimeters.
+- Import from build123d.
+- Define a function named gen_step().
+- gen_step() must return one closed STEP-ready build123d Part, Solid, Compound, or Assembly.
+- Prefer precise mechanical geometry: boxes, cylinders, holes, slots, chamfers, fillets, ribs, bosses, standoffs.
+- Use named parameters near the top.
+- Keep the model robust and simple enough to export.
+- Do not read files, write files, use network, subprocess, shell, or external services.
+- Do not call export_step; the worker does that.`;
+}
+
+function buildCadUserPrompt(promptText: string): string {
+  return `Create STEP-first build123d CAD source for this request:
+
+${promptText}
+
+If dimensions are missing, make reasonable printable assumptions and encode them as named parameters.`;
+}
+
+async function generateBuild123dSource(
+  promptText: string,
+  model: string,
+): Promise<string> {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is not configured.');
+  }
+
+  const candidates = getCodeGenerationModelCandidates(model);
+  let lastError = 'CAD source generation failed.';
+
+  for (const candidate of candidates) {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://azure-gen.vercel.app',
+        'X-Title': 'AzureFilm Generator',
+      },
+      body: JSON.stringify({
+        model: candidate,
+        messages: [
+          { role: 'system', content: buildCadSystemPrompt() },
+          { role: 'user', content: buildCadUserPrompt(promptText) },
+        ],
+        temperature: 0.2,
+      }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      lastError =
+        typeof body?.error?.message === 'string'
+          ? body.error.message
+          : `OpenRouter returned ${response.status}`;
+      continue;
+    }
+
+    const text = body?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || !text.trim()) {
+      lastError = 'OpenRouter returned an empty CAD source.';
+      continue;
+    }
+
+    return extractPythonSource(text);
+  }
+
+  throw new Error(lastError);
+}
+
+function asCadArtifacts(value: unknown): CadJobArtifact {
+  if (!value || typeof value !== 'object') return {};
+  const record = value as Record<string, unknown>;
+  const artifacts: CadJobArtifact = {};
+  for (const key of [
+    'stepPath',
+    'glbPath',
+    'stlPath',
+    'threeMfPath',
+    'sourcePath',
+  ] as const) {
+    if (typeof record[key] === 'string') {
+      artifacts[key] = record[key];
+    }
+  }
+  return artifacts;
+}
+
 function consumeTokens(
   email: string,
   userId: string,
@@ -34,6 +140,20 @@ function consumeTokens(
   referenceId: string,
 ) {
   return billing.consume(email, {
+    tokens: FEATURE_COSTS.chat.tokens + getParametricModelTokenCost(model),
+    operation: 'parametric',
+    referenceId,
+    userId,
+  });
+}
+
+function refundTokens(
+  email: string,
+  userId: string,
+  model: string,
+  referenceId: string,
+) {
+  return billing.refund(email, {
     tokens: FEATURE_COSTS.chat.tokens + getParametricModelTokenCost(model),
     operation: 'parametric',
     referenceId,
@@ -177,26 +297,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ message: assistantMessage });
   }
 
-  const { error: cadJobError } = await supabaseClient.from('cad_jobs').insert({
-    id: jobId,
-    user_id: userData.user.id,
-    conversation_id: conversationId,
-    message_id: assistantMessage.id,
-    status: 'pending',
-    prompt,
-    error: null,
-  });
-
-  if (cadJobError) {
-    logError(cadJobError, {
-      functionName: 'cad-chat',
-      statusCode: 500,
-      userId: userData.user.id,
-      conversationId,
-    });
-    return jsonResponse({ error: cadJobError.message }, 500);
-  }
-
   try {
     const tokenResult = await consumeTokens(
       userData.user.email,
@@ -226,10 +326,6 @@ Deno.serve(async (req) => {
         .select()
         .single()
         .overrideTypes<{ content: Content; role: 'assistant' }>();
-      await supabaseClient
-        .from('cad_jobs')
-        .update({ status: 'failure', error: 'insufficient_tokens' })
-        .eq('id', jobId);
       return jsonResponse({ message: updatedMessage ?? assistantMessage });
     }
   } catch (err) {
@@ -244,6 +340,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const source = await generateBuild123dSource(prompt.text, model);
     const workerResponse = await fetch(TEXT_TO_CAD_WORKER_URL!, {
       method: 'POST',
       headers: {
@@ -256,6 +353,7 @@ Deno.serve(async (req) => {
         conversationId,
         messageId: assistantMessage.id,
         prompt,
+        source,
         artifactPrefix: `${userData.user.id}/${conversationId}/${jobId}`,
         callbackUrl: `${Deno.env.get('SUPABASE_URL')?.replace(/\/$/, '')}/functions/v1/cad-worker-callback`,
       }),
@@ -267,28 +365,48 @@ Deno.serve(async (req) => {
 
     if (!workerResponse.ok) {
       throw new Error(
-        typeof workerBody.error === 'string'
-          ? workerBody.error
-          : `Worker returned ${workerResponse.status}`,
+        typeof workerBody.detail === 'string'
+          ? workerBody.detail
+          : typeof workerBody.error === 'string'
+            ? workerBody.error
+            : `Worker returned ${workerResponse.status}`,
       );
     }
 
-    const workerRequestId =
-      typeof workerBody.requestId === 'string' ? workerBody.requestId : null;
-    if (workerRequestId) {
-      await supabaseClient
-        .from('cad_jobs')
-        .update({ worker_request_id: workerRequestId })
-        .eq('id', jobId);
+    const artifacts = asCadArtifacts(workerBody.artifacts);
+    if (!artifacts.stepPath) {
+      throw new Error('Worker did not return a STEP artifact URL.');
     }
+
+    const successContent: Content = {
+      ...pendingContent,
+      text:
+        typeof workerBody.title === 'string'
+          ? `${workerBody.title} is ready.`
+          : 'STEP CAD model is ready.',
+      toolCalls: pendingContent.toolCalls?.filter(
+        (toolCall) => toolCall.name !== 'create_cad_job',
+      ),
+      cadJob: {
+        id: jobId,
+        status: 'success',
+        backend: 'text-to-cad',
+        artifacts,
+      },
+    };
+
+    const { data: updatedMessage } = await supabaseClient
+      .from('messages')
+      .update({ content: successContent })
+      .eq('id', assistantMessage.id)
+      .select()
+      .single()
+      .overrideTypes<{ content: Content; role: 'assistant' }>();
+
+    return jsonResponse({ message: updatedMessage ?? assistantMessage });
   } catch (err) {
     try {
-      await billing.refund(userData.user.email, {
-        tokens: getParametricModelTokenCost(model) + FEATURE_COSTS.chat.tokens,
-        operation: 'parametric',
-        referenceId: jobId,
-        userId: userData.user.id,
-      });
+      await refundTokens(userData.user.email, userData.user.id, model, jobId);
     } catch (refundError) {
       logError(refundError, {
         functionName: 'cad-chat',
@@ -321,12 +439,6 @@ Deno.serve(async (req) => {
       .select()
       .single()
       .overrideTypes<{ content: Content; role: 'assistant' }>();
-    await supabaseClient
-      .from('cad_jobs')
-      .update({ status: 'failure', error })
-      .eq('id', jobId);
     return jsonResponse({ message: updatedMessage ?? assistantMessage });
   }
-
-  return jsonResponse({ message: assistantMessage });
 });
