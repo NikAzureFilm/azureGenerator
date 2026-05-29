@@ -1036,6 +1036,61 @@ const repairedSettings = JSON.parse(
 assert.deepEqual(repairedSettings.filament_colour, ['#FF0000', '#00FF00']);
 await repairedZipReader.close();
 
+const nearDuplicateEdgeScene = new THREE.Scene();
+const nearDuplicateEdgeGeometry = new THREE.BufferGeometry();
+nearDuplicateEdgeGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [
+      0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10, 0.004, 0, 0, 10.004, 0, 0, 10,
+      10, 0,
+    ],
+    3,
+  ),
+);
+nearDuplicateEdgeGeometry.setIndex([0, 1, 2, 1, 0, 3, 4, 5, 6]);
+nearDuplicateEdgeGeometry.clearGroups();
+nearDuplicateEdgeGeometry.addGroup(0, 3, 0);
+nearDuplicateEdgeGeometry.addGroup(3, 3, 1);
+nearDuplicateEdgeGeometry.addGroup(6, 3, 2);
+nearDuplicateEdgeScene.add(
+  new THREE.Mesh(nearDuplicateEdgeGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+  ]),
+);
+
+const nearDuplicateEdgeBlob = await createThreeMfBlobFromScene({
+  scene: nearDuplicateEdgeScene,
+  filename: 'near-duplicate-edge-repair',
+  colorCount: 3,
+});
+const nearDuplicateEdgeZipReader = new ZipReader(
+  new BlobReader(nearDuplicateEdgeBlob),
+);
+const nearDuplicateEdgeEntries = await nearDuplicateEdgeZipReader.getEntries();
+const nearDuplicateEdgeModelXml = await getMeshModelXml(
+  nearDuplicateEdgeEntries,
+);
+assert.equal(nearDuplicateEdgeModelXml.match(/<triangle /g)?.length, 2);
+assert.equal(
+  analyzeThreeMfMeshTopology(nearDuplicateEdgeModelXml).overSharedEdges,
+  0,
+);
+assert.doesNotMatch(nearDuplicateEdgeModelXml, /<m:color color="#0000FFFF"\/>/);
+const nearDuplicateEdgeSettings = JSON.parse(
+  await getZipText(
+    nearDuplicateEdgeEntries,
+    'Metadata/project_settings.config',
+  ),
+);
+assert.deepEqual(nearDuplicateEdgeSettings.filament_colour, [
+  '#FF0000',
+  '#00FF00',
+]);
+await nearDuplicateEdgeZipReader.close();
+
 const degenerateRepairScene = new THREE.Scene();
 const degenerateRepairGeometry = new THREE.BufferGeometry();
 degenerateRepairGeometry.setAttribute(

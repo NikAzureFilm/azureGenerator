@@ -52,6 +52,7 @@ const TARGET_MATERIAL_ID_BLACK = 1;
 const TARGET_MATERIAL_ID_GREEN = 2;
 const TARGET_MATERIAL_ID_YELLOW = 3;
 const BAMBU_BUILD_PLATE_CENTER_MM = 125;
+const THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM = 0.01;
 const TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS: VectorTuple[] = [
   [1 / 3, 1 / 3, 1 / 3],
   [0.6, 0.2, 0.2],
@@ -976,6 +977,10 @@ function applySemanticMaterialMap(
 function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
 ): RepairedSceneGeometry {
+  const weldedGeometry = weldSceneGeometryVertices(
+    geometry,
+    THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM,
+  );
   const keptTriangleIndexes = new Set<number>();
 
   // Group non-degenerate triangles by their unordered vertex set. CSG unions
@@ -985,8 +990,8 @@ function repairSceneGeometryForThreeMfExport(
   // counts and keeping a single triangle for odd counts removes the
   // zero-volume sandwiches that Bambu Studio flags as non-manifold edges.
   const vertexSetGroups = new Map<string, number[]>();
-  geometry.triangles.forEach((triangle, triangleIndex) => {
-    if (isDegenerateTriangle(triangle, geometry.vertices)) {
+  weldedGeometry.triangles.forEach((triangle, triangleIndex) => {
+    if (isDegenerateTriangle(triangle, weldedGeometry.vertices)) {
       return;
     }
     const key = [triangle.v1, triangle.v2, triangle.v3]
@@ -1005,7 +1010,7 @@ function repairSceneGeometryForThreeMfExport(
 
   const edgeToTriangleIndexes = new Map<string, number[]>();
   for (const triangleIndex of keptTriangleIndexes) {
-    const triangle = geometry.triangles[triangleIndex];
+    const triangle = weldedGeometry.triangles[triangleIndex];
     for (const [a, b] of [
       [triangle.v1, triangle.v2],
       [triangle.v2, triangle.v3],
@@ -1032,13 +1037,75 @@ function repairSceneGeometryForThreeMfExport(
     }
   }
 
-  const repairedTriangles = geometry.triangles
+  const repairedTriangles = weldedGeometry.triangles
     .filter((_, index) => keptTriangleIndexes.has(index))
     .map(({ v1, v2, v3 }) => ({ v1, v2, v3 }));
   return compactSceneGeometry({
-    vertices: geometry.vertices,
+    vertices: weldedGeometry.vertices,
     triangles: repairedTriangles,
   });
+}
+
+function weldSceneGeometryVertices(
+  geometry: SceneGeometry,
+  tolerance: number,
+): SceneGeometry {
+  if (tolerance <= 0 || geometry.vertices.length === 0) {
+    return geometry;
+  }
+
+  const toleranceSquared = tolerance * tolerance;
+  const cells = new Map<string, number[]>();
+  const vertexRemap: number[] = [];
+  const vertices: VectorTuple[] = [];
+
+  geometry.vertices.forEach((vertex) => {
+    const cell = getSpatialCell(vertex, tolerance);
+    let weldedIndex: number | undefined;
+
+    for (let dx = -1; dx <= 1 && weldedIndex === undefined; dx += 1) {
+      for (let dy = -1; dy <= 1 && weldedIndex === undefined; dy += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          const nearbyIndexes = cells.get(
+            getSpatialCellKey(cell[0] + dx, cell[1] + dy, cell[2] + dz),
+          );
+          if (!nearbyIndexes) {
+            continue;
+          }
+
+          weldedIndex = nearbyIndexes.find(
+            (candidateIndex) =>
+              getVertexDistanceSquared(vertex, vertices[candidateIndex]) <=
+              toleranceSquared,
+          );
+          if (weldedIndex !== undefined) {
+            break;
+          }
+        }
+      }
+    }
+
+    if (weldedIndex === undefined) {
+      weldedIndex = vertices.length;
+      vertices.push(vertex);
+      const cellKey = getSpatialCellKey(cell[0], cell[1], cell[2]);
+      const cellIndexes = cells.get(cellKey) ?? [];
+      cellIndexes.push(weldedIndex);
+      cells.set(cellKey, cellIndexes);
+    }
+
+    vertexRemap.push(weldedIndex);
+  });
+
+  return {
+    vertices,
+    triangles: geometry.triangles.map((triangle) => ({
+      ...triangle,
+      v1: vertexRemap[triangle.v1],
+      v2: vertexRemap[triangle.v2],
+      v3: vertexRemap[triangle.v3],
+    })),
+  };
 }
 
 function compactSceneGeometry(
@@ -2313,6 +2380,21 @@ function getVertexKey([x, y, z]: VectorTuple): string {
     Math.round(y / VERTEX_KEY_PRECISION),
     Math.round(z / VERTEX_KEY_PRECISION),
   ].join(',');
+}
+
+function getSpatialCell([x, y, z]: VectorTuple, size: number): VectorTuple {
+  return [Math.floor(x / size), Math.floor(y / size), Math.floor(z / size)];
+}
+
+function getSpatialCellKey(x: number, y: number, z: number): string {
+  return `${x},${y},${z}`;
+}
+
+function getVertexDistanceSquared(a: VectorTuple, b: VectorTuple): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  const dz = a[2] - b[2];
+  return dx * dx + dy * dy + dz * dz;
 }
 
 function getTriangleGeometryKey(
