@@ -51,6 +51,7 @@ const TARGET_MATERIAL_ID_SILVER = 0;
 const TARGET_MATERIAL_ID_BLACK = 1;
 const TARGET_MATERIAL_ID_GREEN = 2;
 const TARGET_MATERIAL_ID_YELLOW = 3;
+const BAMBU_BUILD_PLATE_CENTER_MM = 125;
 const TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS: VectorTuple[] = [
   [1 / 3, 1 / 3, 1 / 3],
   [0.6, 0.2, 0.2],
@@ -256,7 +257,7 @@ export function buildThreeMfRootModelXml(modelName: string): string {
     </object>
   </resources>
   <build p:UUID="2c7c17d8-22b5-4d84-8835-1976022ea369">
-    <item objectid="2" p:UUID="00000002-b1ec-4553-aec9-835e5b724bb4" printable="1"/>
+    <item objectid="2" p:UUID="00000002-b1ec-4553-aec9-835e5b724bb4" transform="1 0 0 0 1 0 0 0 1 ${BAMBU_BUILD_PLATE_CENTER_MM} ${BAMBU_BUILD_PLATE_CENTER_MM} 0" printable="1"/>
   </build>
 </model>`);
 }
@@ -423,7 +424,7 @@ export async function createThreeMfBlobFromScene({
 
   const objectModelXml = buildThreeMfModelXml({
     modelName: filename,
-    vertices: geometry.vertices,
+    vertices: convertThreeJsVerticesToThreeMfVertices(geometry.vertices),
     triangles,
     palette: usedPalette.map(colorToHex),
   });
@@ -445,6 +446,12 @@ export async function createThreeMfBlobFromScene({
   const blob = await createThreeMfPackage(packageParts);
   await validateThreeMfBlob(blob);
   return blob;
+}
+
+function convertThreeJsVerticesToThreeMfVertices(
+  vertices: VectorTuple[],
+): VectorTuple[] {
+  return vertices.map(([x, y, z]) => [x, -z, y]);
 }
 
 async function createThreeMfPackage({

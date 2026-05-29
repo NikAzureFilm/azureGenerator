@@ -66,7 +66,9 @@ function getMaterialRegionStats(modelXml) {
   let materialTransitionEdges = 0;
   for (const triangleIndexes of edgeToTriangleIndexes.values()) {
     const colors = new Set(
-      triangleIndexes.map((triangleIndex) => triangles[triangleIndex].colorIndex),
+      triangleIndexes.map(
+        (triangleIndex) => triangles[triangleIndex].colorIndex,
+      ),
     );
     if (colors.size > 1) {
       materialTransitionEdges += 1;
@@ -83,7 +85,11 @@ function getMaterialRegionStats(modelXml) {
   const visited = new Set();
   let componentCount = 0;
   let smallComponentCount = 0;
-  for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
+  for (
+    let triangleIndex = 0;
+    triangleIndex < triangles.length;
+    triangleIndex += 1
+  ) {
     if (visited.has(triangleIndex)) {
       continue;
     }
@@ -115,6 +121,38 @@ function getMaterialRegionStats(modelXml) {
     materialTransitionEdges,
     smallComponentCount,
   };
+}
+
+function getModelBounds(modelXml) {
+  const bounds = {
+    min: [
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ],
+    max: [
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ],
+  };
+
+  for (const match of modelXml.matchAll(/<vertex\b([^>]*)\/>/g)) {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+        attributeMatch[1],
+        attributeMatch[2],
+      ]),
+    );
+    [Number(attributes.x), Number(attributes.y), Number(attributes.z)].forEach(
+      (value, index) => {
+        bounds.min[index] = Math.min(bounds.min[index], value);
+        bounds.max[index] = Math.max(bounds.max[index], value);
+      },
+    );
+  }
+
+  return bounds;
 }
 
 function installFakeCanvasDocument() {
@@ -299,6 +337,10 @@ assert.match(
   /<component p:path="\/3D\/Objects\/Object_1_1\.model" objectid="1"/,
 );
 assert.match(rootModelXml, /<item objectid="2"[^>]+printable="1"\/>/);
+assert.match(
+  rootModelXml,
+  /<item objectid="2"[^>]+transform="1 0 0 0 1 0 0 0 1 125 125 0"[^>]+printable="1"\/>/,
+);
 const modelRelationshipsXml = await getZipText(
   entries,
   '3D/_rels/3dmodel.model.rels',
@@ -407,6 +449,9 @@ const squareModelXml = await getMeshModelXml(
 );
 assert.equal(squareModelXml.match(/<vertex /g)?.length, 4);
 assert.equal(squareModelXml.match(/<triangle /g)?.length, 2);
+const squareModelBounds = getModelBounds(squareModelXml);
+assert.deepEqual(squareModelBounds.min, [0, 0, 0]);
+assert.deepEqual(squareModelBounds.max, [10, 0, 10]);
 assert.match(
   squareModelXml,
   /<triangle v1="0" v2="1" v3="2"[^>]+paint_color="4"\/>/,
@@ -561,10 +606,8 @@ semanticMapGeometry.setAttribute(
   'position',
   new THREE.Float32BufferAttribute(
     [
-      0, 0, 0, 1, 0, 0, 0, 1, 0,
-      2, 0, 0, 3, 0, 0, 2, 1, 0,
-      4, 0, 0, 5, 0, 0, 4, 1, 0,
-      6, 0, 0, 7, 0, 0, 6, 1, 0,
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0, 4, 0, 0, 5, 0, 0, 4,
+      1, 0, 6, 0, 0, 7, 0, 0, 6, 1, 0,
     ],
     3,
   ),
@@ -634,36 +677,29 @@ assert.deepEqual(embeddedSemanticIndexes, [1, 0, 1, 0]);
 await embeddedSemanticZipReader.close();
 
 const targetPaletteScene = new THREE.Scene();
-[
-  '#F2F2EE',
-  '#E8E9E5',
-  '#C7CF3D',
-  '#728A18',
-  '#070707',
-  '#FEDB12',
-].forEach((color, index) => {
-  const targetPaletteGeometry = new THREE.BufferGeometry();
-  const x = index * 2;
-  targetPaletteGeometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute([x, 0, 0, x + 1, 0, 0, x, 1, 0], 3),
-  );
-  targetPaletteScene.add(
-    new THREE.Mesh(
-      targetPaletteGeometry,
-      new THREE.MeshStandardMaterial({ color }),
-    ),
-  );
-});
+['#F2F2EE', '#E8E9E5', '#C7CF3D', '#728A18', '#070707', '#FEDB12'].forEach(
+  (color, index) => {
+    const targetPaletteGeometry = new THREE.BufferGeometry();
+    const x = index * 2;
+    targetPaletteGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([x, 0, 0, x + 1, 0, 0, x, 1, 0], 3),
+    );
+    targetPaletteScene.add(
+      new THREE.Mesh(
+        targetPaletteGeometry,
+        new THREE.MeshStandardMaterial({ color }),
+      ),
+    );
+  },
+);
 const targetPaletteBlob = await createThreeMfBlobFromScene({
   scene: targetPaletteScene,
   filename: 'target-material-palette',
   colorCount: 4,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
-const targetPaletteZipReader = new ZipReader(
-  new BlobReader(targetPaletteBlob),
-);
+const targetPaletteZipReader = new ZipReader(new BlobReader(targetPaletteBlob));
 const targetPaletteEntries = await targetPaletteZipReader.getEntries();
 const targetPaletteModelXml = await getMeshModelXml(targetPaletteEntries);
 const targetPaletteSettings = JSON.parse(
@@ -730,12 +766,10 @@ badgeRecoveryGeometry.setAttribute(
   'position',
   new THREE.Float32BufferAttribute(
     [
-      -0.2, -0.2, 0, 0.2, -0.2, 0, 0, 0.2, 0,
-      -0.2, -0.2, 0.35, 0.2, -0.2, 0.35, 0, 0.2, 0.35,
-      -0.9, -0.9, 0, -0.7, -0.9, 0, -0.8, -0.7, 0,
-      0.35, -0.2, 0, 0.55, -0.2, 0, 0.45, 0, 0,
-      0.6, -0.2, 0, 0.8, -0.2, 0, 0.7, 0, 0,
-      0.25, 0, 0,
+      -0.2, -0.2, 0, 0.2, -0.2, 0, 0, 0.2, 0, -0.2, -0.2, 0.35, 0.2, -0.2, 0.35,
+      0, 0.2, 0.35, -0.9, -0.9, 0, -0.7, -0.9, 0, -0.8, -0.7, 0, 0.35, -0.2, 0,
+      0.55, -0.2, 0, 0.45, 0, 0, 0.6, -0.2, 0, 0.8, -0.2, 0, 0.7, 0, 0, 0.25, 0,
+      0,
     ],
     3,
   ),
@@ -762,9 +796,7 @@ const badgeRecoveryBlob = await createThreeMfBlobFromScene({
   colorCount: 4,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
-const badgeRecoveryZipReader = new ZipReader(
-  new BlobReader(badgeRecoveryBlob),
-);
+const badgeRecoveryZipReader = new ZipReader(new BlobReader(badgeRecoveryBlob));
 const badgeRecoveryModelXml = await getMeshModelXml(
   await badgeRecoveryZipReader.getEntries(),
 );
@@ -800,9 +832,7 @@ const namedMaterialBlob = await createThreeMfBlobFromScene({
   colorCount: 4,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
-const namedMaterialZipReader = new ZipReader(
-  new BlobReader(namedMaterialBlob),
-);
+const namedMaterialZipReader = new ZipReader(new BlobReader(namedMaterialBlob));
 const namedMaterialModelXml = await getMeshModelXml(
   await namedMaterialZipReader.getEntries(),
 );
@@ -878,9 +908,10 @@ const adjacentNamedMaterialModelXml = await getMeshModelXml(
 const adjacentNamedMaterialIndexes = [
   ...adjacentNamedMaterialModelXml.matchAll(/\bp1="(\d+)"/g),
 ].map((match) => Number(match[1]));
-assert.deepEqual(adjacentNamedMaterialIndexes, [
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-]);
+assert.deepEqual(
+  adjacentNamedMaterialIndexes,
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+);
 await adjacentNamedMaterialZipReader.close();
 
 const cubeScene = new THREE.Scene();
