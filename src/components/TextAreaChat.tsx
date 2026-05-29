@@ -471,7 +471,8 @@ const VALID_IMAGE_FORMATS = [
 ];
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D object asset';
-const TEXT_TO_CAD_ENABLED = import.meta.env.VITE_TEXT_TO_CAD_ENABLED === 'true';
+const TEXT_TO_CAD_ENABLED =
+  String(import.meta.env.VITE_TEXT_TO_CAD_ENABLED).trim() === 'true';
 
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
