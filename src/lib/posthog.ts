@@ -1,9 +1,10 @@
 import posthog from 'posthog-js';
+import { getSupabaseFunctionUrl } from './supabase';
 
 const POSTHOG_KEY =
   import.meta.env.VITE_POSTHOG_PROJECT_KEY ?? import.meta.env.VITE_POSTHOG_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_SUPABASE_URL
-  ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jackson-pollock`
+  ? getSupabaseFunctionUrl('jackson-pollock')
   : import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com';
 
 let isInitialized = false;

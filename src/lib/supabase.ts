@@ -12,7 +12,11 @@ export const isSupabaseConfigMissing = !rawSupabaseUrl || !rawSupabaseKey;
 // Fallback values keep the client constructable so imports don't throw
 // when env vars are missing. The app should gate on isSupabaseConfigMissing
 // and avoid making real requests in this state.
-const supabaseUrl = rawSupabaseUrl || 'http://localhost';
+export const supabaseUrl = rawSupabaseUrl || 'http://localhost';
 const supabaseKey = rawSupabaseKey || 'public-anon-key';
 
 export const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+
+export function getSupabaseFunctionUrl(functionName: string): string {
+  return `${supabaseUrl.replace(/\/$/, '')}/functions/v1/${functionName}`;
+}

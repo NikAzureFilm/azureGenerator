@@ -173,16 +173,18 @@ Deno.serve(async (req) => {
     );
   }
 
+  if (!workerConfigured()) {
+    return jsonResponse({ message: assistantMessage });
+  }
+
   const { error: cadJobError } = await supabaseClient.from('cad_jobs').insert({
     id: jobId,
     user_id: userData.user.id,
     conversation_id: conversationId,
     message_id: assistantMessage.id,
-    status: workerConfigured() ? 'pending' : 'failure',
+    status: 'pending',
     prompt,
-    error: workerConfigured()
-      ? null
-      : 'TEXT_TO_CAD_WORKER_URL is not configured.',
+    error: null,
   });
 
   if (cadJobError) {
@@ -193,10 +195,6 @@ Deno.serve(async (req) => {
       conversationId,
     });
     return jsonResponse({ error: cadJobError.message }, 500);
-  }
-
-  if (!workerConfigured()) {
-    return jsonResponse({ message: assistantMessage });
   }
 
   try {
