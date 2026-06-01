@@ -283,14 +283,11 @@ const projectSettings = JSON.parse(
   buildThreeMfProjectSettingsConfig(['#112233', '#AABBCC']),
 );
 assert.deepEqual(projectSettings.filament_colour, ['#112233', '#AABBCC']);
-assert.deepEqual(projectSettings.default_filament_colour, [
-  '#112233',
-  '#AABBCC',
-]);
+assert.deepEqual(projectSettings.default_filament_colour, ['', '']);
 assert.deepEqual(projectSettings.filament_type, ['PLA', 'PLA']);
 assert.deepEqual(projectSettings.filament_settings_id, [
-  'Generic PLA',
-  'Generic PLA',
+  'Bambu PLA Basic @BBL P1P',
+  'Bambu PLA Basic @BBL P1P',
 ]);
 assert.deepEqual(projectSettings.filament_is_support, ['0', '0']);
 assert.deepEqual(projectSettings.filament_soluble, ['0', '0']);
@@ -301,7 +298,9 @@ assert.deepEqual(projectSettings.filament_minimal_purge_on_wipe_tower, [
 assert.equal(projectSettings.name, 'project_settings');
 assert.equal(projectSettings.from, 'project');
 assert.equal(projectSettings.single_extruder_multi_material, '1');
-assert.deepEqual(projectSettings.filament_vendor, ['Generic', 'Generic']);
+assert.equal(projectSettings.printer_model, 'Bambu Lab P1P');
+assert.equal(projectSettings.printer_settings_id, 'Bambu Lab P1P 0.4 nozzle');
+assert.deepEqual(projectSettings.filament_vendor, ['Bambu Lab', 'Bambu Lab']);
 assert.deepEqual(projectSettings.filament_diameter, ['1.75', '1.75']);
 assert.deepEqual(projectSettings.nozzle_temperature, ['220', '220']);
 assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
@@ -309,6 +308,18 @@ assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
   '220',
 ]);
 assert.deepEqual(projectSettings.nozzle_diameter, ['0.4']);
+assert.deepEqual(projectSettings.flush_volumes_matrix, [
+  '0',
+  '140',
+  '140',
+  '0',
+]);
+assert.deepEqual(projectSettings.flush_volumes_vector, [
+  '140',
+  '140',
+  '140',
+  '140',
+]);
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -350,7 +361,20 @@ assert.deepEqual(entryNames, [
 ]);
 
 const rootModelXml = await getZipText(entries, '3D/3dmodel.model');
+assert.match(
+  rootModelXml,
+  /<metadata name="Application">BambuStudio-01\.08\.02\.56<\/metadata>/,
+);
+assert.doesNotMatch(
+  rootModelXml,
+  /<metadata name="Application">AzureFilm Generator<\/metadata>/,
+);
+assert.match(rootModelXml, /<metadata name="BambuStudio:3mfVersion">1<\/metadata>/);
 assert.match(rootModelXml, /<metadata name="Title">red-part<\/metadata>/);
+assert.match(
+  rootModelXml,
+  /<metadata name="Designer">AzureFilm Generator<\/metadata>/,
+);
 assert.match(
   rootModelXml,
   /<component p:path="\/3D\/Objects\/Object_1_1\.model" objectid="1"/,
@@ -379,7 +403,7 @@ const packagedSettings = JSON.parse(
   await settingsEntry.getData(new TextWriter()),
 );
 assert.deepEqual(packagedSettings.filament_colour, ['#FF0000']);
-assert.deepEqual(packagedSettings.default_filament_colour, ['#FF0000']);
+assert.deepEqual(packagedSettings.default_filament_colour, ['']);
 assert.deepEqual(packagedSettings.filament_is_support, ['0']);
 assert.equal(packagedSettings.name, 'project_settings');
 assert.match(
@@ -1333,7 +1357,12 @@ const invalidModelXml = buildThreeMfModelXml({
   ],
   triangles: [{ v1: 0, v2: 1, v3: 2, colorIndex: 0 }],
   palette: ['#FF0000'],
-}).replace('p1="0" p2="0" p3="0"', 'p1="1" p2="0" p3="0"');
+})
+  .replace(
+    '<metadata name="Title">',
+    '<metadata name="Application">BambuStudio-01.08.02.56</metadata>\n  <metadata name="Title">',
+  )
+  .replace('p1="0" p2="0" p3="0"', 'p1="1" p2="0" p3="0"');
 
 const invalidZipWriter = new ZipWriter(new BlobWriter('model/3mf'));
 await invalidZipWriter.add(

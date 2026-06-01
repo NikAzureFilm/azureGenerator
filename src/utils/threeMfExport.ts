@@ -24,6 +24,11 @@ const CONTENT_TYPES_NAMESPACE =
   'http://schemas.openxmlformats.org/package/2006/content-types';
 const BAMBU_OBJECT_MODEL_PATH = '3D/Objects/Object_1_1.model';
 const BAMBU_OBJECT_MODEL_REL_TARGET = '/3D/Objects/Object_1_1.model';
+const BAMBU_STUDIO_VERSION = '01.08.02.56';
+const BAMBU_STUDIO_APPLICATION = `BambuStudio-${BAMBU_STUDIO_VERSION}`;
+const BAMBU_PROJECT_SETTINGS_TEMPLATE_FILAMENT_COUNT = 3;
+const BAMBU_PROJECT_SETTINGS_TEMPLATE_JSON =
+  '{"accel_to_decel_enable":"0","accel_to_decel_factor":"50%","activate_air_filtration":["0","0","0"],"additional_cooling_fan_speed":["70","70","70"],"auxiliary_fan":"1","bed_custom_model":"","bed_custom_texture":"","bed_exclude_area":["0x0","18x0","18x28","0x28"],"before_layer_change_gcode":"","best_object_pos":"0.5,0.5","bottom_shell_layers":"4","bottom_shell_thickness":"0","bottom_surface_pattern":"monotonic","bridge_angle":"0","bridge_flow":"1","bridge_no_support":"0","bridge_speed":"50","brim_object_gap":"0.1","brim_type":"auto_brim","brim_width":"5","chamber_temperatures":["0","0","0"],"change_filament_gcode":"","close_fan_the_first_x_layers":["1","1","1"],"compatible_printers_condition":"","complete_print_exhaust_fan_speed":["70","70","70"],"cool_plate_temp":["35","35","35"],"cool_plate_temp_initial_layer":["35","35","35"],"curr_bed_type":"Cool Plate","default_acceleration":"10000","default_filament_colour":["","",""],"default_filament_profile":["Bambu PLA Basic @BBL X1C"],"default_jerk":"0","default_print_profile":"0.20mm Standard @BBL X1C","deretraction_speed":["30"],"detect_narrow_internal_solid_infill":"1","detect_overhang_wall":"1","detect_thin_wall":"0","different_settings_to_system":["","","","",""],"draft_shield":"disabled","during_print_exhaust_fan_speed":["70","70","70"],"elefant_foot_compensation":"0.15","enable_arc_fitting":"1","enable_long_retraction_when_cut":"2","enable_overhang_bridge_fan":["1","1","1"],"enable_overhang_speed":"1","enable_pressure_advance":["0","0","0"],"enable_prime_tower":"1","enable_support":"0","enforce_support_layers":"0","eng_plate_temp":["0","0","0"],"eng_plate_temp_initial_layer":["0","0","0"],"ensure_vertical_shell_thickness":"1","exclude_object":"1","extruder_clearance_height_to_lid":"90","extruder_clearance_height_to_rod":"34","extruder_clearance_max_radius":"68","extruder_clearance_radius":"57","extruder_colour":["#018001"],"extruder_offset":["0x2"],"extruder_type":["DirectDrive"],"fan_cooling_layer_time":["100","100","100"],"fan_max_speed":["100","100","100"],"fan_min_speed":["100","100","100"],"filament_colour":["#00AE42","#FFFF00","#FF0000"],"filament_cost":["24.99","24.99","24.99"],"filament_density":["1.26","1.26","1.26"],"filament_deretraction_speed":["nil","nil","nil"],"filament_diameter":["1.75","1.75","1.75"],"filament_end_gcode":["","",""],"filament_flow_ratio":["0.98","0.98","0.98"],"filament_ids":["GFA00","GFA00","GFA00"],"filament_is_support":["0","0","0"],"filament_long_retractions_when_cut":["1","1","1"],"filament_max_volumetric_speed":["21","21","21"],"filament_minimal_purge_on_wipe_tower":["15","15","15"],"filament_notes":"","filament_retract_before_wipe":["nil","nil","nil"],"filament_retract_restart_extra":["nil","nil","nil"],"filament_retract_when_changing_layer":["nil","nil","nil"],"filament_retraction_distances_when_cut":["18","18","18"],"filament_retraction_length":["nil","nil","nil"],"filament_retraction_minimum_travel":["nil","nil","nil"],"filament_retraction_speed":["nil","nil","nil"],"filament_settings_id":["Bambu PLA Basic @BBL X1C","Bambu PLA Basic @BBL X1C","Bambu PLA Basic @BBL X1C"],"filament_soluble":["0","0","0"],"filament_start_gcode":["","",""],"filament_type":["PLA","PLA","PLA"],"filament_vendor":["Bambu Lab","Bambu Lab","Bambu Lab"],"filament_wipe":["nil","nil","nil"],"filament_wipe_distance":["nil","nil","nil"],"filament_z_hop":["nil","nil","nil"],"filament_z_hop_types":["nil","nil","nil"],"filename_format":"{input_filename_base}_{filament_type[0]}_{print_time}.gcode","filter_out_gap_fill":"0","first_layer_print_sequence":["0"],"flush_into_infill":"0","flush_into_objects":"0","flush_into_support":"1","flush_multiplier":"1","flush_volumes_matrix":["0","615","318","308","0","363","469","647","0"],"flush_volumes_vector":["140","140","140","140","140","140"],"from":"project","full_fan_speed_layer":["0","0","0"],"fuzzy_skin":"none","fuzzy_skin_point_distance":"0.8","fuzzy_skin_thickness":"0.3","gap_infill_speed":"300","gcode_add_line_number":"","gcode_flavor":"","has_scarf_joint_seam":"0","head_wrap_detect_zone":[],"host_type":"octoprint","hot_plate_temp":["55","55","55"],"hot_plate_temp_initial_layer":["55","55","55"],"independent_support_layer_height":"1","infill_combination":"0","infill_direction":"45","infill_jerk":"9","infill_wall_overlap":"15%","inherits_group":["","","","",""],"initial_layer_acceleration":"500","initial_layer_flow_ratio":"1","initial_layer_infill_speed":"105","initial_layer_jerk":"9","initial_layer_line_width":"0.5","initial_layer_print_height":"0.2","initial_layer_speed":"50","inner_wall_acceleration":"0","inner_wall_jerk":"9","inner_wall_line_width":"0.45","inner_wall_speed":"300","interface_shells":"0","internal_bridge_support_thickness":"0.8","internal_solid_infill_line_width":"0.42","internal_solid_infill_pattern":"zig-zag","internal_solid_infill_speed":"300","ironing_direction":"45","ironing_flow":"10%","ironing_pattern":"zig-zag","ironing_spacing":"0.15","ironing_speed":"30","ironing_type":"no ironing","is_infill_first":"0","layer_change_gcode":"","layer_height":"0.16","line_width":"0.42","long_retractions_when_cut":["0"],"machine_end_gcode":"","machine_load_filament_time":"29","machine_max_acceleration_e":["5000","5000"],"machine_max_acceleration_extruding":["20000","20000"],"machine_max_acceleration_retracting":["5000","5000"],"machine_max_acceleration_travel":["9000","9000"],"machine_max_acceleration_x":["20000","20000"],"machine_max_acceleration_y":["20000","20000"],"machine_max_acceleration_z":["500","200"],"machine_max_jerk_e":["2.5","2.5"],"machine_max_jerk_x":["9","9"],"machine_max_jerk_y":["9","9"],"machine_max_jerk_z":["3","3"],"machine_max_speed_e":["30","30"],"machine_max_speed_x":["500","200"],"machine_max_speed_y":["500","200"],"machine_max_speed_z":["20","20"],"machine_min_extruding_rate":["0","0"],"machine_min_travel_rate":["0","0"],"machine_pause_gcode":"","machine_start_gcode":"","machine_unload_filament_time":"28","max_bridge_length":"10","max_layer_height":["0.28"],"max_travel_detour_distance":"0","min_bead_width":"85%","min_feature_size":"25%","min_layer_height":["0.08"],"minimum_sparse_infill_area":"15","mmu_segmented_region_interlocking_depth":"0","mmu_segmented_region_max_width":"0","name":"project_settings","nozzle_diameter":["0.4"],"nozzle_height":"4.2","nozzle_temperature":["220","220","220"],"nozzle_temperature_initial_layer":["220","220","220"],"nozzle_temperature_range_high":["240","240","240"],"nozzle_temperature_range_low":["190","190","190"],"nozzle_type":"hardened_steel","nozzle_volume":"107","only_one_wall_first_layer":"0","ooze_prevention":"0","other_layers_print_sequence":["0"],"other_layers_print_sequence_nums":"0","outer_wall_acceleration":"5000","outer_wall_jerk":"9","outer_wall_line_width":"0.42","outer_wall_speed":"200","overhang_1_4_speed":"60","overhang_2_4_speed":"30","overhang_3_4_speed":"10","overhang_4_4_speed":"10","overhang_fan_speed":["100","100","100"],"overhang_fan_threshold":["50%","50%","50%"],"post_process":[],"precise_z_height":"0","pressure_advance":["0.02","0.02","0.02"],"prime_tower_brim_width":"3","prime_tower_width":"35","prime_volume":"45","print_compatible_printers":["Bambu Lab X1 Carbon 0.4 nozzle","Bambu Lab X1 0.4 nozzle","Bambu Lab P1S 0.4 nozzle","Bambu Lab X1E 0.4 nozzle"],"print_flow_ratio":"1","print_sequence":"by layer","print_settings_id":"0.16mm Optimal @BBL X1C","printable_area":["0x0","256x0","256x256","0x256"],"printable_height":"250","printer_model":"Bambu Lab X1 Carbon","printer_notes":"","printer_settings_id":"Bambu Lab X1 Carbon 0.4 nozzle","printer_structure":"corexy","printer_technology":"FFF","printer_variant":"0.4","printhost_authorization_type":"key","printhost_ssl_ignore_revoke":"0","printing_by_object_gcode":"","process_notes":"","raft_contact_distance":"0.1","raft_expansion":"1.5","raft_first_layer_density":"90%","raft_first_layer_expansion":"2","raft_layers":"0","reduce_crossing_wall":"0","reduce_fan_stop_start_freq":["1","1","1"],"reduce_infill_retraction":"1","required_nozzle_HRC":["3","3","3"],"resolution":"0.012","retract_before_wipe":["0%"],"retract_length_toolchange":["2"],"retract_lift_above":["0"],"retract_lift_below":["249"],"retract_restart_extra":["0"],"retract_restart_extra_toolchange":["0"],"retract_when_changing_layer":["1"],"retraction_distances_when_cut":["18"],"retraction_length":["0.8"],"retraction_minimum_travel":["1"],"retraction_speed":["30"],"scan_first_layer":"1","scarf_angle_threshold":"155","seam_gap":"15%","seam_position":"aligned","seam_slope_conditional":"1","seam_slope_entire_loop":"0","seam_slope_inner_walls":"1","seam_slope_min_length":"10","seam_slope_start_height":"50%","seam_slope_steps":"10","seam_slope_type":"none","silent_mode":"0","single_extruder_multi_material":"1","skirt_distance":"2","skirt_height":"1","skirt_loops":"0","slice_closing_radius":"0.049","slicing_mode":"regular","slow_down_for_layer_cooling":["1","1","1"],"slow_down_layer_time":["4","4","4"],"slow_down_min_speed":["20","20","20"],"small_perimeter_speed":"50%","small_perimeter_threshold":"0","solid_infill_filament":"1","sparse_infill_acceleration":"100%","sparse_infill_anchor":"400%","sparse_infill_anchor_max":"20","sparse_infill_density":"15%","sparse_infill_filament":"1","sparse_infill_line_width":"0.45","sparse_infill_pattern":"grid","sparse_infill_speed":"330","spiral_mode":"0","spiral_mode_max_xy_smoothing":"200%","spiral_mode_smooth":"0","standby_temperature_delta":"-5","start_end_points":["30x-3","54x245"],"support_air_filtration":"0","support_angle":"0","support_base_pattern":"default","support_base_pattern_spacing":"2.5","support_bottom_interface_spacing":"0.5","support_bottom_z_distance":"0.16","support_chamber_temp_control":"0","support_critical_regions_only":"0","support_expansion":"0","support_filament":"0","support_interface_bottom_layers":"2","support_interface_filament":"0","support_interface_loop_pattern":"0","support_interface_not_for_body":"1","support_interface_pattern":"auto","support_interface_spacing":"0.5","support_interface_speed":"80","support_interface_top_layers":"2","support_line_width":"0.42","support_object_first_layer_gap":"0.2","support_object_xy_distance":"0.35","support_on_build_plate_only":"0","support_remove_small_overhang":"1","support_speed":"150","support_style":"default","support_threshold_angle":"25","support_top_z_distance":"0.16","support_type":"normal(auto)","temperature_vitrification":["45","45","45"],"template_custom_gcode":"","textured_plate_temp":["55","55","55"],"textured_plate_temp_initial_layer":["55","55","55"],"thick_bridges":"0","thumbnail_size":["50x50"],"time_lapse_gcode":"","timelapse_type":"0","top_area_threshold":"100%","top_one_wall_type":"all top","top_shell_layers":"6","top_shell_thickness":"1","top_solid_infill_flow_ratio":"1","top_surface_acceleration":"2000","top_surface_jerk":"9","top_surface_line_width":"0.42","top_surface_pattern":"monotonicline","top_surface_speed":"200","travel_jerk":"9","travel_speed":"500","travel_speed_z":"0","tree_support_branch_angle":"45","tree_support_branch_diameter":"2","tree_support_branch_distance":"5","tree_support_brim_width":"0","tree_support_wall_count":"0","upward_compatible_machine":["Bambu Lab P1S 0.4 nozzle","Bambu Lab P1P 0.4 nozzle","Bambu Lab X1 0.4 nozzle","Bambu Lab X1E 0.4 nozzle","Bambu Lab A1 0.4 nozzle"],"use_firmware_retraction":"0","use_relative_e_distances":"1","version":"01.08.02.56","wall_distribution_count":"1","wall_filament":"1","wall_generator":"classic","wall_loops":"2","wall_sequence":"inner wall/outer wall","wall_transition_angle":"10","wall_transition_filter_deviation":"25%","wall_transition_length":"100%","wipe":["1"],"wipe_distance":["2"],"wipe_speed":"80%","wipe_tower_no_sparse_layers":"0","wipe_tower_rotation_angle":"0","wipe_tower_x":["15"],"wipe_tower_y":["221"],"xy_contour_compensation":"0","xy_hole_compensation":"0","z_hop":["0.4"],"z_hop_types":["Auto Lift"]}';
 const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
   '4',
   '8',
@@ -245,7 +250,7 @@ ${triangleXml}
 export function buildThreeMfRootModelXml(modelName: string): string {
   return xmlDeclaration(`\
 <model unit="millimeter" xml:lang="en-US" requiredextensions="p" xmlns="${CORE_NAMESPACE}" xmlns:slic3rpe="${SLIC3R_NAMESPACE}" xmlns:p="${PRODUCTION_NAMESPACE}">
-  <metadata name="Application">AzureFilm Generator</metadata>
+  <metadata name="Application">${BAMBU_STUDIO_APPLICATION}</metadata>
   <metadata name="BambuStudio:3mfVersion">1</metadata>
   <metadata name="Title">${escapeXml(modelName)}</metadata>
   <metadata name="Designer">AzureFilm Generator</metadata>
@@ -300,46 +305,75 @@ export function buildThreeMfSliceInfoConfig(): string {
 <config>
   <header>
     <header_item key="X-BBL-Client-Type" value="slicer"/>
-    <header_item key="X-BBL-Client-Version" value="01.08.02.56"/>
+    <header_item key="X-BBL-Client-Version" value="${BAMBU_STUDIO_VERSION}"/>
   </header>
 </config>`);
 }
 
 export function buildThreeMfProjectSettingsConfig(palette: string[]): string {
   const normalizedPalette = normalizePalette(palette);
-  const perFilament = (value: string) => normalizedPalette.map(() => value);
+  const settings = buildBambuProjectSettings(normalizedPalette);
 
-  return JSON.stringify(
-    {
-      name: 'project_settings',
-      from: 'project',
-      version: '01.08.02.56',
-      filament_colour: normalizedPalette,
-      default_filament_colour: normalizedPalette,
-      filament_type: perFilament('PLA'),
-      filament_settings_id: perFilament('Generic PLA'),
-      filament_vendor: perFilament('Generic'),
-      filament_diameter: perFilament('1.75'),
-      filament_density: perFilament('1.24'),
-      filament_cost: perFilament('20'),
-      filament_ids: perFilament(''),
-      filament_is_support: perFilament('0'),
-      filament_soluble: perFilament('0'),
-      filament_minimal_purge_on_wipe_tower: perFilament('15'),
-      filament_start_gcode: perFilament(' '),
-      filament_end_gcode: perFilament(' '),
-      filament_max_volumetric_speed: perFilament('12'),
-      filament_flow_ratio: perFilament('0.98'),
-      nozzle_temperature: perFilament('220'),
-      nozzle_temperature_initial_layer: perFilament('220'),
-      nozzle_temperature_range_high: perFilament('240'),
-      nozzle_temperature_range_low: perFilament('190'),
-      nozzle_diameter: ['0.4'],
-      single_extruder_multi_material: '1',
-    },
-    null,
-    2,
-  );
+  return JSON.stringify(settings, null, 2);
+}
+
+function buildBambuProjectSettings(
+  normalizedPalette: string[],
+): Record<string, unknown> {
+  const settings = JSON.parse(BAMBU_PROJECT_SETTINGS_TEMPLATE_JSON) as Record<
+    string,
+    unknown
+  >;
+  const repeat = (value: string) => normalizedPalette.map(() => value);
+
+  for (const [key, value] of Object.entries(settings)) {
+    if (
+      Array.isArray(value) &&
+      value.length === BAMBU_PROJECT_SETTINGS_TEMPLATE_FILAMENT_COUNT
+    ) {
+      settings[key] = repeat(String(value[0] ?? ''));
+    }
+  }
+
+  Object.assign(settings, {
+    name: 'project_settings',
+    from: 'project',
+    version: BAMBU_STUDIO_VERSION,
+    filament_colour: normalizedPalette,
+    // Bambu uses filament_colour for the active project colors; native project
+    // files leave default_filament_colour empty so the loaded colors are not
+    // replaced by preset defaults.
+    default_filament_colour: repeat(''),
+    filament_type: repeat('PLA'),
+    filament_settings_id: repeat('Bambu PLA Basic @BBL P1P'),
+    filament_vendor: repeat('Bambu Lab'),
+    filament_ids: repeat('GFA00'),
+    printer_model: 'Bambu Lab P1P',
+    printer_settings_id: 'Bambu Lab P1P 0.4 nozzle',
+    print_settings_id: '0.20mm Standard @BBL P1P',
+    default_print_profile: '0.20mm Standard @BBL P1P',
+    print_compatible_printers: ['Bambu Lab P1P 0.4 nozzle'],
+    upward_compatible_machine: ['Bambu Lab P1P 0.4 nozzle'],
+    flush_volumes_matrix: buildFlushVolumesMatrix(normalizedPalette.length),
+    flush_volumes_vector: repeatFlushVolumeVector(normalizedPalette.length),
+    single_extruder_multi_material: '1',
+  });
+
+  return settings;
+}
+
+function buildFlushVolumesMatrix(filamentCount: number): string[] {
+  const matrix: string[] = [];
+  for (let row = 0; row < filamentCount; row += 1) {
+    for (let column = 0; column < filamentCount; column += 1) {
+      matrix.push(row === column ? '0' : '140');
+    }
+  }
+  return matrix;
+}
+
+function repeatFlushVolumeVector(filamentCount: number): string[] {
+  return Array.from({ length: filamentCount * 2 }, () => '140');
 }
 
 export async function createThreeMfBlobFromScene({
@@ -697,6 +731,16 @@ function validateThreeMfPackageParts({
 
   if (!rootModelXml.includes(`xmlns="${CORE_NAMESPACE}"`)) {
     throw new Error('3MF root model is missing the core namespace');
+  }
+
+  if (
+    !rootModelXml.includes(
+      `<metadata name="Application">${BAMBU_STUDIO_APPLICATION}</metadata>`,
+    )
+  ) {
+    throw new Error(
+      '3MF root model is missing Bambu Studio application metadata',
+    );
   }
 
   if (

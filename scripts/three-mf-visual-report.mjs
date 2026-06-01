@@ -9,6 +9,24 @@ import {
 } from '../src/utils/threeMfExport.ts';
 
 const DEFAULT_SLOT_COLORS = ['#87CEEB', '#FFFF00', '#FF0000', '#0000FF'];
+const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
+  '4',
+  '8',
+  '0C',
+  '1C',
+  '2C',
+  '3C',
+  '4C',
+  '5C',
+  '6C',
+  '7C',
+  '8C',
+  '9C',
+  'AC',
+  'BC',
+  'CC',
+  'DC',
+];
 
 const args = parseArgs(process.argv.slice(2));
 const outPath = resolve(args.out ?? 'tmp/3mf-visual-report.html');
@@ -53,6 +71,11 @@ if (args.selfTest) {
       `expected four preserved material colors, got ${report.materialColors.length}`,
     );
   }
+  if (!report.rootApplication.startsWith('BambuStudio-')) {
+    failures.push(
+      `expected BambuStudio application metadata, got ${report.rootApplication || 'empty'}`,
+    );
+  }
 
   if (failures.length > 0) {
     console.error(`3MF visual self-test failed. Report: ${outPath}`);
@@ -80,10 +103,11 @@ console.log(
 );
 
 async function buildReport(blob, slotColors, sourceModel) {
-  const { entries, modelXml, settings } = await readThreeMf(blob);
-  const model = parseModelXml(modelXml);
+  const { entries, rootApplication, modelXml, settings } = await readThreeMf(blob);
+  const model = parseModelXml(modelXml, settings);
   const topology = analyzeThreeMfMeshTopology(modelXml);
   const componentStats = getComponentStats(model.triangles);
+  const materialTransitionEdges = getMaterialTransitionEdges(model.triangles);
   const materialCounts = {};
   for (const triangle of model.triangles) {
     materialCounts[triangle.colorIndex] =
@@ -92,13 +116,14 @@ async function buildReport(blob, slotColors, sourceModel) {
 
   return {
     entries,
+    rootApplication,
     materialColors: model.materialColors,
     slotColors,
     vertices: model.vertices,
     triangles: model.triangles,
     topology,
     materialCounts,
-    materialTransitionEdges: topology.materialTransitionEdges,
+    materialTransitionEdges,
     componentStats,
     sourceSvg: sourceModel
       ? renderModelSvg(sourceModel, sourceModel.materialColors)
@@ -117,7 +142,13 @@ async function readThreeMf(blob) {
     const modelEntry =
       entries.find(
         (entry) => entry.filename === '3D/Objects/Object_1_1.model',
-      ) ?? entries.find((entry) => entry.filename === '3D/3dmodel.model');
+      ) ??
+      entries.find(
+        (entry) =>
+          entry.filename.startsWith('3D/Objects/') &&
+          entry.filename.endsWith('.model'),
+      ) ??
+      entries.find((entry) => entry.filename === '3D/3dmodel.model');
     if (!modelEntry) {
       throw new Error('3MF package does not contain a readable model file');
     }
@@ -128,9 +159,19 @@ async function readThreeMf(blob) {
     const settings = settingsEntry
       ? JSON.parse(await settingsEntry.getData(new TextWriter()))
       : null;
+    const rootEntry = entries.find(
+      (entry) => entry.filename === '3D/3dmodel.model',
+    );
+    const rootXml = rootEntry
+      ? await rootEntry.getData(new TextWriter())
+      : '';
+    const rootApplication =
+      rootXml.match(/<metadata\s+name="Application">([^<]*)<\/metadata>/)?.[1] ??
+      '';
 
     return {
       entries: entryNames,
+      rootApplication,
       modelXml: await modelEntry.getData(new TextWriter()),
       settings,
     };
@@ -139,7 +180,7 @@ async function readThreeMf(blob) {
   }
 }
 
-function parseModelXml(modelXml) {
+function parseModelXml(modelXml, settings) {
   const vertices = [...modelXml.matchAll(/<vertex\b([^>]*)\/>/g)].map(
     (match) => {
       const attributes = getXmlAttributes(match[1]);
@@ -150,22 +191,42 @@ function parseModelXml(modelXml) {
       };
     },
   );
-  const materialColors = [
+  const materialColorsFromModel = [
     ...modelXml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g),
   ].map((match) => normalizeHexColor(match[1]));
+  const materialColors =
+    materialColorsFromModel.length > 0
+      ? materialColorsFromModel
+      : (settings?.filament_colour ?? []).map((color) =>
+          normalizeHexColor(color),
+        );
   const triangles = [...modelXml.matchAll(/<triangle\b([^>]*)\/>/g)].map(
     (match) => {
       const attributes = getXmlAttributes(match[1]);
+      const paintColorIndex = decodeBambuPaintColor(attributes.paint_color);
       return {
         v1: Number(attributes.v1),
         v2: Number(attributes.v2),
         v3: Number(attributes.v3),
-        colorIndex: Number(attributes.p1 ?? 0),
+        colorIndex: Number(attributes.p1 ?? paintColorIndex ?? 0),
       };
     },
   );
 
   return { vertices, materialColors, triangles };
+}
+
+function decodeBambuPaintColor(paintColor) {
+  if (!paintColor) {
+    return null;
+  }
+
+  const normalizedPaintColor = paintColor.toUpperCase();
+  const slotIndex = BAMBU_ORCA_FILAMENT_SLOT_CODES.findIndex(
+    (code) => normalizedPaintColor === code,
+  );
+
+  return slotIndex >= 0 ? slotIndex : null;
 }
 
 function renderModelSvg(model, colors) {
@@ -236,6 +297,7 @@ function renderHtmlReport(report) {
   const materialLegend = renderLegend(report.materialColors, '3MF colors');
   const slotLegend = renderLegend(report.slotColors, 'Bambu-like slots');
   const hasSource = report.sourceSvg !== null;
+  const application = escapeHtml(report.rootApplication || 'unknown');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -292,6 +354,12 @@ function renderHtmlReport(report) {
       <div class="metric"><strong>${report.topology.edgeUseHistogram[2] ?? 0}</strong><span>Manifold edges</span></div>
       <div class="metric"><strong>${report.topology.overSharedEdges}</strong><span>Over-shared edges</span></div>
     </section>
+    <section class="metrics">
+      <div class="metric"><strong>${application}</strong><span>3MF application metadata</span></div>
+      <div class="metric"><strong>${report.settingsColors.length.toLocaleString()}</strong><span>Project filament colors</span></div>
+      <div class="metric"><strong>${report.materialColors.length.toLocaleString()}</strong><span>Renderable material colors</span></div>
+      <div class="metric"><strong>${report.entries.length.toLocaleString()}</strong><span>Package entries</span></div>
+    </section>
     <section class="legend">
       ${materialLegend}
       ${slotLegend}
@@ -299,6 +367,44 @@ function renderHtmlReport(report) {
   </main>
 </body>
 </html>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function getMaterialTransitionEdges(triangles) {
+  const edgeToTriangleIndexes = new Map();
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = [a, b].sort((left, right) => left - right).join('-');
+      const indexes = edgeToTriangleIndexes.get(key) ?? [];
+      indexes.push(triangleIndex);
+      edgeToTriangleIndexes.set(key, indexes);
+    }
+  });
+
+  let materialTransitionEdges = 0;
+  for (const triangleIndexes of edgeToTriangleIndexes.values()) {
+    const colors = new Set(
+      triangleIndexes.map(
+        (triangleIndex) => triangles[triangleIndex].colorIndex,
+      ),
+    );
+    if (colors.size > 1) {
+      materialTransitionEdges += 1;
+    }
+  }
+
+  return materialTransitionEdges;
 }
 
 function getComponentStats(triangles) {
