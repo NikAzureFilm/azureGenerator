@@ -369,7 +369,10 @@ assert.doesNotMatch(
   rootModelXml,
   /<metadata name="Application">AzureFilm Generator<\/metadata>/,
 );
-assert.match(rootModelXml, /<metadata name="BambuStudio:3mfVersion">1<\/metadata>/);
+assert.match(
+  rootModelXml,
+  /<metadata name="BambuStudio:3mfVersion">1<\/metadata>/,
+);
 assert.match(rootModelXml, /<metadata name="Title">red-part<\/metadata>/);
 assert.match(
   rootModelXml,
@@ -934,6 +937,58 @@ try {
   );
   assert.deepEqual(flipYFalseTextureSettings.filament_colour, ['#FF0000']);
   await flipYFalseTextureZipReader.close();
+
+  const textureDetailScene = new THREE.Scene();
+  const textureDetailGeometry = new THREE.BufferGeometry();
+  textureDetailGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([0, 0, 0, 100, 0, 0, 0, 100, 0], 3),
+  );
+  textureDetailGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2),
+  );
+  const textureDetailMap = createDataTexture(128, 128, (x, y) =>
+    x >= 16 && x < 64 && y >= 16 && y < 64 ? [255, 255, 255] : [0, 255, 0],
+  );
+  textureDetailMap.flipY = false;
+  textureDetailScene.add(
+    new THREE.Mesh(
+      textureDetailGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: textureDetailMap,
+      }),
+    ),
+  );
+
+  const textureDetailBlob = await createThreeMfBlobFromScene({
+    scene: textureDetailScene,
+    filename: 'texture-detail-subdivision',
+    colorCount: 2,
+    targetMaterialPalette: ['#00FF00', '#FFFFFF'],
+  });
+  const textureDetailZipReader = new ZipReader(
+    new BlobReader(textureDetailBlob),
+  );
+  const textureDetailEntries = await textureDetailZipReader.getEntries();
+  const textureDetailModelXml = await getMeshModelXml(textureDetailEntries);
+  const textureDetailSettings = JSON.parse(
+    await getZipText(textureDetailEntries, 'Metadata/project_settings.config'),
+  );
+  assert.deepEqual(textureDetailSettings.filament_colour, [
+    '#00FF00',
+    '#FFFFFF',
+  ]);
+  assert.deepEqual(
+    new Set(getTriangleMaterialColors(textureDetailModelXml)),
+    new Set(['#00FF00', '#FFFFFF']),
+  );
+  assert.ok(
+    textureDetailModelXml.match(/<triangle /g).length > 1,
+    'large textured triangles are subdivided before color assignment',
+  );
+  await textureDetailZipReader.close();
 } finally {
   restoreCanvasDocument();
 }
@@ -947,13 +1002,15 @@ badgeRecoveryGeometry.setAttribute(
       -0.2, -0.2, 0, 0.2, -0.2, 0, 0, 0.2, 0, -0.2, -0.2, 0.35, 0.2, -0.2, 0.35,
       0, 0.2, 0.35, -0.9, -0.9, 0, -0.7, -0.9, 0, -0.8, -0.7, 0, 0.35, -0.2, 0,
       0.55, -0.2, 0, 0.45, 0, 0, 0.6, -0.2, 0, 0.8, -0.2, 0, 0.7, 0, 0, 0.25, 0,
-      0,
+      0, -0.25, -0.15, 0.35, 0.25, -0.15, 0.35, 0, 0.1, 0.35, -0.22, -0.12,
+      -0.35, 0.22, -0.12, -0.35, 0, 0.08, -0.35,
     ],
     3,
   ),
 );
 badgeRecoveryGeometry.setIndex([
-  0, 1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13, 14, 9, 11, 15,
+  0, 1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13, 14, 9, 11, 15, 16, 17, 18, 19,
+  20, 21,
 ]);
 badgeRecoveryGeometry.addGroup(0, 3, 0);
 badgeRecoveryGeometry.addGroup(3, 3, 0);
@@ -961,6 +1018,8 @@ badgeRecoveryGeometry.addGroup(6, 3, 0);
 badgeRecoveryGeometry.addGroup(9, 3, 1);
 badgeRecoveryGeometry.addGroup(12, 3, 2);
 badgeRecoveryGeometry.addGroup(15, 3, 0);
+badgeRecoveryGeometry.addGroup(18, 3, 2);
+badgeRecoveryGeometry.addGroup(21, 3, 2);
 badgeRecoveryScene.add(
   new THREE.Mesh(badgeRecoveryGeometry, [
     new THREE.MeshStandardMaterial({ color: '#ECEDEC' }),
@@ -981,7 +1040,7 @@ const badgeRecoveryModelXml = await getMeshModelXml(
 const badgeRecoveryIndexes = [
   ...badgeRecoveryModelXml.matchAll(/\bp1="(\d+)"/g),
 ].map((match) => Number(match[1]));
-assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0]);
+assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0, 0, 0]);
 await badgeRecoveryZipReader.close();
 
 const namedMaterialScene = new THREE.Scene();

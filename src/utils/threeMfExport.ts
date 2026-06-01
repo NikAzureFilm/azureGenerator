@@ -72,6 +72,8 @@ const TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS: VectorTuple[] = [
 const TEXTURE_DOMINANT_BUCKET_MIN_SHARE = 0.35;
 const TEXTURE_DOMINANT_BUCKET_MIN_SAMPLES = 2;
 const TEXTURE_SAMPLE_BUCKET_SCALE = 15;
+const TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN = 48;
+const TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL = 4;
 
 type VectorTuple = [number, number, number];
 
@@ -391,7 +393,9 @@ export async function createThreeMfBlobFromScene({
 }): Promise<Blob> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
   const sourceGeometry = applySemanticMaterialMap(
-    extractSceneGeometry(scene),
+    extractSceneGeometry(scene, {
+      preserveTextureDetail: Boolean(targetMaterialPalette),
+    }),
     semanticMaterialMap,
   );
   // Run the printable repair pass before palette quantization and 3MF color ids.
@@ -439,21 +443,32 @@ export async function createThreeMfBlobFromScene({
       targetPaletteAssignments?.colorIndexes[index] ??
       findNearestPaletteIndex(triangle.color, palette),
   }));
-  const recoveredTriangles =
+  let recoveredTriangles = indexedTriangles;
+  const shouldRecoverTargetPaletteRegions =
     targetPaletteAssignments &&
     !semanticAssignments &&
-    !hasAuthoritativeSemanticMaterialIds
-      ? recoverBadgeTargetMaterialRegions(
-          indexedTriangles,
-          geometry.vertices,
-          palette,
-        )
-      : indexedTriangles;
-  const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
-    palette,
+    !hasAuthoritativeSemanticMaterialIds;
+  if (shouldRecoverTargetPaletteRegions) {
+    recoveredTriangles = recoverBadgeTargetMaterialRegions(
+      recoveredTriangles,
+      geometry.vertices,
+      palette,
+    );
+  }
+  let outputTriangles =
     semanticAssignments || hasAuthoritativeSemanticMaterialIds
       ? recoveredTriangles
-      : smoothTriangleColorIndexes(recoveredTriangles, palette),
+      : smoothTriangleColorIndexes(recoveredTriangles, palette);
+  if (shouldRecoverTargetPaletteRegions) {
+    outputTriangles = recoverRaisedBadgeLetterRegions(
+      outputTriangles,
+      geometry.vertices,
+      palette,
+    );
+  }
+  const { palette: usedPalette, triangles } = removeUnusedPaletteEntries(
+    palette,
+    outputTriangles,
   );
 
   const objectModelXml = buildThreeMfModelXml({
@@ -875,7 +890,14 @@ async function readRequiredZipText(
   return entry.getData(new TextWriter());
 }
 
-function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
+function extractSceneGeometry(
+  scene: THREE.Scene,
+  {
+    preserveTextureDetail = false,
+  }: {
+    preserveTextureDetail?: boolean;
+  } = {},
+): SceneGeometry {
   const vertices: VectorTuple[] = [];
   const triangles: SceneGeometry['triangles'] = [];
   const vertexMap = new Map<string, number>();
@@ -900,8 +922,7 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
     const embeddedSemanticMaterialIds =
       getEmbeddedSemanticMaterialIds(geometry);
 
-    const getOrCreateVertexIndex = (sourceIndex: number): number => {
-      const vertex = readWorldVertex(position, sourceIndex, matrixWorld);
+    const getOrCreateVertex = (vertex: VectorTuple): number => {
       const key = getVertexKey(vertex);
       const existingIndex = vertexMap.get(key);
 
@@ -915,6 +936,9 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
       return vertexIndex;
     };
 
+    const getOrCreateVertexIndex = (sourceIndex: number): number =>
+      getOrCreateVertex(readWorldVertex(position, sourceIndex, matrixWorld));
+
     for (const group of groups) {
       const material = materials[group.materialIndex ?? 0] ?? materials[0];
       const end = group.start + group.count;
@@ -923,6 +947,41 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
         const a = getVertexIndex(geometry, offset);
         const b = getVertexIndex(geometry, offset + 1);
         const c = getVertexIndex(geometry, offset + 2);
+        const vertexIndices: [number, number, number] = [a, b, c];
+        const texturedSubTriangles = preserveTextureDetail
+          ? subdivideTexturedTriangleForColorDetail({
+              material,
+              colorAttribute,
+              uvAttribute,
+              position,
+              matrixWorld,
+              vertexIndices,
+            })
+          : null;
+
+        if (texturedSubTriangles) {
+          for (const texturedTriangle of texturedSubTriangles) {
+            const v1 = getOrCreateVertex(texturedTriangle.vertices[0]);
+            const v2 = getOrCreateVertex(texturedTriangle.vertices[1]);
+            const v3 = getOrCreateVertex(texturedTriangle.vertices[2]);
+
+            if (v1 === v2 || v2 === v3 || v1 === v3) {
+              continue;
+            }
+
+            triangles.push({
+              v1,
+              v2,
+              v3,
+              color: texturedTriangle.color,
+              semanticMaterialId:
+                embeddedSemanticMaterialIds?.[Math.floor(offset / 3)] ??
+                getTargetMaterialIdFromMaterial(material),
+            });
+          }
+          continue;
+        }
+
         const v1 = getOrCreateVertexIndex(a);
         const v2 = getOrCreateVertexIndex(b);
         const v3 = getOrCreateVertexIndex(c);
@@ -935,7 +994,7 @@ function extractSceneGeometry(scene: THREE.Scene): SceneGeometry {
           material,
           colorAttribute,
           uvAttribute,
-          vertexIndices: [a, b, c],
+          vertexIndices,
         });
 
         triangles.push({
@@ -1612,6 +1671,299 @@ function recoverBadgeTargetMaterialRegions(
   });
 }
 
+function recoverRaisedBadgeLetterRegions(
+  triangles: ThreeMfTriangle[],
+  vertices: VectorTuple[],
+  palette: THREE.Color[],
+): ThreeMfTriangle[] {
+  if (triangles.length === 0 || palette.length < 4) {
+    return triangles;
+  }
+
+  const roles = getTargetPaletteRoles(palette);
+  if (roles.lightNeutral === undefined || roles.dark === undefined) {
+    return triangles;
+  }
+  const lightNeutralColorIndex = roles.lightNeutral;
+  const raisedLetterSourceColorIndexes = getRaisedLetterSourceColorIndexes(
+    palette,
+    roles,
+  );
+  if (raisedLetterSourceColorIndexes.size === 0) {
+    return triangles;
+  }
+
+  const axes = getModelPrincipalAxes(vertices);
+  const frontStats = triangles
+    .map((triangle) => ({
+      triangle,
+      centroid: getTriangleCentroid(vertices, triangle),
+      depthNormal: getTriangleNormalAxis(vertices, triangle, axes.depth),
+    }))
+    .filter((stats) => Math.abs(stats.depthNormal) > 0.45);
+
+  if (frontStats.length === 0) {
+    return triangles;
+  }
+
+  const frontDepths = frontStats.map((stats) =>
+    stats.centroid.getComponent(axes.depth),
+  );
+  const frontDepthMin = Math.min(...frontDepths);
+  const frontDepthMax = Math.max(...frontDepths);
+  const frontDepthRange = frontDepthMax - frontDepthMin;
+  if (frontDepthRange <= 1e-6) {
+    return triangles;
+  }
+  const textDepthLowerThreshold = frontDepthMin + frontDepthRange * 0.22;
+  const textDepthUpperThreshold = frontDepthMax - frontDepthRange * 0.22;
+  const bounds = getVectorAxisBounds(vertices, axes);
+  const ballMask = getProjectedBallMask(frontStats, axes, roles.dark, bounds);
+
+  return triangles.map((triangle) => {
+    if (!raisedLetterSourceColorIndexes.has(triangle.colorIndex)) {
+      return triangle;
+    }
+
+    const centroid = getTriangleCentroid(vertices, triangle);
+    if (!isWithinRaisedLetterBand(centroid, bounds, axes)) {
+      return triangle;
+    }
+
+    if (ballMask && isInsideProjectedMask(centroid, axes, ballMask)) {
+      return triangle;
+    }
+
+    const depthNormal = getTriangleNormalAxis(vertices, triangle, axes.depth);
+    if (Math.abs(depthNormal) <= 0.45) {
+      return triangle;
+    }
+
+    const depth = centroid.getComponent(axes.depth);
+    if (depth > textDepthLowerThreshold && depth < textDepthUpperThreshold) {
+      return triangle;
+    }
+
+    return {
+      ...triangle,
+      colorIndex: lightNeutralColorIndex,
+    };
+  });
+}
+
+function getRaisedLetterSourceColorIndexes(
+  palette: THREE.Color[],
+  roles: ReturnType<typeof getTargetPaletteRoles>,
+): Set<number> {
+  const colorIndexes = new Set<number>();
+  if (roles.green !== undefined) {
+    colorIndexes.add(roles.green);
+  }
+  if (roles.yellow !== undefined) {
+    colorIndexes.add(roles.yellow);
+  }
+
+  palette.forEach((color, index) => {
+    if (index === roles.lightNeutral || index === roles.dark) {
+      return;
+    }
+    const hsl = { h: 0, s: 0, l: 0 };
+    color.getHSL(hsl);
+    if (hsl.s >= 0.2) {
+      colorIndexes.add(index);
+    }
+  });
+
+  return colorIndexes;
+}
+
+function getModelPrincipalAxes(vertices: VectorTuple[]): {
+  horizontal: 0 | 1 | 2;
+  vertical: 0 | 1 | 2;
+  depth: 0 | 1 | 2;
+} {
+  const ranges = [0, 1, 2]
+    .map((axis) => {
+      const values = vertices.map((vertex) => vertex[axis]);
+      return {
+        axis: axis as 0 | 1 | 2,
+        range: Math.max(...values) - Math.min(...values),
+      };
+    })
+    .sort((a, b) => b.range - a.range);
+  const faceAxes = ranges.slice(0, 2).map((entry) => entry.axis);
+  return {
+    horizontal: faceAxes.includes(0) ? 0 : faceAxes[0],
+    vertical: faceAxes.includes(0)
+      ? (faceAxes.find((axis) => axis !== 0) ?? faceAxes[1])
+      : faceAxes[1],
+    depth: ranges[2]?.axis ?? 1,
+  };
+}
+
+function getVectorAxisBounds(
+  vertices: VectorTuple[],
+  axes: { horizontal: 0 | 1 | 2; vertical: 0 | 1 | 2 },
+): {
+  minHorizontal: number;
+  maxHorizontal: number;
+  minVertical: number;
+  maxVertical: number;
+} {
+  return vertices.reduce(
+    (bounds, vertex) => ({
+      minHorizontal: Math.min(bounds.minHorizontal, vertex[axes.horizontal]),
+      maxHorizontal: Math.max(bounds.maxHorizontal, vertex[axes.horizontal]),
+      minVertical: Math.min(bounds.minVertical, vertex[axes.vertical]),
+      maxVertical: Math.max(bounds.maxVertical, vertex[axes.vertical]),
+    }),
+    {
+      minHorizontal: Number.POSITIVE_INFINITY,
+      maxHorizontal: Number.NEGATIVE_INFINITY,
+      minVertical: Number.POSITIVE_INFINITY,
+      maxVertical: Number.NEGATIVE_INFINITY,
+    },
+  );
+}
+
+function isWithinRaisedLetterBand(
+  centroid: THREE.Vector3,
+  bounds: {
+    minHorizontal: number;
+    maxHorizontal: number;
+    minVertical: number;
+    maxVertical: number;
+  },
+  axes: { horizontal: 0 | 1 | 2; vertical: 0 | 1 | 2 },
+): boolean {
+  const centerHorizontal = (bounds.minHorizontal + bounds.maxHorizontal) / 2;
+  const halfWidth = Math.max(
+    (bounds.maxHorizontal - bounds.minHorizontal) / 2,
+    1e-6,
+  );
+  const height = Math.max(bounds.maxVertical - bounds.minVertical, 1e-6);
+  const horizontal = centroid.getComponent(axes.horizontal);
+  const vertical = centroid.getComponent(axes.vertical);
+  const normalizedHorizontal = Math.abs(
+    (horizontal - centerHorizontal) / halfWidth,
+  );
+  const normalizedVertical = (vertical - bounds.minVertical) / height;
+
+  return (
+    normalizedHorizontal <= 0.78 &&
+    normalizedVertical >= 0.38 &&
+    normalizedVertical <= 0.82
+  );
+}
+
+function getProjectedBallMask(
+  frontStats: Array<{
+    triangle: ThreeMfTriangle;
+    centroid: THREE.Vector3;
+  }>,
+  axes: { horizontal: 0 | 1 | 2; vertical: 0 | 1 | 2 },
+  darkColorIndex: number,
+  modelBounds: {
+    minHorizontal: number;
+    maxHorizontal: number;
+    minVertical: number;
+    maxVertical: number;
+  },
+): {
+  minHorizontal: number;
+  maxHorizontal: number;
+  minVertical: number;
+  maxVertical: number;
+} | null {
+  const centerHorizontal =
+    (modelBounds.minHorizontal + modelBounds.maxHorizontal) / 2;
+  const halfWidth = Math.max(
+    (modelBounds.maxHorizontal - modelBounds.minHorizontal) / 2,
+    1e-6,
+  );
+  const height = Math.max(
+    modelBounds.maxVertical - modelBounds.minVertical,
+    1e-6,
+  );
+  const darkCentroids = frontStats
+    .filter((stats) => {
+      if (stats.triangle.colorIndex !== darkColorIndex) {
+        return false;
+      }
+      const horizontal = stats.centroid.getComponent(axes.horizontal);
+      const vertical = stats.centroid.getComponent(axes.vertical);
+      const normalizedHorizontal = Math.abs(
+        (horizontal - centerHorizontal) / halfWidth,
+      );
+      const normalizedVertical = (vertical - modelBounds.minVertical) / height;
+      return normalizedHorizontal <= 0.72 && normalizedVertical <= 0.54;
+    })
+    .map((stats) => stats.centroid);
+  if (darkCentroids.length === 0) {
+    return null;
+  }
+
+  const bounds = darkCentroids.reduce(
+    (currentBounds, centroid) => ({
+      minHorizontal: Math.min(
+        currentBounds.minHorizontal,
+        centroid.getComponent(axes.horizontal),
+      ),
+      maxHorizontal: Math.max(
+        currentBounds.maxHorizontal,
+        centroid.getComponent(axes.horizontal),
+      ),
+      minVertical: Math.min(
+        currentBounds.minVertical,
+        centroid.getComponent(axes.vertical),
+      ),
+      maxVertical: Math.max(
+        currentBounds.maxVertical,
+        centroid.getComponent(axes.vertical),
+      ),
+    }),
+    {
+      minHorizontal: Number.POSITIVE_INFINITY,
+      maxHorizontal: Number.NEGATIVE_INFINITY,
+      minVertical: Number.POSITIVE_INFINITY,
+      maxVertical: Number.NEGATIVE_INFINITY,
+    },
+  );
+  const horizontalPadding =
+    (bounds.maxHorizontal - bounds.minHorizontal) * 0.22;
+  const verticalPadding = (bounds.maxVertical - bounds.minVertical) * 0.08;
+
+  return {
+    minHorizontal: bounds.minHorizontal - horizontalPadding,
+    maxHorizontal: bounds.maxHorizontal + horizontalPadding,
+    minVertical: bounds.minVertical - verticalPadding,
+    maxVertical: Math.min(
+      bounds.maxVertical + verticalPadding,
+      modelBounds.minVertical + height * 0.54,
+    ),
+  };
+}
+
+function isInsideProjectedMask(
+  centroid: THREE.Vector3,
+  axes: { horizontal: 0 | 1 | 2; vertical: 0 | 1 | 2 },
+  mask: {
+    minHorizontal: number;
+    maxHorizontal: number;
+    minVertical: number;
+    maxVertical: number;
+  },
+): boolean {
+  const horizontal = centroid.getComponent(axes.horizontal);
+  const vertical = centroid.getComponent(axes.vertical);
+  return (
+    horizontal >= mask.minHorizontal &&
+    horizontal <= mask.maxHorizontal &&
+    vertical >= mask.minVertical &&
+    vertical <= mask.maxVertical
+  );
+}
+
 function hasNeighborWithColorIndex(
   adjacency: number[][],
   triangles: ThreeMfTriangle[],
@@ -1683,6 +2035,25 @@ function getTriangleNormalZ(
   const normal = ab.cross(ac);
   const length = normal.length();
   return length > 0 ? normal.z / length : 0;
+}
+
+function getTriangleNormalAxis(
+  vertices: VectorTuple[],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+  axis: 0 | 1 | 2,
+): number {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+  if (!a || !b || !c) {
+    return 0;
+  }
+
+  const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  const normal = ab.cross(ac);
+  const length = normal.length();
+  return length > 0 ? normal.getComponent(axis) / length : 0;
 }
 
 function getQuantile(values: number[], quantile: number): number {
@@ -1951,6 +2322,78 @@ function sampleTriangleColor({
   return materialColor;
 }
 
+function subdivideTexturedTriangleForColorDetail({
+  material,
+  colorAttribute,
+  uvAttribute,
+  position,
+  matrixWorld,
+  vertexIndices,
+}: {
+  material: THREE.Material;
+  colorAttribute?: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+  uvAttribute?: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+  matrixWorld: THREE.Matrix4;
+  vertexIndices: [number, number, number];
+}): Array<{
+  vertices: [VectorTuple, VectorTuple, VectorTuple];
+  color: THREE.Color;
+}> | null {
+  if (!uvAttribute || !('map' in material)) {
+    return null;
+  }
+
+  const texture = material.map;
+  if (!(texture instanceof THREE.Texture)) {
+    return null;
+  }
+
+  const pixels = getTexturePixels(texture);
+  if (!pixels) {
+    return null;
+  }
+
+  const uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2] = vertexIndices.map(
+    (vertexIndex) => readUv(uvAttribute, vertexIndex),
+  ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+  const subdivisionLevel = getTextureDetailSubdivisionLevel(pixels, uvs);
+  if (subdivisionLevel <= 0) {
+    return null;
+  }
+
+  const sourceVertices: [VectorTuple, VectorTuple, VectorTuple] =
+    vertexIndices.map((vertexIndex) =>
+      readWorldVertex(position, vertexIndex, matrixWorld),
+    ) as [VectorTuple, VectorTuple, VectorTuple];
+  const materialColor = getMaterialColor(material);
+  const vertexColor = sampleVertexColor(colorAttribute, vertexIndices);
+
+  return getSubdividedBarycentricTriangles(subdivisionLevel).map(
+    (barycentricTriangle) => {
+      const subUvs = barycentricTriangle.map((barycentric) =>
+        interpolateUv(uvs, barycentric),
+      ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+      const color = sampleTextureUvTriangleColor(
+        texture,
+        pixels,
+        subUvs,
+      ).multiply(materialColor);
+
+      if (vertexColor) {
+        color.multiply(vertexColor);
+      }
+
+      return {
+        vertices: barycentricTriangle.map((barycentric) =>
+          interpolateVectorTuple(sourceVertices, barycentric),
+        ) as [VectorTuple, VectorTuple, VectorTuple],
+        color,
+      };
+    },
+  );
+}
+
 function sampleTextureColor(
   material: THREE.Material,
   uvAttribute:
@@ -1974,35 +2417,38 @@ function sampleTextureColor(
   }
 
   try {
-    const samples = TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS.map(
-      (barycentricWeights) => {
-        const uv = getTriangleUvSample(
-          uvAttribute,
-          vertexIndices,
-          barycentricWeights,
-        );
-        return getTexturePixelColor(pixels, uv.x, uv.y, texture.flipY);
-      },
-    );
-
-    return getDominantTextureSampleColor(samples);
+    const uvs = vertexIndices.map((vertexIndex) =>
+      readUv(uvAttribute, vertexIndex),
+    ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+    return sampleTextureUvTriangleColor(texture, pixels, uvs);
   } catch {
     return null;
   }
 }
 
-function getTriangleUvSample(
+function sampleTextureUvTriangleColor(
+  texture: THREE.Texture,
+  pixels: TexturePixels,
+  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2],
+): THREE.Color {
+  const samples = TEXTURE_TRIANGLE_SAMPLE_BARYCENTRICS.map(
+    (barycentricWeights) => {
+      const uv = interpolateUv(uvs, barycentricWeights);
+      return getTexturePixelColor(pixels, uv.x, uv.y, texture.flipY);
+    },
+  );
+
+  return getDominantTextureSampleColor(samples);
+}
+
+function readUv(
   uvAttribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
-  vertexIndices: [number, number, number],
-  barycentricWeights: VectorTuple,
+  vertexIndex: number,
 ): THREE.Vector2 {
-  const uv = new THREE.Vector2();
-  vertexIndices.forEach((vertexIndex, index) => {
-    const weight = barycentricWeights[index];
-    uv.x += uvAttribute.getX(vertexIndex) * weight;
-    uv.y += uvAttribute.getY(vertexIndex) * weight;
-  });
-  return uv;
+  return new THREE.Vector2(
+    uvAttribute.getX(vertexIndex),
+    uvAttribute.getY(vertexIndex),
+  );
 }
 
 function getTexturePixelColor(
@@ -2028,6 +2474,116 @@ function getTexturePixelColor(
     pixels.data[offset + 1] / 255,
     pixels.data[offset + 2] / 255,
   );
+}
+
+function getTextureDetailSubdivisionLevel(
+  pixels: TexturePixels,
+  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2],
+): number {
+  const span = Math.max(
+    getUvPixelDistance(pixels, uvs[0], uvs[1]),
+    getUvPixelDistance(pixels, uvs[1], uvs[2]),
+    getUvPixelDistance(pixels, uvs[2], uvs[0]),
+  );
+  let level = 0;
+  let reducedSpan = span;
+
+  while (
+    reducedSpan > TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN &&
+    level < TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL
+  ) {
+    level += 1;
+    reducedSpan /= 2;
+  }
+
+  return level;
+}
+
+function getUvPixelDistance(
+  pixels: TexturePixels,
+  left: THREE.Vector2,
+  right: THREE.Vector2,
+): number {
+  return Math.hypot(
+    (left.x - right.x) * pixels.width,
+    (left.y - right.y) * pixels.height,
+  );
+}
+
+const textureSubdivisionBarycentricCache = new Map<number, VectorTuple[][]>();
+
+function getSubdividedBarycentricTriangles(level: number): VectorTuple[][] {
+  const cached = textureSubdivisionBarycentricCache.get(level);
+  if (cached) {
+    return cached;
+  }
+
+  let triangles: VectorTuple[][] = [
+    [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ],
+  ];
+
+  for (let iteration = 0; iteration < level; iteration += 1) {
+    triangles = triangles.flatMap(([a, b, c]) => {
+      const ab = midpointBarycentric(a, b);
+      const bc = midpointBarycentric(b, c);
+      const ca = midpointBarycentric(c, a);
+      return [
+        [a, ab, ca],
+        [ab, b, bc],
+        [ca, bc, c],
+        [ab, bc, ca],
+      ];
+    });
+  }
+
+  textureSubdivisionBarycentricCache.set(level, triangles);
+  return triangles;
+}
+
+function midpointBarycentric(
+  left: VectorTuple,
+  right: VectorTuple,
+): VectorTuple {
+  return [
+    (left[0] + right[0]) / 2,
+    (left[1] + right[1]) / 2,
+    (left[2] + right[2]) / 2,
+  ];
+}
+
+function interpolateUv(
+  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2],
+  barycentric: VectorTuple,
+): THREE.Vector2 {
+  return new THREE.Vector2(
+    uvs[0].x * barycentric[0] +
+      uvs[1].x * barycentric[1] +
+      uvs[2].x * barycentric[2],
+    uvs[0].y * barycentric[0] +
+      uvs[1].y * barycentric[1] +
+      uvs[2].y * barycentric[2],
+  );
+}
+
+function interpolateVectorTuple(
+  vertices: [VectorTuple, VectorTuple, VectorTuple],
+  barycentric: VectorTuple,
+): VectorTuple {
+  return [
+    vertices[0][0] * barycentric[0] +
+      vertices[1][0] * barycentric[1] +
+      vertices[2][0] * barycentric[2],
+    vertices[0][1] * barycentric[0] +
+      vertices[1][1] * barycentric[1] +
+      vertices[2][1] * barycentric[2],
+    vertices[0][2] * barycentric[0] +
+      vertices[1][2] * barycentric[1] +
+      vertices[2][2] * barycentric[2],
+  ];
 }
 
 function getDominantTextureSampleColor(samples: THREE.Color[]): THREE.Color {
