@@ -18,6 +18,7 @@ const TEXT_TO_CAD_WORKER_URL = Deno.env.get('TEXT_TO_CAD_WORKER_URL')?.trim();
 const TEXT_TO_CAD_WORKER_TOKEN = Deno.env
   .get('TEXT_TO_CAD_WORKER_TOKEN')
   ?.trim();
+const MAX_TEXT_TO_CAD_ATTEMPTS = 2;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -32,11 +33,15 @@ function workerConfigured(): boolean {
 
 function extractPythonSource(text: string): string {
   const fence = text.match(/```(?:python)?\s*([\s\S]*?)```/);
-  const source = (fence?.[1] ?? text).trim();
+  const source = normalizeBuild123dSource((fence?.[1] ?? text).trim());
   if (!source.includes('def gen_step')) {
     throw new Error('Generated CAD source did not define gen_step().');
   }
   return source;
+}
+
+function normalizeBuild123dSource(source: string): string {
+  return source.replace(/\bSortBy\.(X|Y|Z)\b/g, 'Axis.$1');
 }
 
 function buildCadSystemPrompt(): string {
@@ -52,21 +57,35 @@ Requirements:
 - Prefer precise mechanical geometry: boxes, cylinders, holes, slots, chamfers, fillets, ribs, bosses, standoffs.
 - Use named parameters near the top.
 - Keep the model robust and simple enough to export.
+- For coordinate sorting, use sort_by(Axis.X), sort_by(Axis.Y), or sort_by(Axis.Z). Do not use SortBy.X, SortBy.Y, or SortBy.Z.
 - Do not read files, write files, use network, subprocess, shell, or external services.
 - Do not call export_step; the worker does that.`;
 }
 
-function buildCadUserPrompt(promptText: string): string {
+function buildCadUserPrompt(
+  promptText: string,
+  previousError?: string,
+): string {
+  const correction = previousError
+    ? `
+
+The previous generated source failed with this build123d error:
+${previousError}
+
+Return corrected Python source that avoids that error.`
+    : '';
+
   return `Create STEP-first build123d CAD source for this request:
 
 ${promptText}
 
-If dimensions are missing, make reasonable printable assumptions and encode them as named parameters.`;
+If dimensions are missing, make reasonable printable assumptions and encode them as named parameters.${correction}`;
 }
 
 async function generateBuild123dSource(
   promptText: string,
   model: string,
+  previousError?: string,
 ): Promise<string> {
   if (!OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY is not configured.');
@@ -88,7 +107,10 @@ async function generateBuild123dSource(
         model: candidate,
         messages: [
           { role: 'system', content: buildCadSystemPrompt() },
-          { role: 'user', content: buildCadUserPrompt(promptText) },
+          {
+            role: 'user',
+            content: buildCadUserPrompt(promptText, previousError),
+          },
         ],
         temperature: 0.2,
       }),
@@ -113,6 +135,67 @@ async function generateBuild123dSource(
   }
 
   throw new Error(lastError);
+}
+
+async function submitTextToCadWorkerJob({
+  jobId,
+  userId,
+  conversationId,
+  messageId,
+  prompt,
+  source,
+}: {
+  jobId: string;
+  userId: string;
+  conversationId: string;
+  messageId: string;
+  prompt: Record<string, unknown>;
+  source: string;
+}) {
+  const response = await fetch(TEXT_TO_CAD_WORKER_URL!, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${TEXT_TO_CAD_WORKER_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      jobId,
+      userId,
+      conversationId,
+      messageId,
+      prompt,
+      source,
+      artifactPrefix: `${userId}/${conversationId}/${jobId}`,
+      callbackUrl: `${Deno.env.get('SUPABASE_URL')?.replace(/\/$/, '')}/functions/v1/cad-worker-callback`,
+    }),
+  });
+
+  const body = await response
+    .json()
+    .catch(() => ({}) as Record<string, unknown>);
+
+  if (!response.ok) {
+    throw new TextToCadWorkerError(
+      typeof body.detail === 'string'
+        ? body.detail
+        : typeof body.error === 'string'
+          ? body.error
+          : `Worker returned ${response.status}`,
+      response.status,
+    );
+  }
+
+  return body;
+}
+
+class TextToCadWorkerError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'TextToCadWorkerError';
+  }
 }
 
 function asCadArtifacts(value: unknown): CadJobArtifact {
@@ -340,37 +423,40 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const source = await generateBuild123dSource(prompt.text, model);
-    const workerResponse = await fetch(TEXT_TO_CAD_WORKER_URL!, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${TEXT_TO_CAD_WORKER_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jobId,
-        userId: userData.user.id,
-        conversationId,
-        messageId: assistantMessage.id,
-        prompt,
-        source,
-        artifactPrefix: `${userData.user.id}/${conversationId}/${jobId}`,
-        callbackUrl: `${Deno.env.get('SUPABASE_URL')?.replace(/\/$/, '')}/functions/v1/cad-worker-callback`,
-      }),
-    });
+    let workerBody: Record<string, unknown> | null = null;
+    let previousError: string | undefined;
 
-    const workerBody = await workerResponse
-      .json()
-      .catch(() => ({}) as Record<string, unknown>);
-
-    if (!workerResponse.ok) {
-      throw new Error(
-        typeof workerBody.detail === 'string'
-          ? workerBody.detail
-          : typeof workerBody.error === 'string'
-            ? workerBody.error
-            : `Worker returned ${workerResponse.status}`,
+    for (let attempt = 1; attempt <= MAX_TEXT_TO_CAD_ATTEMPTS; attempt += 1) {
+      const source = await generateBuild123dSource(
+        prompt.text,
+        model,
+        previousError,
       );
+      try {
+        workerBody = await submitTextToCadWorkerJob({
+          jobId,
+          userId: userData.user.id,
+          conversationId,
+          messageId: assistantMessage.id,
+          prompt,
+          source,
+        });
+        break;
+      } catch (error) {
+        if (
+          error instanceof TextToCadWorkerError &&
+          error.status === 422 &&
+          attempt < MAX_TEXT_TO_CAD_ATTEMPTS
+        ) {
+          previousError = error.message;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!workerBody) {
+      throw new Error('Worker did not return a response.');
     }
 
     const artifacts = asCadArtifacts(workerBody.artifacts);

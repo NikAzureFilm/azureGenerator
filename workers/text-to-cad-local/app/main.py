@@ -71,7 +71,14 @@ def clean_source(source: str) -> str:
     fence = re.search(r"```(?:python)?\s*([\s\S]*?)```", source)
     if fence:
         source = fence.group(1).strip()
+    source = normalize_build123d_source(source)
     return source
+
+
+def normalize_build123d_source(source: str) -> str:
+    # LLMs often infer SortBy.X/Y/Z from natural language, but build123d uses
+    # Axis.X/Y/Z for coordinate sorting.
+    return re.sub(r"\bSortBy\.(X|Y|Z)\b", r"Axis.\1", source)
 
 
 def slug(value: str) -> str:
