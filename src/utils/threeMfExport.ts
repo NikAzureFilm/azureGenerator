@@ -45,7 +45,6 @@ const BAMBU_ORCA_FILAMENT_SLOT_CODES = [
 const VERTEX_KEY_PRECISION = 1e-6;
 const DEGENERATE_TRIANGLE_AREA_SQUARED = 1e-20;
 const SMALL_COLOR_ISLAND_TRIANGLE_COUNT = 24;
-const MIN_DISSIMILAR_COLOR_SMOOTH_TRIANGLE_COUNT = 32;
 const SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED = 0.03;
 const TARGET_MATERIAL_ID_SILVER = 0;
 const TARGET_MATERIAL_ID_BLACK = 1;
@@ -1721,10 +1720,7 @@ function smoothTriangleColorIndexes(
           palette[component.colorIndex],
           palette[replacementColorIndex],
         ) <= SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED;
-      if (
-        !isSimilarColorIsland &&
-        triangles.length < MIN_DISSIMILAR_COLOR_SMOOTH_TRIANGLE_COUNT
-      ) {
+      if (!isSimilarColorIsland) {
         continue;
       }
 

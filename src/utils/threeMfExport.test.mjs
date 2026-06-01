@@ -155,6 +155,25 @@ function getModelBounds(modelXml) {
   return bounds;
 }
 
+function getMaterialColors(modelXml) {
+  return [
+    ...modelXml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g),
+  ].map((match) => match[1].toUpperCase());
+}
+
+function getTriangleMaterialColors(modelXml) {
+  const materialColors = getMaterialColors(modelXml);
+  return [...modelXml.matchAll(/<triangle\b([^>]*)\/>/g)].map((match) => {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+        attributeMatch[1],
+        attributeMatch[2],
+      ]),
+    );
+    return materialColors[Number(attributes.p1 ?? 0)];
+  });
+}
+
 function installFakeCanvasDocument() {
   const previousDocument = globalThis.document;
   globalThis.document = {
@@ -591,14 +610,105 @@ const noisySlotZipReader = new ZipReader(new BlobReader(noisySlotBlob));
 const noisySlotEntries = await noisySlotZipReader.getEntries();
 const noisySlotModelXml = await getMeshModelXml(noisySlotEntries);
 const noisySlotStats = getMaterialRegionStats(noisySlotModelXml);
-assert.equal(noisySlotStats.materialTransitionEdges, 0);
-assert.equal(noisySlotStats.componentCount, 1);
-assert.equal(noisySlotStats.smallComponentCount, 0);
+assert.equal(noisySlotStats.materialTransitionEdges, 33);
+assert.equal(noisySlotStats.componentCount, 13);
+assert.equal(noisySlotStats.smallComponentCount, 12);
+assert.deepEqual(
+  new Set(getTriangleMaterialColors(noisySlotModelXml)),
+  new Set(['#5B7F22', '#FF0000', '#0000FF', '#FFFF00']),
+);
 const noisySlotSettings = JSON.parse(
   await getZipText(noisySlotEntries, 'Metadata/project_settings.config'),
 );
-assert.deepEqual(noisySlotSettings.filament_colour, ['#5B7F22']);
+assert.deepEqual(
+  new Set(noisySlotSettings.filament_colour),
+  new Set(['#5B7F22', '#FF0000', '#0000FF', '#FFFF00']),
+);
 await noisySlotZipReader.close();
+
+const faceColorPreservationScene = new THREE.Scene();
+const faceColorPreservationGeometry = new THREE.BufferGeometry();
+const faceColorPreservationPositions = [];
+const faceColorPreservationIndexes = [];
+const faceColorPreservationGroups = [];
+const faceColorGridSize = 8;
+const faceColorCells = new Map([
+  ['1,1', 1],
+  ['4,2', 2],
+  ['6,6', 3],
+]);
+for (let y = 0; y <= faceColorGridSize; y += 1) {
+  for (let x = 0; x <= faceColorGridSize; x += 1) {
+    faceColorPreservationPositions.push(x, y, 0);
+  }
+}
+const faceColorVertexIndex = (x, y) => y * (faceColorGridSize + 1) + x;
+for (let y = 0; y < faceColorGridSize; y += 1) {
+  for (let x = 0; x < faceColorGridSize; x += 1) {
+    const start = faceColorPreservationIndexes.length;
+    const materialIndex = faceColorCells.get(`${x},${y}`) ?? 0;
+    faceColorPreservationIndexes.push(
+      faceColorVertexIndex(x, y),
+      faceColorVertexIndex(x + 1, y),
+      faceColorVertexIndex(x + 1, y + 1),
+      faceColorVertexIndex(x, y),
+      faceColorVertexIndex(x + 1, y + 1),
+      faceColorVertexIndex(x, y + 1),
+    );
+    faceColorPreservationGroups.push({
+      start,
+      count: 6,
+      materialIndex,
+    });
+  }
+}
+faceColorPreservationGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(faceColorPreservationPositions, 3),
+);
+faceColorPreservationGeometry.setIndex(faceColorPreservationIndexes);
+faceColorPreservationGeometry.clearGroups();
+for (const group of faceColorPreservationGroups) {
+  faceColorPreservationGeometry.addGroup(
+    group.start,
+    group.count,
+    group.materialIndex,
+  );
+}
+faceColorPreservationScene.add(
+  new THREE.Mesh(faceColorPreservationGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#2038ff' }),
+    new THREE.MeshStandardMaterial({ color: '#ff2020' }),
+    new THREE.MeshStandardMaterial({ color: '#20d850' }),
+    new THREE.MeshStandardMaterial({ color: '#ffd200' }),
+  ]),
+);
+const faceColorPreservationBlob = await createThreeMfBlobFromScene({
+  scene: faceColorPreservationScene,
+  filename: 'face-color-preservation',
+  colorCount: 4,
+});
+const faceColorPreservationZipReader = new ZipReader(
+  new BlobReader(faceColorPreservationBlob),
+);
+const faceColorPreservationModelXml = await getMeshModelXml(
+  await faceColorPreservationZipReader.getEntries(),
+);
+const faceColorPreservationTriangleColors = getTriangleMaterialColors(
+  faceColorPreservationModelXml,
+);
+assert.deepEqual(
+  new Set(faceColorPreservationTriangleColors),
+  new Set(['#2038FF', '#FF2020', '#20D850', '#FFD200']),
+);
+for (const accentColor of ['#FF2020', '#20D850', '#FFD200']) {
+  assert.equal(
+    faceColorPreservationTriangleColors.filter((color) => color === accentColor)
+      .length,
+    2,
+  );
+}
+await faceColorPreservationZipReader.close();
 
 const semanticMapScene = new THREE.Scene();
 const semanticMapGeometry = new THREE.BufferGeometry();
@@ -1042,8 +1152,8 @@ nearDuplicateEdgeGeometry.setAttribute(
   'position',
   new THREE.Float32BufferAttribute(
     [
-      0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10, 0.004, 0, 0, 10.004, 0, 0, 10,
-      10, 0,
+      0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10, 0.004, 0, 0, 10.004, 0, 0, 10, 10,
+      0,
     ],
     3,
   ),

@@ -16,10 +16,11 @@ const slotColors = (args.slotColors ?? DEFAULT_SLOT_COLORS.join(','))
   .split(',')
   .map((color) => normalizeHexColor(color.trim()))
   .filter(Boolean);
+const selfTestFixture = args.selfTest ? buildVisualSelfTestFixture() : null;
 
-const blob = args.selfTest
+const blob = selfTestFixture
   ? await createThreeMfBlobFromScene({
-      scene: buildVisualSelfTestScene(),
+      scene: selfTestFixture.scene,
       filename: '3mf-visual-self-test',
       colorCount: 4,
     })
@@ -27,25 +28,29 @@ const blob = args.selfTest
       type: 'model/3mf',
     });
 
-const report = await buildReport(blob, slotColors);
+const report = await buildReport(
+  blob,
+  slotColors,
+  selfTestFixture?.sourceModel ?? null,
+);
 await mkdir(dirname(outPath), { recursive: true });
 await writeFile(outPath, renderHtmlReport(report), 'utf8');
 
 if (args.selfTest) {
   const failures = [];
-  if (report.materialTransitionEdges !== 0) {
+  if (report.materialTransitionEdges !== 33) {
     failures.push(
-      `expected 0 material transition edges, got ${report.materialTransitionEdges}`,
+      `expected 33 material transition edges, got ${report.materialTransitionEdges}`,
     );
   }
-  if (report.componentStats.componentCount !== 1) {
+  if (report.componentStats.componentCount !== 13) {
     failures.push(
-      `expected 1 material component, got ${report.componentStats.componentCount}`,
+      `expected 13 material components, got ${report.componentStats.componentCount}`,
     );
   }
-  if (report.materialColors.length !== 1) {
+  if (report.materialColors.length !== 4) {
     failures.push(
-      `expected one cleaned material color, got ${report.materialColors.length}`,
+      `expected four preserved material colors, got ${report.materialColors.length}`,
     );
   }
 
@@ -74,7 +79,7 @@ console.log(
   ),
 );
 
-async function buildReport(blob, slotColors) {
+async function buildReport(blob, slotColors, sourceModel) {
   const { entries, modelXml, settings } = await readThreeMf(blob);
   const model = parseModelXml(modelXml);
   const topology = analyzeThreeMfMeshTopology(modelXml);
@@ -95,6 +100,9 @@ async function buildReport(blob, slotColors) {
     materialCounts,
     materialTransitionEdges: topology.materialTransitionEdges,
     componentStats,
+    sourceSvg: sourceModel
+      ? renderModelSvg(sourceModel, sourceModel.materialColors)
+      : null,
     materialSvg: renderModelSvg(model, model.materialColors),
     slotSvg: renderModelSvg(model, slotColors),
     settingsColors: settings?.filament_colour ?? [],
@@ -107,8 +115,9 @@ async function readThreeMf(blob) {
     const entries = await zipReader.getEntries();
     const entryNames = entries.map((entry) => entry.filename);
     const modelEntry =
-      entries.find((entry) => entry.filename === '3D/Objects/Object_1_1.model') ??
-      entries.find((entry) => entry.filename === '3D/3dmodel.model');
+      entries.find(
+        (entry) => entry.filename === '3D/Objects/Object_1_1.model',
+      ) ?? entries.find((entry) => entry.filename === '3D/3dmodel.model');
     if (!modelEntry) {
       throw new Error('3MF package does not contain a readable model file');
     }
@@ -162,23 +171,32 @@ function parseModelXml(modelXml) {
 function renderModelSvg(model, colors) {
   const width = 520;
   const height = 420;
-  const bounds = getBounds(model.vertices);
+  const projection = getProjectionAxes(model.vertices);
+  const bounds = getBounds(model.vertices, projection);
   const boundsWidth = Math.max(1, bounds.maxX - bounds.minX);
   const boundsHeight = Math.max(1, bounds.maxY - bounds.minY);
-  const scale = Math.min((width - 48) / boundsWidth, (height - 48) / boundsHeight);
+  const scale = Math.min(
+    (width - 48) / boundsWidth,
+    (height - 48) / boundsHeight,
+  );
   const offsetX = (width - boundsWidth * scale) / 2;
   const offsetY = (height - boundsHeight * scale) / 2;
   const sortedTriangles = model.triangles
     .slice()
-    .sort((a, b) => getAverageZ(model.vertices, a) - getAverageZ(model.vertices, b));
+    .sort(
+      (a, b) => getAverageZ(model.vertices, a) - getAverageZ(model.vertices, b),
+    );
 
   const polygons = sortedTriangles
     .map((triangle) => {
       const points = [triangle.v1, triangle.v2, triangle.v3]
         .map((vertexIndex) => {
           const vertex = model.vertices[vertexIndex];
-          const x = offsetX + (vertex.x - bounds.minX) * scale;
-          const y = height - (offsetY + (vertex.y - bounds.minY) * scale);
+          const x =
+            offsetX + (vertex[projection.horizontal] - bounds.minX) * scale;
+          const y =
+            height -
+            (offsetY + (vertex[projection.vertical] - bounds.minY) * scale);
           return `${formatSvgNumber(x)},${formatSvgNumber(y)}`;
         })
         .join(' ');
@@ -193,9 +211,31 @@ function renderModelSvg(model, colors) {
 </svg>`;
 }
 
+function getProjectionAxes(vertices) {
+  const axes = ['x', 'y', 'z'];
+  const ranges = axes
+    .map((axis) => {
+      const values = vertices.map((vertex) => vertex[axis]);
+      return {
+        axis,
+        range: Math.max(...values) - Math.min(...values),
+      };
+    })
+    .sort((a, b) => b.range - a.range);
+  const selectedAxes = ranges.slice(0, 2).map((entry) => entry.axis);
+
+  return {
+    horizontal: selectedAxes.includes('x') ? 'x' : selectedAxes[0],
+    vertical: selectedAxes.includes('x')
+      ? (selectedAxes.find((axis) => axis !== 'x') ?? 'y')
+      : selectedAxes[1],
+  };
+}
+
 function renderHtmlReport(report) {
   const materialLegend = renderLegend(report.materialColors, '3MF colors');
   const slotLegend = renderLegend(report.slotColors, 'Bambu-like slots');
+  const hasSource = report.sourceSvg !== null;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -207,6 +247,7 @@ function renderHtmlReport(report) {
     h1 { font-size: 24px; margin: 0 0 4px; }
     p { color: #b8b8b8; margin: 0 0 16px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .panel, .metric, .legend { background: #1c1c1c; border: 1px solid #2c2c2c; border-radius: 8px; overflow: hidden; }
     .panel h2 { font-size: 14px; margin: 0; padding: 12px 14px; background: #202020; }
     .panel svg { display: block; width: 100%; height: auto; }
@@ -223,8 +264,17 @@ function renderHtmlReport(report) {
 <body>
   <main>
     <h1>Actual exported 3MF visual check</h1>
-    <p>Left uses the 3MF material colors. Right uses approximate Bambu slot colors, which reveals triangle-by-triangle assignment patterns.</p>
-    <section class="grid">
+    <p>${
+      hasSource
+        ? 'Left shows the source scene colors used by the web viewer. Middle reopens the exported 3MF material colors. Right uses approximate Bambu slot colors to reveal triangle-by-triangle assignment patterns.'
+        : 'Left uses the 3MF material colors. Right uses approximate Bambu slot colors, which reveals triangle-by-triangle assignment patterns.'
+    }</p>
+    <section class="grid${hasSource ? ' three' : ''}">
+      ${
+        hasSource
+          ? `<article class="panel"><h2>Source web viewer colors</h2>${report.sourceSvg}</article>`
+          : ''
+      }
       <article class="panel"><h2>3MF material colors</h2>${report.materialSvg}</article>
       <article class="panel"><h2>Bambu-like slot colors</h2>${report.slotSvg}</article>
     </section>
@@ -280,7 +330,11 @@ function getComponentStats(triangles) {
   const visited = new Set();
   let componentCount = 0;
   let smallComponentCount = 0;
-  for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
+  for (
+    let triangleIndex = 0;
+    triangleIndex < triangles.length;
+    triangleIndex += 1
+  ) {
     if (visited.has(triangleIndex)) {
       continue;
     }
@@ -310,16 +364,20 @@ function getComponentStats(triangles) {
   return { componentCount, smallComponentCount };
 }
 
-function buildVisualSelfTestScene() {
+function buildVisualSelfTestFixture() {
   const scene = new THREE.Scene();
   const geometry = new THREE.BufferGeometry();
   const positions = [];
   const indexes = [];
   const groups = [];
+  const sourceVertices = [];
+  const sourceTriangles = [];
+  const materialColors = ['#5B7F22', '#FF0000', '#0000FF', '#FFFF00'];
   const gridSize = 8;
   for (let y = 0; y <= gridSize; y += 1) {
     for (let x = 0; x <= gridSize; x += 1) {
       positions.push(x, y, 0);
+      sourceVertices.push({ x, y, z: 0 });
     }
   }
   const vertexIndex = (x, y) => y * (gridSize + 1) + x;
@@ -335,11 +393,28 @@ function buildVisualSelfTestScene() {
         vertexIndex(x + 1, y + 1),
         vertexIndex(x, y + 1),
       );
+      sourceTriangles.push(
+        {
+          v1: vertexIndex(x, y),
+          v2: vertexIndex(x + 1, y),
+          v3: vertexIndex(x + 1, y + 1),
+          colorIndex: materialIndex,
+        },
+        {
+          v1: vertexIndex(x, y),
+          v2: vertexIndex(x + 1, y + 1),
+          v3: vertexIndex(x, y + 1),
+          colorIndex: 0,
+        },
+      );
       groups.push({ start, count: 3, materialIndex });
       groups.push({ start: start + 3, count: 3, materialIndex: 0 });
     }
   }
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
   geometry.setIndex(indexes);
   for (const group of groups) {
     geometry.addGroup(group.start, group.count, group.materialIndex);
@@ -353,16 +428,23 @@ function buildVisualSelfTestScene() {
       new THREE.MeshStandardMaterial({ color: '#ffff00' }),
     ]),
   );
-  return scene;
+  return {
+    scene,
+    sourceModel: {
+      vertices: sourceVertices,
+      materialColors,
+      triangles: sourceTriangles,
+    },
+  };
 }
 
-function getBounds(vertices) {
+function getBounds(vertices, projection) {
   return vertices.reduce(
     (bounds, vertex) => ({
-      minX: Math.min(bounds.minX, vertex.x),
-      maxX: Math.max(bounds.maxX, vertex.x),
-      minY: Math.min(bounds.minY, vertex.y),
-      maxY: Math.max(bounds.maxY, vertex.y),
+      minX: Math.min(bounds.minX, vertex[projection.horizontal]),
+      maxX: Math.max(bounds.maxX, vertex[projection.horizontal]),
+      minY: Math.min(bounds.minY, vertex[projection.vertical]),
+      maxY: Math.max(bounds.maxY, vertex[projection.vertical]),
     }),
     {
       minX: Number.POSITIVE_INFINITY,
@@ -375,10 +457,11 @@ function getBounds(vertices) {
 
 function getAverageZ(vertices, triangle) {
   return (
-    (vertices[triangle.v1]?.z ?? 0) +
-    (vertices[triangle.v2]?.z ?? 0) +
-    (vertices[triangle.v3]?.z ?? 0)
-  ) / 3;
+    ((vertices[triangle.v1]?.z ?? 0) +
+      (vertices[triangle.v2]?.z ?? 0) +
+      (vertices[triangle.v3]?.z ?? 0)) /
+    3
+  );
 }
 
 function renderLegend(colors, label) {
