@@ -124,6 +124,10 @@ interface TextAreaChatProps {
     id: string;
     user_id: string;
   };
+  composerFocusRequest?: {
+    id: number;
+    draft?: string;
+  };
 }
 
 const MULTIVIEW_ENABLED = true;
@@ -510,6 +514,7 @@ function TextAreaChat({
   showFullLabels = false,
   onTypeChange,
   conversation,
+  composerFocusRequest,
 }: TextAreaChatProps) {
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -538,6 +543,8 @@ function TextAreaChat({
   const { session } = useAuth();
   const { images, mesh, setImages, setMesh } = useItemSelection();
   const meshFiles = useMeshFiles();
+  const focusRequestId = composerFocusRequest?.id;
+  const focusRequestDraft = composerFocusRequest?.draft;
 
   // Parametric mode: bounding box and filename from STL parsing
   const [meshBoundingBox, setMeshBoundingBox] = useState<BoundingBox | null>(
@@ -545,6 +552,27 @@ function TextAreaChat({
   );
   const [meshFilename, setMeshFilename] = useState<string | null>(null);
   const [cadBackend, setCadBackend] = useState<CadBackend>('openscad');
+
+  useEffect(() => {
+    if (!focusRequestId) return;
+
+    if (focusRequestDraft !== undefined) {
+      setInput(focusRequestDraft);
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      textarea.focus();
+      if (focusRequestDraft !== undefined) {
+        const cursorPosition = focusRequestDraft.length;
+        textarea.setSelectionRange(cursorPosition, cursorPosition);
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequestDraft, focusRequestId]);
 
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
