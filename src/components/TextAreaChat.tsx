@@ -104,6 +104,7 @@ import {
   buildReferenceImageAccept,
   shouldShowReferenceImageControl,
 } from '@/utils/inputImageControls';
+import { DEFAULT_CAD_BACKEND } from '@/utils/cadBackendSelection';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -124,6 +125,7 @@ interface TextAreaChatProps {
     id: string;
     user_id: string;
   };
+  cadBackendHint?: CadBackend;
   composerFocusRequest?: {
     id: number;
     draft?: string;
@@ -514,6 +516,7 @@ function TextAreaChat({
   showFullLabels = false,
   onTypeChange,
   conversation,
+  cadBackendHint,
   composerFocusRequest,
 }: TextAreaChatProps) {
   const [isFocused, setIsFocused] = useState(false);
@@ -551,7 +554,15 @@ function TextAreaChat({
     null,
   );
   const [meshFilename, setMeshFilename] = useState<string | null>(null);
-  const [cadBackend, setCadBackend] = useState<CadBackend>('openscad');
+  const [cadBackend, setCadBackend] = useState<CadBackend>(
+    () => cadBackendHint ?? DEFAULT_CAD_BACKEND,
+  );
+
+  useEffect(() => {
+    if (cadBackendHint) {
+      setCadBackend(cadBackendHint);
+    }
+  }, [cadBackendHint]);
 
   useEffect(() => {
     if (!focusRequestId) return;
@@ -2012,14 +2023,16 @@ function TextAreaChat({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
+                      disabled={isLoading || disabled}
                       className={cn(
-                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors disabled:cursor-not-allowed',
                         cadBackend === 'openscad'
                           ? 'bg-adam-blue/15 text-adam-blue'
                           : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (isLoading || disabled) return;
                         setCadBackend('openscad');
                       }}
                     >
@@ -2033,14 +2046,16 @@ function TextAreaChat({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
+                      disabled={isLoading || disabled}
                       className={cn(
-                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
+                        'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors disabled:cursor-not-allowed',
                         cadBackend === 'text-to-cad'
                           ? 'bg-adam-blue/15 text-adam-blue'
                           : 'text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (isLoading || disabled) return;
                         setCadBackend('text-to-cad');
                       }}
                     >

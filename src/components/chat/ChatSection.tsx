@@ -36,6 +36,7 @@ import {
   shouldShowComposerQuickActions,
   type ComposerQuickAction,
 } from '@/utils/chatComposerActions';
+import { getComposerCadBackendHint } from '@/utils/cadBackendSelection';
 
 interface ChatSectionProps {
   messages: TreeNode<Message>[];
@@ -167,6 +168,7 @@ export function ChatSection({
       lastMessage?.content?.suggestions ||
       []
     : [];
+  const cadBackendHint = getComposerCadBackendHint(lastMessage);
   const showComposerQuickActions = shouldShowComposerQuickActions({
     lastMessage,
     isLoading,
@@ -380,6 +382,7 @@ export function ChatSection({
             }
             setImageGenerationModel={handleImageGenerationModelChange}
             conversation={conversation}
+            cadBackendHint={cadBackendHint}
             composerFocusRequest={composerFocusRequest}
           />
         </div>
