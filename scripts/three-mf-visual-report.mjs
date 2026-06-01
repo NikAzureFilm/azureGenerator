@@ -245,7 +245,9 @@ function renderModelSvg(model, colors) {
   const sortedTriangles = model.triangles
     .slice()
     .sort(
-      (a, b) => getAverageZ(model.vertices, a) - getAverageZ(model.vertices, b),
+      (a, b) =>
+        getAverageAxis(model.vertices, b, projection.depth) -
+        getAverageAxis(model.vertices, a, projection.depth),
     );
 
   const polygons = sortedTriangles
@@ -290,6 +292,7 @@ function getProjectionAxes(vertices) {
     vertical: selectedAxes.includes('x')
       ? (selectedAxes.find((axis) => axis !== 'x') ?? 'y')
       : selectedAxes[1],
+    depth: axes.find((axis) => !selectedAxes.includes(axis)) ?? 'z',
   };
 }
 
@@ -561,11 +564,11 @@ function getBounds(vertices, projection) {
   );
 }
 
-function getAverageZ(vertices, triangle) {
+function getAverageAxis(vertices, triangle, axis) {
   return (
-    ((vertices[triangle.v1]?.z ?? 0) +
-      (vertices[triangle.v2]?.z ?? 0) +
-      (vertices[triangle.v3]?.z ?? 0)) /
+    ((vertices[triangle.v1]?.[axis] ?? 0) +
+      (vertices[triangle.v2]?.[axis] ?? 0) +
+      (vertices[triangle.v3]?.[axis] ?? 0)) /
     3
   );
 }

@@ -890,6 +890,50 @@ try {
   );
   assert.deepEqual(texturedTriangleSettings.filament_colour, ['#00FF00']);
   await texturedTriangleZipReader.close();
+
+  const flipYFalseTextureScene = new THREE.Scene();
+  const flipYFalseTextureGeometry = new THREE.BufferGeometry();
+  flipYFalseTextureGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0], 3),
+  );
+  flipYFalseTextureGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], 2),
+  );
+  const flipYFalseTexture = createDataTexture(2, 2, (x, y) => {
+    if (x === 0 && y === 0) return [255, 0, 0];
+    if (x === 0 && y === 1) return [0, 255, 0];
+    return [0, 0, 0];
+  });
+  flipYFalseTexture.flipY = false;
+  flipYFalseTextureScene.add(
+    new THREE.Mesh(
+      flipYFalseTextureGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: flipYFalseTexture,
+      }),
+    ),
+  );
+
+  const flipYFalseTextureBlob = await createThreeMfBlobFromScene({
+    scene: flipYFalseTextureScene,
+    filename: 'texture-flipy-false',
+    colorCount: 2,
+    targetMaterialPalette: ['#FF0000', '#00FF00'],
+  });
+  const flipYFalseTextureZipReader = new ZipReader(
+    new BlobReader(flipYFalseTextureBlob),
+  );
+  const flipYFalseTextureSettings = JSON.parse(
+    await getZipText(
+      await flipYFalseTextureZipReader.getEntries(),
+      'Metadata/project_settings.config',
+    ),
+  );
+  assert.deepEqual(flipYFalseTextureSettings.filament_colour, ['#FF0000']);
+  await flipYFalseTextureZipReader.close();
 } finally {
   restoreCanvasDocument();
 }

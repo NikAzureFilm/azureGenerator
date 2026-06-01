@@ -1981,7 +1981,7 @@ function sampleTextureColor(
           vertexIndices,
           barycentricWeights,
         );
-        return getTexturePixelColor(pixels, uv.x, uv.y);
+        return getTexturePixelColor(pixels, uv.x, uv.y, texture.flipY);
       },
     );
 
@@ -2009,6 +2009,7 @@ function getTexturePixelColor(
   pixels: TexturePixels,
   textureU: number,
   textureV: number,
+  flipY: boolean,
 ): THREE.Color {
   const wrapU = wrapTextureCoordinate(textureU);
   const wrapV = wrapTextureCoordinate(textureV);
@@ -2016,9 +2017,10 @@ function getTexturePixelColor(
     pixels.width - 1,
     Math.max(0, Math.floor(wrapU * pixels.width)),
   );
+  const sampledV = flipY ? 1 - wrapV : wrapV;
   const y = Math.min(
     pixels.height - 1,
-    Math.max(0, Math.floor((1 - wrapV) * pixels.height)),
+    Math.max(0, Math.floor(sampledV * pixels.height)),
   );
   const offset = (y * pixels.width + x) * 4;
   return new THREE.Color(
