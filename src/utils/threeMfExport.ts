@@ -7,6 +7,7 @@ import {
   ZipWriter,
 } from '@zip.js/zip.js';
 import * as THREE from 'three';
+import type { Mesh as ItkMesh } from 'itk-wasm';
 
 export const DEFAULT_THREE_MF_COLOR_COUNT = 4;
 export const MAX_THREE_MF_COLOR_COUNT = 16;
@@ -74,8 +75,18 @@ const TEXTURE_DOMINANT_BUCKET_MIN_SAMPLES = 2;
 const TEXTURE_SAMPLE_BUCKET_SCALE = 15;
 const TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN = 48;
 const TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL = 4;
+const MAX_BOUNDARY_FILL_LOOP_EDGES = 96;
+const MAX_SMALL_BOUNDARY_FILL_LOOP_EDGES = 8;
+const MAX_SMALL_PLANAR_BOUNDARY_FILL_SPAN_MM = 3;
+const MANIFOLD_FILTER_MIN_TRIANGLES = 512;
 
 type VectorTuple = [number, number, number];
+
+type TexturedTrianglePatch = {
+  vertices: [VectorTuple, VectorTuple, VectorTuple];
+  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+  barycentric: [VectorTuple, VectorTuple, VectorTuple];
+};
 
 export type ThreeMfTriangle = {
   v1: number;
@@ -128,6 +139,13 @@ type SceneGeometry = {
 type RepairedSceneGeometry = {
   vertices: VectorTuple[];
   triangles: Array<Omit<ThreeMfTriangle, 'colorIndex'>>;
+};
+
+type IndexedTriangle = Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>;
+
+type IndexedTriangleGeometry<TTriangle extends IndexedTriangle = IndexedTriangle> = {
+  vertices: VectorTuple[];
+  triangles: TTriangle[];
 };
 
 type ThreeMfPackageParts = {
@@ -399,7 +417,7 @@ export async function createThreeMfBlobFromScene({
     semanticMaterialMap,
   );
   // Run the printable repair pass before palette quantization and 3MF color ids.
-  const geometry = repairSceneGeometryForThreeMfExport(sourceGeometry);
+  const geometry = await repairSceneGeometryForThreeMfExport(sourceGeometry);
 
   if (geometry.vertices.length === 0 || geometry.triangles.length === 0) {
     throw new Error('No printable mesh geometry was found for 3MF export.');
@@ -921,6 +939,16 @@ function extractSceneGeometry(
       : [{ start: 0, count: getIndexCount(geometry), materialIndex: 0 }];
     const embeddedSemanticMaterialIds =
       getEmbeddedSemanticMaterialIds(geometry);
+    const textureDetailEdgeSegments = preserveTextureDetail
+      ? buildTextureDetailEdgeSegments({
+          geometry,
+          groups,
+          materials,
+          uvAttribute,
+          position,
+          matrixWorld,
+        })
+      : null;
 
     const getOrCreateVertex = (vertex: VectorTuple): number => {
       const key = getVertexKey(vertex);
@@ -956,6 +984,7 @@ function extractSceneGeometry(
               position,
               matrixWorld,
               vertexIndices,
+              textureDetailEdgeSegments,
             })
           : null;
 
@@ -1076,8 +1105,20 @@ function applySemanticMaterialMap(
   };
 }
 
-function repairSceneGeometryForThreeMfExport(
+async function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
+): Promise<RepairedSceneGeometry> {
+  const fallbackGeometry = repairSceneGeometryTopology(geometry);
+  const manifoldGeometry = await repairSceneGeometryWithManifoldFilter(geometry);
+  if (!manifoldGeometry) {
+    return fallbackGeometry;
+  }
+
+  return repairSceneGeometryTopology(manifoldGeometry);
+}
+
+function repairSceneGeometryTopology(
+  geometry: IndexedTriangleGeometry,
 ): RepairedSceneGeometry {
   const weldedGeometry = weldSceneGeometryVertices(
     geometry,
@@ -1142,16 +1183,878 @@ function repairSceneGeometryForThreeMfExport(
   const repairedTriangles = weldedGeometry.triangles
     .filter((_, index) => keptTriangleIndexes.has(index))
     .map(({ v1, v2, v3 }) => ({ v1, v2, v3 }));
+  const sealedTriangles = fillBoundaryTriangleLoops(
+    weldedGeometry.vertices,
+    repairedTriangles,
+  );
+  const orientedTriangles = orientRepairedTrianglesConsistently(
+    sealedTriangles,
+  );
+  const outputTriangles =
+    countSameDirectionSharedTriangleEdges(orientedTriangles) <=
+    countSameDirectionSharedTriangleEdges(sealedTriangles)
+      ? orientedTriangles
+      : sealedTriangles;
   return compactSceneGeometry({
     vertices: weldedGeometry.vertices,
-    triangles: repairedTriangles,
+    triangles: outputTriangles,
   });
 }
 
-function weldSceneGeometryVertices(
-  geometry: SceneGeometry,
+async function repairSceneGeometryWithManifoldFilter(
+  geometry: IndexedTriangleGeometry,
+): Promise<RepairedSceneGeometry | null> {
+  if (
+    geometry.vertices.length === 0 ||
+    geometry.triangles.length < MANIFOLD_FILTER_MIN_TRIANGLES
+  ) {
+    return null;
+  }
+
+  try {
+    const [itk, meshFilters] = await Promise.all([
+      import('itk-wasm'),
+      import('@itk-wasm/mesh-filters'),
+    ]);
+    const repairMesh =
+      'repair' in meshFilters && typeof meshFilters.repair === 'function'
+        ? meshFilters.repair
+        : meshFilters.repairNode;
+    if (typeof repairMesh !== 'function') {
+      return null;
+    }
+
+    const { outputMesh } = await repairMesh(
+      buildItkTriangleMesh(geometry, itk),
+      {
+        maximumHoleArea: 100,
+        maximumHoleEdges: MAX_BOUNDARY_FILL_LOOP_EDGES * 4,
+        mergeTolerance: 0.001,
+      },
+    );
+    const repairedGeometry = convertItkTriangleMesh(outputMesh);
+    return repairedGeometry
+      ? removeManifoldFilterArtifactTriangles(repairedGeometry, geometry)
+      : null;
+  } catch (error) {
+    console.warn('3MF manifold repair filter failed; using local repair only.', error);
+    return null;
+  }
+}
+
+function removeManifoldFilterArtifactTriangles(
+  repairedGeometry: RepairedSceneGeometry,
+  sourceGeometry: IndexedTriangleGeometry,
+): RepairedSceneGeometry {
+  const sourceTriangleKeys = new Set(
+    sourceGeometry.triangles.map((triangle) =>
+      getTriangleGeometryKey(sourceGeometry.vertices, triangle),
+    ),
+  );
+  let triangles = repairedGeometry.triangles;
+
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    const overSharedEdges = [...getEdgeUseCounts(triangles).entries()].filter(
+      ([, edgeUse]) => edgeUse.count > 2,
+    );
+    if (overSharedEdges.length === 0) {
+      break;
+    }
+
+    const overSharedEdgeKeys = new Set(overSharedEdges.map(([key]) => key));
+    const removableTriangleIndexes = new Set<number>();
+    triangles.forEach((triangle, triangleIndex) => {
+      const touchesOverSharedEdge = [
+        [triangle.v1, triangle.v2],
+        [triangle.v2, triangle.v3],
+        [triangle.v3, triangle.v1],
+      ].some(([a, b]) => overSharedEdgeKeys.has(getEdgeKey(a, b)));
+      if (
+        touchesOverSharedEdge &&
+        !sourceTriangleKeys.has(
+          getTriangleGeometryKey(repairedGeometry.vertices, triangle),
+        )
+      ) {
+        removableTriangleIndexes.add(triangleIndex);
+      }
+    });
+
+    if (removableTriangleIndexes.size === 0) {
+      for (const [, edgeUse] of overSharedEdges) {
+        const incidentTriangleIndexes = triangles
+          .map((triangle, triangleIndex) =>
+            [
+              [triangle.v1, triangle.v2],
+              [triangle.v2, triangle.v3],
+              [triangle.v3, triangle.v1],
+            ].some(([a, b]) => getEdgeKey(a, b) === getEdgeKey(edgeUse.a, edgeUse.b))
+              ? triangleIndex
+              : -1,
+          )
+          .filter((triangleIndex) => triangleIndex >= 0)
+          .sort(
+            (left, right) =>
+              getTriangleAreaSquared(
+                repairedGeometry.vertices,
+                triangles[left],
+              ) -
+              getTriangleAreaSquared(
+                repairedGeometry.vertices,
+                triangles[right],
+              ),
+          );
+        for (const triangleIndex of incidentTriangleIndexes.slice(
+          0,
+          Math.max(0, incidentTriangleIndexes.length - 2),
+        )) {
+          removableTriangleIndexes.add(triangleIndex);
+        }
+      }
+    }
+
+    if (removableTriangleIndexes.size === 0) {
+      break;
+    }
+
+    triangles = fillBoundaryTriangleLoops(
+      repairedGeometry.vertices,
+      triangles.filter(
+        (_, triangleIndex) => !removableTriangleIndexes.has(triangleIndex),
+      ),
+    );
+  }
+
+  return { vertices: repairedGeometry.vertices, triangles };
+}
+
+function buildItkTriangleMesh(
+  geometry: IndexedTriangleGeometry,
+  itk: typeof import('itk-wasm'),
+): ItkMesh {
+  const mesh = new itk.Mesh(
+    new itk.MeshType(
+      3,
+      itk.FloatTypes.Float32,
+      itk.IntTypes.UInt8,
+      itk.PixelTypes.Scalar,
+      0,
+      itk.IntTypes.UInt32,
+      itk.IntTypes.UInt8,
+      itk.PixelTypes.Scalar,
+      0,
+    ),
+  );
+  mesh.numberOfPoints = geometry.vertices.length;
+  mesh.points = new Float32Array(geometry.vertices.flat());
+  mesh.numberOfPointPixels = 0;
+  mesh.pointData = new Uint8Array();
+  mesh.numberOfCells = geometry.triangles.length;
+  mesh.cellBufferSize = geometry.triangles.length * 5;
+  const cells = new Uint32Array(mesh.cellBufferSize);
+  mesh.numberOfCellPixels = 0;
+  mesh.cellData = new Uint8Array();
+
+  geometry.triangles.forEach((triangle, triangleIndex) => {
+    const offset = triangleIndex * 5;
+    cells.set([2, 3, triangle.v1, triangle.v2, triangle.v3], offset);
+  });
+  mesh.cells = cells;
+
+  return mesh;
+}
+
+function convertItkTriangleMesh(mesh: ItkMesh | undefined): RepairedSceneGeometry | null {
+  if (!mesh?.points || !mesh.cells || mesh.numberOfPoints <= 0) {
+    return null;
+  }
+
+  const vertices: VectorTuple[] = [];
+  for (let offset = 0; offset + 2 < mesh.points.length; offset += 3) {
+    vertices.push([
+      Number(mesh.points[offset]),
+      Number(mesh.points[offset + 1]),
+      Number(mesh.points[offset + 2]),
+    ]);
+  }
+
+  const triangles: RepairedSceneGeometry['triangles'] = [];
+  for (let offset = 0; offset < mesh.cells.length; ) {
+    offset += 1;
+    const vertexCount = Number(mesh.cells[offset]);
+    offset += 1;
+    if (!Number.isInteger(vertexCount) || vertexCount <= 0) {
+      return null;
+    }
+
+    if (vertexCount === 3 && offset + 2 < mesh.cells.length) {
+      triangles.push({
+        v1: Number(mesh.cells[offset]),
+        v2: Number(mesh.cells[offset + 1]),
+        v3: Number(mesh.cells[offset + 2]),
+      });
+    }
+
+    offset += vertexCount;
+  }
+
+  return triangles.length > 0 ? { vertices, triangles } : null;
+}
+
+function orientRepairedTrianglesConsistently(
+  triangles: RepairedSceneGeometry['triangles'],
+): RepairedSceneGeometry['triangles'] {
+  const adjacency = Array.from({ length: triangles.length }, () => [] as Array<{
+    neighborIndex: number;
+    shouldFlipRelative: boolean;
+  }>);
+  const edgeUses = new Map<
+    string,
+    Array<{ triangleIndex: number; direction: 1 | -1 }>
+  >();
+
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = getEdgeKey(a, b);
+      const uses = edgeUses.get(key) ?? [];
+      uses.push({
+        triangleIndex,
+        direction: a < b ? 1 : -1,
+      });
+      edgeUses.set(key, uses);
+    }
+  });
+
+  for (const uses of edgeUses.values()) {
+    if (uses.length !== 2) {
+      continue;
+    }
+
+    const shouldFlipRelative = uses[0].direction === uses[1].direction;
+    adjacency[uses[0].triangleIndex].push({
+      neighborIndex: uses[1].triangleIndex,
+      shouldFlipRelative,
+    });
+    adjacency[uses[1].triangleIndex].push({
+      neighborIndex: uses[0].triangleIndex,
+      shouldFlipRelative,
+    });
+  }
+
+  const shouldFlip = new Array<boolean | undefined>(triangles.length);
+  for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
+    if (shouldFlip[triangleIndex] !== undefined) {
+      continue;
+    }
+
+    shouldFlip[triangleIndex] = false;
+    const stack = [triangleIndex];
+    while (stack.length > 0) {
+      const currentIndex = stack.pop() as number;
+      const currentShouldFlip = shouldFlip[currentIndex] ?? false;
+
+      for (const { neighborIndex, shouldFlipRelative } of adjacency[
+        currentIndex
+      ]) {
+        const neighborShouldFlip =
+          currentShouldFlip !== shouldFlipRelative;
+        if (shouldFlip[neighborIndex] === undefined) {
+          shouldFlip[neighborIndex] = neighborShouldFlip;
+          stack.push(neighborIndex);
+        }
+      }
+    }
+  }
+
+  return triangles.map((triangle, triangleIndex) =>
+    shouldFlip[triangleIndex]
+      ? { v1: triangle.v1, v2: triangle.v3, v3: triangle.v2 }
+      : triangle,
+  );
+}
+
+function fillBoundaryTriangleLoops(
+  vertices: VectorTuple[],
+  triangles: RepairedSceneGeometry['triangles'],
+): RepairedSceneGeometry['triangles'] {
+  const sourceEdgeUseCounts = getEdgeUseCounts(triangles);
+  const boundaryEdges = getBoundaryEdges(sourceEdgeUseCounts);
+  if (boundaryEdges.length === 0) {
+    return triangles;
+  }
+
+  const usedTriangleKeys = new Set(
+    triangles.map((triangle) => getUnorderedTriangleVertexKey(triangle)),
+  );
+  const capTriangles: RepairedSceneGeometry['triangles'] = [];
+
+  for (const loop of getBoundaryEdgeLoops(boundaryEdges)) {
+    if (loop.length < 3 || loop.length > MAX_BOUNDARY_FILL_LOOP_EDGES) {
+      continue;
+    }
+
+    let candidateCapTriangles = triangulateBoundaryLoop(
+      vertices,
+      loop,
+      sourceEdgeUseCounts,
+    );
+    if (
+      candidateCapTriangles.length === 0 &&
+      loop.length <= MAX_SMALL_BOUNDARY_FILL_LOOP_EDGES &&
+      getBoundaryLoopMaxSpan(vertices, loop) <=
+        MAX_SMALL_PLANAR_BOUNDARY_FILL_SPAN_MM
+    ) {
+      candidateCapTriangles = triangulateBoundaryLoopWithCenterVertex(
+        vertices,
+        loop,
+      );
+    }
+    const loopEdgeKeys = getLoopEdgeKeys(loop);
+    if (
+      !shouldFillBoundaryLoop(vertices, triangles, loop, candidateCapTriangles) ||
+      !isBoundaryLoopCapTopologySafe(
+        candidateCapTriangles,
+        sourceEdgeUseCounts,
+        loopEdgeKeys,
+      )
+    ) {
+      continue;
+    }
+
+    for (const triangle of orientCapTrianglesForSharedEdges(
+      triangles,
+      candidateCapTriangles,
+    )) {
+      const triangleKey = getUnorderedTriangleVertexKey(triangle);
+      if (
+        usedTriangleKeys.has(triangleKey) ||
+        isDegenerateTriangle(triangle, vertices)
+      ) {
+        continue;
+      }
+
+      usedTriangleKeys.add(triangleKey);
+      capTriangles.push(triangle);
+    }
+  }
+
+  return capTriangles.length > 0 ? [...triangles, ...capTriangles] : triangles;
+}
+
+function orientCapTrianglesForSharedEdges(
+  sourceTriangles: RepairedSceneGeometry['triangles'],
+  capTriangles: RepairedSceneGeometry['triangles'],
+): RepairedSceneGeometry['triangles'] {
+  const orientedCapTriangles = capTriangles.map((triangle) => ({ ...triangle }));
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    let changed = false;
+    for (
+      let capTriangleIndex = 0;
+      capTriangleIndex < orientedCapTriangles.length;
+      capTriangleIndex += 1
+    ) {
+      const currentScore = countSameDirectionSharedTriangleEdges([
+        ...sourceTriangles,
+        ...orientedCapTriangles,
+      ]);
+      const currentTriangle = orientedCapTriangles[capTriangleIndex];
+      orientedCapTriangles[capTriangleIndex] = {
+        v1: currentTriangle.v1,
+        v2: currentTriangle.v3,
+        v3: currentTriangle.v2,
+      };
+      const flippedScore = countSameDirectionSharedTriangleEdges([
+        ...sourceTriangles,
+        ...orientedCapTriangles,
+      ]);
+      if (flippedScore < currentScore) {
+        changed = true;
+      } else {
+        orientedCapTriangles[capTriangleIndex] = currentTriangle;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  return orientedCapTriangles;
+}
+
+function countSameDirectionSharedTriangleEdges(
+  triangles: RepairedSceneGeometry['triangles'],
+): number {
+  const edgeUses = new Map<
+    string,
+    Array<{ a: number; b: number }>
+  >();
+  for (const triangle of triangles) {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = getEdgeKey(a, b);
+      const uses = edgeUses.get(key) ?? [];
+      uses.push({ a, b });
+      edgeUses.set(key, uses);
+    }
+  }
+
+  return [...edgeUses.values()].filter(
+    (uses) =>
+      uses.length === 2 &&
+      !(uses[0].a === uses[1].b && uses[0].b === uses[1].a),
+  ).length;
+}
+
+function isBoundaryLoopCapTopologySafe(
+  capTriangles: RepairedSceneGeometry['triangles'],
+  sourceEdgeUseCounts: Map<string, { a: number; b: number; count: number }>,
+  loopEdgeKeys: Set<string>,
+): boolean {
+  for (const triangle of capTriangles) {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const edgeKey = getEdgeKey(a, b);
+      const sourceUseCount = sourceEdgeUseCounts.get(edgeKey)?.count ?? 0;
+      if (loopEdgeKeys.has(edgeKey)) {
+        if (sourceUseCount !== 1) {
+          return false;
+        }
+        continue;
+      }
+
+      if (sourceUseCount > 0) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function shouldFillBoundaryLoop(
+  vertices: VectorTuple[],
+  sourceTriangles: RepairedSceneGeometry['triangles'],
+  loop: number[],
+  capTriangles: RepairedSceneGeometry['triangles'],
+): boolean {
+  const capNormal = getAverageTriangleNormal(vertices, capTriangles);
+  if (capNormal.lengthSq() === 0) {
+    return false;
+  }
+
+  const loopEdgeKeys = new Set(
+    loop.map((vertexIndex, index) =>
+      getEdgeKey(vertexIndex, loop[(index + 1) % loop.length]),
+    ),
+  );
+  const incidentNormals: THREE.Vector3[] = [];
+  for (const triangle of sourceTriangles) {
+    if (
+      [
+        [triangle.v1, triangle.v2],
+        [triangle.v2, triangle.v3],
+        [triangle.v3, triangle.v1],
+      ].some(([a, b]) => loopEdgeKeys.has(getEdgeKey(a, b)))
+    ) {
+      const normal = getTriangleNormal(vertices, triangle);
+      if (normal.lengthSq() > 0) {
+        incidentNormals.push(normal);
+      }
+    }
+  }
+
+  if (
+    loop.length <= MAX_SMALL_BOUNDARY_FILL_LOOP_EDGES &&
+    incidentNormals.length >= 2 &&
+    getBoundaryLoopMaxSpan(vertices, loop) <=
+      MAX_SMALL_PLANAR_BOUNDARY_FILL_SPAN_MM
+  ) {
+    return true;
+  }
+
+  return incidentNormals.some(
+    (normal) => Math.abs(normal.dot(capNormal)) < 0.98,
+  );
+}
+
+function getBoundaryLoopMaxSpan(vertices: VectorTuple[], loop: number[]): number {
+  const bounds = loop.reduce(
+    (currentBounds, vertexIndex) => {
+      const vertex = vertices[vertexIndex];
+      return {
+        minX: Math.min(currentBounds.minX, vertex[0]),
+        maxX: Math.max(currentBounds.maxX, vertex[0]),
+        minY: Math.min(currentBounds.minY, vertex[1]),
+        maxY: Math.max(currentBounds.maxY, vertex[1]),
+        minZ: Math.min(currentBounds.minZ, vertex[2]),
+        maxZ: Math.max(currentBounds.maxZ, vertex[2]),
+      };
+    },
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+      minZ: Number.POSITIVE_INFINITY,
+      maxZ: Number.NEGATIVE_INFINITY,
+    },
+  );
+
+  return Math.max(
+    bounds.maxX - bounds.minX,
+    bounds.maxY - bounds.minY,
+    bounds.maxZ - bounds.minZ,
+  );
+}
+
+function getEdgeUseCounts(
+  triangles: RepairedSceneGeometry['triangles'],
+): Map<string, { a: number; b: number; count: number }> {
+  const edgeUseCounts = new Map<
+    string,
+    { a: number; b: number; count: number }
+  >();
+  for (const triangle of triangles) {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = getEdgeKey(a, b);
+      const edgeUse = edgeUseCounts.get(key);
+      if (edgeUse) {
+        edgeUse.count += 1;
+      } else {
+        edgeUseCounts.set(key, { a, b, count: 1 });
+      }
+    }
+  }
+
+  return edgeUseCounts;
+}
+
+function getBoundaryEdges(
+  edgeUses: Map<string, { a: number; b: number; count: number }>,
+): Array<{ a: number; b: number }> {
+  return [...edgeUses.values()]
+    .filter((edgeUse) => edgeUse.count === 1)
+    .map(({ a, b }) => ({ a, b }));
+}
+
+function getLoopEdgeKeys(loop: number[]): Set<string> {
+  return new Set(
+    loop.map((vertexIndex, index) =>
+      getEdgeKey(vertexIndex, loop[(index + 1) % loop.length]),
+    ),
+  );
+}
+
+function getBoundaryEdgeLoops(
+  boundaryEdges: Array<{ a: number; b: number }>,
+): number[][] {
+  const adjacency = new Map<number, Set<number>>();
+  for (const { a, b } of boundaryEdges) {
+    addBoundaryNeighbor(adjacency, a, b);
+    addBoundaryNeighbor(adjacency, b, a);
+  }
+
+  const visitedEdges = new Set<string>();
+  const loops: number[][] = [];
+  for (const { a, b } of boundaryEdges) {
+    const startKey = getEdgeKey(a, b);
+    if (visitedEdges.has(startKey)) {
+      continue;
+    }
+
+    const loop = traceBoundaryEdgeLoop(
+      adjacency,
+      visitedEdges,
+      a,
+      b,
+      boundaryEdges.length,
+    );
+    if (loop.length >= 4 && loop[0] === loop[loop.length - 1]) {
+      loops.push(loop.slice(0, -1));
+    }
+  }
+
+  return loops;
+}
+
+function addBoundaryNeighbor(
+  adjacency: Map<number, Set<number>>,
+  vertex: number,
+  neighbor: number,
+): void {
+  const neighbors = adjacency.get(vertex) ?? new Set<number>();
+  neighbors.add(neighbor);
+  adjacency.set(vertex, neighbors);
+}
+
+function traceBoundaryEdgeLoop(
+  adjacency: Map<number, Set<number>>,
+  visitedEdges: Set<string>,
+  start: number,
+  next: number,
+  maxEdges: number,
+): number[] {
+  const loop = [start, next];
+  visitedEdges.add(getEdgeKey(start, next));
+
+  let previous = start;
+  let current = next;
+  while (current !== start && loop.length <= maxEdges + 1) {
+    const candidates = [...(adjacency.get(current) ?? [])].filter(
+      (candidate) => !visitedEdges.has(getEdgeKey(current, candidate)),
+    );
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const candidate =
+      candidates.find((candidateVertex) => candidateVertex !== previous) ??
+      candidates[0];
+    visitedEdges.add(getEdgeKey(current, candidate));
+    loop.push(candidate);
+    previous = current;
+    current = candidate;
+  }
+
+  return current === start ? loop : [];
+}
+
+function triangulateBoundaryLoop(
+  vertices: VectorTuple[],
+  loop: number[],
+  sourceEdgeUseCounts: Map<string, { a: number; b: number; count: number }>,
+): RepairedSceneGeometry['triangles'] {
+  if (loop.length < 3) {
+    return [];
+  }
+
+  const loopEdgeKeys = getLoopEdgeKeys(loop);
+  const triangles =
+    triangulateBoundaryPolygon(
+      vertices,
+      loop,
+      sourceEdgeUseCounts,
+      loopEdgeKeys,
+      0,
+    ) ?? [];
+  if (triangles.length === 0) {
+    return [];
+  }
+
+  const loopNormal = getBoundaryLoopNormal(vertices, loop);
+  const capNormal = getAverageTriangleNormal(vertices, triangles);
+  if (loopNormal.lengthSq() > 0 && loopNormal.dot(capNormal) < 0) {
+    return triangles.map((triangle) => ({
+      v1: triangle.v1,
+      v2: triangle.v3,
+      v3: triangle.v2,
+    }));
+  }
+
+  return triangles;
+}
+
+function triangulateBoundaryLoopWithCenterVertex(
+  vertices: VectorTuple[],
+  loop: number[],
+): RepairedSceneGeometry['triangles'] {
+  if (loop.length < 3) {
+    return [];
+  }
+
+  const center = loop.reduce(
+    (sum, vertexIndex) => {
+      const vertex = vertices[vertexIndex];
+      sum[0] += vertex[0];
+      sum[1] += vertex[1];
+      sum[2] += vertex[2];
+      return sum;
+    },
+    [0, 0, 0] as VectorTuple,
+  );
+  center[0] /= loop.length;
+  center[1] /= loop.length;
+  center[2] /= loop.length;
+
+  const centerVertexIndex = vertices.length;
+  vertices.push(center);
+  const triangles = loop.map((vertexIndex, index) => ({
+    v1: centerVertexIndex,
+    v2: vertexIndex,
+    v3: loop[(index + 1) % loop.length],
+  }));
+  const loopNormal = getBoundaryLoopNormal(vertices, loop);
+  const capNormal = getAverageTriangleNormal(vertices, triangles);
+  if (loopNormal.lengthSq() > 0 && loopNormal.dot(capNormal) < 0) {
+    return triangles.map((triangle) => ({
+      v1: triangle.v1,
+      v2: triangle.v3,
+      v3: triangle.v2,
+    }));
+  }
+
+  return triangles;
+}
+
+function triangulateBoundaryPolygon(
+  vertices: VectorTuple[],
+  polygon: number[],
+  sourceEdgeUseCounts: Map<string, { a: number; b: number; count: number }>,
+  loopEdgeKeys: Set<string>,
+  depth: number,
+): RepairedSceneGeometry['triangles'] | null {
+  if (polygon.length < 3 || depth > MAX_BOUNDARY_FILL_LOOP_EDGES) {
+    return null;
+  }
+
+  if (polygon.length === 3) {
+    const triangle = { v1: polygon[0], v2: polygon[1], v3: polygon[2] };
+    return isCapTriangleUsable(
+      vertices,
+      triangle,
+      sourceEdgeUseCounts,
+      loopEdgeKeys,
+    )
+      ? [triangle]
+      : null;
+  }
+
+  for (let index = 0; index < polygon.length; index += 1) {
+    const previous = polygon[(index - 1 + polygon.length) % polygon.length];
+    const current = polygon[index];
+    const next = polygon[(index + 1) % polygon.length];
+    const triangle = { v1: previous, v2: current, v3: next };
+    if (
+      !isCapTriangleUsable(
+        vertices,
+        triangle,
+        sourceEdgeUseCounts,
+        loopEdgeKeys,
+      )
+    ) {
+      continue;
+    }
+
+    const remainingPolygon = polygon.filter(
+      (_, vertexIndex) => vertexIndex !== index,
+    );
+    const remainingTriangles = triangulateBoundaryPolygon(
+      vertices,
+      remainingPolygon,
+      sourceEdgeUseCounts,
+      loopEdgeKeys,
+      depth + 1,
+    );
+    if (remainingTriangles) {
+      return [triangle, ...remainingTriangles];
+    }
+  }
+
+  return null;
+}
+
+function isCapTriangleUsable(
+  vertices: VectorTuple[],
+  triangle: RepairedSceneGeometry['triangles'][number],
+  sourceEdgeUseCounts: Map<string, { a: number; b: number; count: number }>,
+  loopEdgeKeys: Set<string>,
+): boolean {
+  if (isDegenerateTriangle(triangle, vertices)) {
+    return false;
+  }
+
+  for (const [a, b] of [
+    [triangle.v1, triangle.v2],
+    [triangle.v2, triangle.v3],
+    [triangle.v3, triangle.v1],
+  ]) {
+    const edgeKey = getEdgeKey(a, b);
+    const sourceUseCount = sourceEdgeUseCounts.get(edgeKey)?.count ?? 0;
+    if (loopEdgeKeys.has(edgeKey)) {
+      if (sourceUseCount !== 1) {
+        return false;
+      }
+      continue;
+    }
+
+    if (sourceUseCount > 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getBoundaryLoopNormal(
+  vertices: VectorTuple[],
+  loop: number[],
+): THREE.Vector3 {
+  const normal = new THREE.Vector3();
+  for (let index = 0; index < loop.length; index += 1) {
+    const current = vertices[loop[index]];
+    const next = vertices[loop[(index + 1) % loop.length]];
+    normal.x += (current[1] - next[1]) * (current[2] + next[2]);
+    normal.y += (current[2] - next[2]) * (current[0] + next[0]);
+    normal.z += (current[0] - next[0]) * (current[1] + next[1]);
+  }
+
+  return normal.lengthSq() > 0 ? normal.normalize() : normal;
+}
+
+function getAverageTriangleNormal(
+  vertices: VectorTuple[],
+  triangles: RepairedSceneGeometry['triangles'],
+): THREE.Vector3 {
+  const normal = new THREE.Vector3();
+  for (const triangle of triangles) {
+    normal.add(getTriangleNormal(vertices, triangle));
+  }
+
+  return normal.lengthSq() > 0 ? normal.normalize() : normal;
+}
+
+function getTriangleNormal(
+  vertices: VectorTuple[],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+): THREE.Vector3 {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+  if (!a || !b || !c) {
+    return new THREE.Vector3();
+  }
+
+  const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  return ab.cross(ac).normalize();
+}
+
+function getUnorderedTriangleVertexKey(
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
+): string {
+  return [triangle.v1, triangle.v2, triangle.v3]
+    .sort((a, b) => a - b)
+    .join('-');
+}
+
+function weldSceneGeometryVertices<TTriangle extends IndexedTriangle>(
+  geometry: IndexedTriangleGeometry<TTriangle>,
   tolerance: number,
-): SceneGeometry {
+): IndexedTriangleGeometry<TTriangle> {
   if (tolerance <= 0 || geometry.vertices.length === 0) {
     return geometry;
   }
@@ -1238,6 +2141,7 @@ function assignColorsToRepairedTriangles(
     sourceTriangles.push(triangle);
     sourceTrianglesByGeometry.set(key, sourceTriangles);
   });
+  const sourceTriangleLookup = buildSourceTriangleSpatialLookup(sourceGeometry);
 
   return repairedGeometry.triangles.map((triangle) => {
     const exactSourceTriangles = sourceTrianglesByGeometry.get(
@@ -1248,7 +2152,7 @@ function assignColorsToRepairedTriangles(
       : getNearestTriangleColor(
           triangle,
           repairedGeometry.vertices,
-          sourceGeometry,
+          sourceTriangleLookup,
         );
 
     return {
@@ -1259,10 +2163,74 @@ function assignColorsToRepairedTriangles(
         : getNearestTriangleSemanticMaterialId(
             triangle,
             repairedGeometry.vertices,
-            sourceGeometry,
+            sourceTriangleLookup,
           ),
     };
   });
+}
+
+type SourceTriangleSpatialLookup = {
+  sourceGeometry: SceneGeometry;
+  centroids: THREE.Vector3[];
+  cellSize: number;
+  cells: Map<string, number[]>;
+  semanticCells: Map<string, number[]>;
+};
+
+function buildSourceTriangleSpatialLookup(
+  sourceGeometry: SceneGeometry,
+): SourceTriangleSpatialLookup {
+  const bounds = sourceGeometry.vertices.reduce(
+    (currentBounds, vertex) => {
+      currentBounds.min[0] = Math.min(currentBounds.min[0], vertex[0]);
+      currentBounds.min[1] = Math.min(currentBounds.min[1], vertex[1]);
+      currentBounds.min[2] = Math.min(currentBounds.min[2], vertex[2]);
+      currentBounds.max[0] = Math.max(currentBounds.max[0], vertex[0]);
+      currentBounds.max[1] = Math.max(currentBounds.max[1], vertex[1]);
+      currentBounds.max[2] = Math.max(currentBounds.max[2], vertex[2]);
+      return currentBounds;
+    },
+    {
+      min: [
+        Number.POSITIVE_INFINITY,
+        Number.POSITIVE_INFINITY,
+        Number.POSITIVE_INFINITY,
+      ] as VectorTuple,
+      max: [
+        Number.NEGATIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+      ] as VectorTuple,
+    },
+  );
+  const largestSpan = Math.max(
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+    THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM,
+  );
+  const cellSize = Math.max(largestSpan / 64, THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM);
+  const centroids: THREE.Vector3[] = [];
+  const cells = new Map<string, number[]>();
+  const semanticCells = new Map<string, number[]>();
+
+  sourceGeometry.triangles.forEach((triangle, triangleIndex) => {
+    const centroid = getTriangleCentroid(sourceGeometry.vertices, triangle);
+    centroids.push(centroid);
+    const cell = getSpatialCell([centroid.x, centroid.y, centroid.z], cellSize);
+    const cellKey = getSpatialCellKey(cell[0], cell[1], cell[2]);
+    const cellTriangleIndexes = cells.get(cellKey) ?? [];
+    cellTriangleIndexes.push(triangleIndex);
+    cells.set(cellKey, cellTriangleIndexes);
+
+    if (triangle.semanticMaterialId !== undefined) {
+      const semanticTriangleIndexes = semanticCells.get(cellKey) ?? [];
+      semanticTriangleIndexes.push(triangleIndex);
+      semanticCells.set(cellKey, semanticTriangleIndexes);
+    }
+  });
+
+  return { sourceGeometry, centroids, cellSize, cells, semanticCells };
 }
 
 function getDominantTriangleSemanticMaterialId(
@@ -1298,28 +2266,17 @@ function getDominantTriangleSemanticMaterialId(
 function getNearestTriangleSemanticMaterialId(
   triangle: RepairedSceneGeometry['triangles'][number],
   vertices: VectorTuple[],
-  sourceGeometry: SceneGeometry,
+  lookup: SourceTriangleSpatialLookup,
 ): number | undefined {
   const centroid = getTriangleCentroid(vertices, triangle);
-  let nearestTriangle: SceneGeometry['triangles'][number] | undefined;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-
-  sourceGeometry.triangles.forEach((sourceTriangle) => {
-    if (sourceTriangle.semanticMaterialId === undefined) {
-      return;
-    }
-    const sourceCentroid = getTriangleCentroid(
-      sourceGeometry.vertices,
-      sourceTriangle,
-    );
-    const distance = centroid.distanceToSquared(sourceCentroid);
-    if (distance < nearestDistance) {
-      nearestTriangle = sourceTriangle;
-      nearestDistance = distance;
-    }
-  });
-
-  return nearestTriangle?.semanticMaterialId;
+  const nearestTriangleIndex = findNearestSourceTriangleIndex(
+    centroid,
+    lookup,
+    true,
+  );
+  return nearestTriangleIndex === null
+    ? undefined
+    : lookup.sourceGeometry.triangles[nearestTriangleIndex]?.semanticMaterialId;
 }
 
 function getDominantTriangleColor(
@@ -1354,25 +2311,85 @@ function getDominantTriangleColor(
 function getNearestTriangleColor(
   triangle: RepairedSceneGeometry['triangles'][number],
   vertices: VectorTuple[],
-  sourceGeometry: SceneGeometry,
+  lookup: SourceTriangleSpatialLookup,
 ): THREE.Color {
   const centroid = getTriangleCentroid(vertices, triangle);
-  let nearestTriangle = sourceGeometry.triangles[0];
+  const nearestTriangleIndex = findNearestSourceTriangleIndex(
+    centroid,
+    lookup,
+    false,
+  );
+  return lookup.sourceGeometry.triangles[
+    nearestTriangleIndex ?? 0
+  ].color.clone();
+}
+
+function findNearestSourceTriangleIndex(
+  centroid: THREE.Vector3,
+  lookup: SourceTriangleSpatialLookup,
+  semanticOnly: boolean,
+): number | null {
+  const cells = semanticOnly ? lookup.semanticCells : lookup.cells;
+  if (cells.size === 0) {
+    return null;
+  }
+
+  const cell = getSpatialCell(
+    [centroid.x, centroid.y, centroid.z],
+    lookup.cellSize,
+  );
+  let nearestTriangleIndex: number | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
-  sourceGeometry.triangles.forEach((sourceTriangle) => {
-    const sourceCentroid = getTriangleCentroid(
-      sourceGeometry.vertices,
-      sourceTriangle,
-    );
-    const distance = centroid.distanceToSquared(sourceCentroid);
-    if (distance < nearestDistance) {
-      nearestTriangle = sourceTriangle;
-      nearestDistance = distance;
+  const visitTriangleIndexes = (triangleIndexes: number[]): void => {
+    for (const triangleIndex of triangleIndexes) {
+      const sourceCentroid = lookup.centroids[triangleIndex];
+      const distance = centroid.distanceToSquared(sourceCentroid);
+      if (distance < nearestDistance) {
+        nearestTriangleIndex = triangleIndex;
+        nearestDistance = distance;
+      }
     }
-  });
+  };
 
-  return nearestTriangle.color.clone();
+  for (let radius = 0; radius <= 8; radius += 1) {
+    let visitedCount = 0;
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        for (let dz = -radius; dz <= radius; dz += 1) {
+          if (
+            radius > 0 &&
+            Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) !== radius
+          ) {
+            continue;
+          }
+
+          const triangleIndexes = cells.get(
+            getSpatialCellKey(cell[0] + dx, cell[1] + dy, cell[2] + dz),
+          );
+          if (!triangleIndexes) {
+            continue;
+          }
+
+          visitedCount += triangleIndexes.length;
+          visitTriangleIndexes(triangleIndexes);
+        }
+      }
+    }
+
+    if (nearestTriangleIndex !== null && visitedCount >= 12) {
+      return nearestTriangleIndex;
+    }
+  }
+
+  if (nearestTriangleIndex !== null) {
+    return nearestTriangleIndex;
+  }
+
+  for (const triangleIndexes of cells.values()) {
+    visitTriangleIndexes(triangleIndexes);
+  }
+  return nearestTriangleIndex;
 }
 
 function buildSemanticMaterialAssignments(
@@ -2259,7 +3276,7 @@ function colorDistanceSquared(a: THREE.Color, b: THREE.Color): number {
 }
 
 function isDegenerateTriangle(
-  triangle: SceneGeometry['triangles'][number],
+  triangle: Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>,
   vertices: VectorTuple[],
 ): boolean {
   return (
@@ -2329,6 +3346,7 @@ function subdivideTexturedTriangleForColorDetail({
   position,
   matrixWorld,
   vertexIndices,
+  textureDetailEdgeSegments,
 }: {
   material: THREE.Material;
   colorAttribute?: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
@@ -2336,6 +3354,7 @@ function subdivideTexturedTriangleForColorDetail({
   position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
   matrixWorld: THREE.Matrix4;
   vertexIndices: [number, number, number];
+  textureDetailEdgeSegments: Map<string, number> | null;
 }): Array<{
   vertices: [VectorTuple, VectorTuple, VectorTuple];
   color: THREE.Color;
@@ -2357,41 +3376,41 @@ function subdivideTexturedTriangleForColorDetail({
   const uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2] = vertexIndices.map(
     (vertexIndex) => readUv(uvAttribute, vertexIndex),
   ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
-  const subdivisionLevel = getTextureDetailSubdivisionLevel(pixels, uvs);
-  if (subdivisionLevel <= 0) {
-    return null;
-  }
-
   const sourceVertices: [VectorTuple, VectorTuple, VectorTuple] =
     vertexIndices.map((vertexIndex) =>
       readWorldVertex(position, vertexIndex, matrixWorld),
     ) as [VectorTuple, VectorTuple, VectorTuple];
+  const patches = getTexturedTriangleBoundaryPatches({
+    vertices: sourceVertices,
+    uvs,
+    edgeSegments: getTextureDetailTriangleEdgeSegments(
+      sourceVertices,
+      textureDetailEdgeSegments,
+    ),
+  });
+  if (patches.length <= 1) {
+    return null;
+  }
+
   const materialColor = getMaterialColor(material);
   const vertexColor = sampleVertexColor(colorAttribute, vertexIndices);
 
-  return getSubdividedBarycentricTriangles(subdivisionLevel).map(
-    (barycentricTriangle) => {
-      const subUvs = barycentricTriangle.map((barycentric) =>
-        interpolateUv(uvs, barycentric),
-      ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
-      const color = sampleTextureUvTriangleColor(
-        texture,
-        pixels,
-        subUvs,
-      ).multiply(materialColor);
+  return patches.map((patch) => {
+    const color = sampleTextureUvTriangleColor(
+      texture,
+      pixels,
+      patch.uvs,
+    ).multiply(materialColor);
 
-      if (vertexColor) {
-        color.multiply(vertexColor);
-      }
+    if (vertexColor) {
+      color.multiply(vertexColor);
+    }
 
-      return {
-        vertices: barycentricTriangle.map((barycentric) =>
-          interpolateVectorTuple(sourceVertices, barycentric),
-        ) as [VectorTuple, VectorTuple, VectorTuple],
-        color,
-      };
-    },
-  );
+    return {
+      vertices: patch.vertices,
+      color,
+    };
+  });
 }
 
 function sampleTextureColor(
@@ -2476,29 +3495,6 @@ function getTexturePixelColor(
   );
 }
 
-function getTextureDetailSubdivisionLevel(
-  pixels: TexturePixels,
-  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2],
-): number {
-  const span = Math.max(
-    getUvPixelDistance(pixels, uvs[0], uvs[1]),
-    getUvPixelDistance(pixels, uvs[1], uvs[2]),
-    getUvPixelDistance(pixels, uvs[2], uvs[0]),
-  );
-  let level = 0;
-  let reducedSpan = span;
-
-  while (
-    reducedSpan > TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN &&
-    level < TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL
-  ) {
-    level += 1;
-    reducedSpan /= 2;
-  }
-
-  return level;
-}
-
 function getUvPixelDistance(
   pixels: TexturePixels,
   left: THREE.Vector2,
@@ -2510,44 +3506,326 @@ function getUvPixelDistance(
   );
 }
 
-const textureSubdivisionBarycentricCache = new Map<number, VectorTuple[][]>();
-
-function getSubdividedBarycentricTriangles(level: number): VectorTuple[][] {
-  const cached = textureSubdivisionBarycentricCache.get(level);
-  if (cached) {
-    return cached;
+function buildTextureDetailEdgeSegments({
+  geometry,
+  groups,
+  materials,
+  uvAttribute,
+  position,
+  matrixWorld,
+}: {
+  geometry: THREE.BufferGeometry;
+  groups: Array<{ start: number; count: number; materialIndex?: number }>;
+  materials: THREE.Material[];
+  uvAttribute?: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+  matrixWorld: THREE.Matrix4;
+}): Map<string, number> | null {
+  if (!uvAttribute) {
+    return null;
   }
 
-  let triangles: VectorTuple[][] = [
-    [
-      [1, 0, 0],
-      [0, 1, 0],
-      [0, 0, 1],
-    ],
-  ];
+  const edgeSegments = new Map<string, number>();
+  for (const group of groups) {
+    const material = materials[group.materialIndex ?? 0] ?? materials[0];
+    if (!('map' in material) || !(material.map instanceof THREE.Texture)) {
+      continue;
+    }
 
-  for (let iteration = 0; iteration < level; iteration += 1) {
-    triangles = triangles.flatMap(([a, b, c]) => {
-      const ab = midpointBarycentric(a, b);
-      const bc = midpointBarycentric(b, c);
-      const ca = midpointBarycentric(c, a);
-      return [
-        [a, ab, ca],
-        [ab, b, bc],
-        [ca, bc, c],
-        [ab, bc, ca],
+    const pixels = getTexturePixels(material.map);
+    if (!pixels) {
+      continue;
+    }
+
+    const end = group.start + group.count;
+    for (let offset = group.start; offset + 2 < end; offset += 3) {
+      const vertexIndices: [number, number, number] = [
+        getVertexIndex(geometry, offset),
+        getVertexIndex(geometry, offset + 1),
+        getVertexIndex(geometry, offset + 2),
       ];
-    });
+      const uvs = vertexIndices.map((vertexIndex) =>
+        readUv(uvAttribute, vertexIndex),
+      ) as [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+      const vertices = vertexIndices.map((vertexIndex) =>
+        readWorldVertex(position, vertexIndex, matrixWorld),
+      ) as [VectorTuple, VectorTuple, VectorTuple];
+
+      for (const [leftIndex, rightIndex] of [
+        [0, 1],
+        [1, 2],
+        [2, 0],
+      ] as Array<[number, number]>) {
+        const segmentCount = getTextureDetailSegmentCount(
+          getUvPixelDistance(pixels, uvs[leftIndex], uvs[rightIndex]),
+        );
+        if (segmentCount <= 1) {
+          continue;
+        }
+
+        const edgeKey = getWorldEdgeKey(
+          vertices[leftIndex],
+          vertices[rightIndex],
+        );
+        edgeSegments.set(
+          edgeKey,
+          Math.max(edgeSegments.get(edgeKey) ?? 1, segmentCount),
+        );
+      }
+    }
   }
 
-  textureSubdivisionBarycentricCache.set(level, triangles);
-  return triangles;
+  return edgeSegments.size > 0 ? edgeSegments : null;
 }
 
-function midpointBarycentric(
+function getTextureDetailSegmentCount(pixelDistance: number): number {
+  let segmentCount = 1;
+  let reducedDistance = pixelDistance;
+
+  while (
+    reducedDistance > TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN &&
+    segmentCount < 2 ** TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL
+  ) {
+    segmentCount *= 2;
+    reducedDistance /= 2;
+  }
+
+  return segmentCount;
+}
+
+function getTextureDetailTriangleEdgeSegments(
+  vertices: [VectorTuple, VectorTuple, VectorTuple],
+  textureDetailEdgeSegments: Map<string, number> | null,
+): [number, number, number] {
+  if (!textureDetailEdgeSegments) {
+    return [1, 1, 1];
+  }
+
+  return [
+    textureDetailEdgeSegments.get(getWorldEdgeKey(vertices[0], vertices[1])) ??
+      1,
+    textureDetailEdgeSegments.get(getWorldEdgeKey(vertices[1], vertices[2])) ??
+      1,
+    textureDetailEdgeSegments.get(getWorldEdgeKey(vertices[2], vertices[0])) ??
+      1,
+  ];
+}
+
+function getTexturedTriangleBoundaryPatches({
+  vertices,
+  uvs,
+  edgeSegments,
+}: {
+  vertices: [VectorTuple, VectorTuple, VectorTuple];
+  uvs: [THREE.Vector2, THREE.Vector2, THREE.Vector2];
+  edgeSegments: [number, number, number];
+}): TexturedTrianglePatch[] {
+  return subdivideTexturedTrianglePatchByEdgeSegments(
+    {
+      vertices,
+      uvs,
+      barycentric: [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ],
+    },
+    edgeSegments,
+    0,
+  );
+}
+
+function subdivideTexturedTrianglePatchByEdgeSegments(
+  patch: TexturedTrianglePatch,
+  edgeSegments: [number, number, number],
+  depth: number,
+): TexturedTrianglePatch[] {
+  if (depth > TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL * 12) {
+    return [patch];
+  }
+
+  const splitEdgeIndex = getPatchBoundarySplitEdgeIndex(
+    patch.barycentric,
+    edgeSegments,
+  );
+  if (splitEdgeIndex === null) {
+    return [patch];
+  }
+
+  return splitTexturedTrianglePatch(patch, splitEdgeIndex).flatMap(
+    (childPatch) =>
+      subdivideTexturedTrianglePatchByEdgeSegments(
+        childPatch,
+        edgeSegments,
+        depth + 1,
+      ),
+  );
+}
+
+function getPatchBoundarySplitEdgeIndex(
+  barycentric: [VectorTuple, VectorTuple, VectorTuple],
+  edgeSegments: [number, number, number],
+): number | null {
+  let bestPatchEdgeIndex: number | null = null;
+  let bestSpan = 1 + 1e-6;
+
+  for (const [patchEdgeIndex, [leftIndex, rightIndex]] of (
+    [
+      [0, [0, 1]],
+      [1, [1, 2]],
+      [2, [2, 0]],
+    ] as Array<[number, [number, number]]>
+  )) {
+    const sourceEdgeIndex = getSourceBoundaryEdgeIndex(
+      barycentric[leftIndex],
+      barycentric[rightIndex],
+    );
+    if (sourceEdgeIndex === null) {
+      continue;
+    }
+
+    const span =
+      getSourceBoundaryEdgeSpan(
+        barycentric[leftIndex],
+        barycentric[rightIndex],
+        sourceEdgeIndex,
+      ) * edgeSegments[sourceEdgeIndex];
+    if (span > bestSpan) {
+      bestSpan = span;
+      bestPatchEdgeIndex = patchEdgeIndex;
+    }
+  }
+
+  return bestPatchEdgeIndex;
+}
+
+function getSourceBoundaryEdgeIndex(
   left: VectorTuple,
   right: VectorTuple,
-): VectorTuple {
+): number | null {
+  const epsilon = 1e-8;
+  if (Math.abs(left[2]) <= epsilon && Math.abs(right[2]) <= epsilon) {
+    return 0;
+  }
+
+  if (Math.abs(left[0]) <= epsilon && Math.abs(right[0]) <= epsilon) {
+    return 1;
+  }
+
+  if (Math.abs(left[1]) <= epsilon && Math.abs(right[1]) <= epsilon) {
+    return 2;
+  }
+
+  return null;
+}
+
+function getSourceBoundaryEdgeSpan(
+  left: VectorTuple,
+  right: VectorTuple,
+  sourceEdgeIndex: number,
+): number {
+  if (sourceEdgeIndex === 0) {
+    return Math.abs(left[1] - right[1]);
+  }
+
+  if (sourceEdgeIndex === 1) {
+    return Math.abs(left[2] - right[2]);
+  }
+
+  return Math.abs(left[0] - right[0]);
+}
+
+function splitTexturedTrianglePatch(
+  patch: TexturedTrianglePatch,
+  edgeIndex: number,
+): [TexturedTrianglePatch, TexturedTrianglePatch] {
+  const edgeVertexIndexes = [
+    [0, 1],
+    [1, 2],
+    [2, 0],
+  ][edgeIndex] as [number, number];
+  const midpointVertex = midpointVectorTuple(
+    patch.vertices[edgeVertexIndexes[0]],
+    patch.vertices[edgeVertexIndexes[1]],
+  );
+  const midpointUv = patch.uvs[edgeVertexIndexes[0]]
+    .clone()
+    .add(patch.uvs[edgeVertexIndexes[1]])
+    .multiplyScalar(0.5);
+  const midpointBarycentric = midpointVectorTuple(
+    patch.barycentric[edgeVertexIndexes[0]],
+    patch.barycentric[edgeVertexIndexes[1]],
+  );
+
+  if (edgeIndex === 0) {
+    return [
+      {
+        vertices: [patch.vertices[0], midpointVertex, patch.vertices[2]],
+        uvs: [patch.uvs[0], midpointUv, patch.uvs[2]],
+        barycentric: [
+          patch.barycentric[0],
+          midpointBarycentric,
+          patch.barycentric[2],
+        ],
+      },
+      {
+        vertices: [midpointVertex, patch.vertices[1], patch.vertices[2]],
+        uvs: [midpointUv, patch.uvs[1], patch.uvs[2]],
+        barycentric: [
+          midpointBarycentric,
+          patch.barycentric[1],
+          patch.barycentric[2],
+        ],
+      },
+    ];
+  }
+
+  if (edgeIndex === 1) {
+    return [
+      {
+        vertices: [patch.vertices[0], patch.vertices[1], midpointVertex],
+        uvs: [patch.uvs[0], patch.uvs[1], midpointUv],
+        barycentric: [
+          patch.barycentric[0],
+          patch.barycentric[1],
+          midpointBarycentric,
+        ],
+      },
+      {
+        vertices: [patch.vertices[0], midpointVertex, patch.vertices[2]],
+        uvs: [patch.uvs[0], midpointUv, patch.uvs[2]],
+        barycentric: [
+          patch.barycentric[0],
+          midpointBarycentric,
+          patch.barycentric[2],
+        ],
+      },
+    ];
+  }
+
+  return [
+    {
+      vertices: [patch.vertices[1], patch.vertices[2], midpointVertex],
+      uvs: [patch.uvs[1], patch.uvs[2], midpointUv],
+      barycentric: [
+        patch.barycentric[1],
+        patch.barycentric[2],
+        midpointBarycentric,
+      ],
+    },
+    {
+      vertices: [patch.vertices[1], midpointVertex, patch.vertices[0]],
+      uvs: [patch.uvs[1], midpointUv, patch.uvs[0]],
+      barycentric: [
+        patch.barycentric[1],
+        midpointBarycentric,
+        patch.barycentric[0],
+      ],
+    },
+  ];
+}
+
+function midpointVectorTuple(left: VectorTuple, right: VectorTuple): VectorTuple {
   return [
     (left[0] + right[0]) / 2,
     (left[1] + right[1]) / 2,
@@ -2567,23 +3845,6 @@ function interpolateUv(
       uvs[1].y * barycentric[1] +
       uvs[2].y * barycentric[2],
   );
-}
-
-function interpolateVectorTuple(
-  vertices: [VectorTuple, VectorTuple, VectorTuple],
-  barycentric: VectorTuple,
-): VectorTuple {
-  return [
-    vertices[0][0] * barycentric[0] +
-      vertices[1][0] * barycentric[1] +
-      vertices[2][0] * barycentric[2],
-    vertices[0][1] * barycentric[0] +
-      vertices[1][1] * barycentric[1] +
-      vertices[2][1] * barycentric[2],
-    vertices[0][2] * barycentric[0] +
-      vertices[1][2] * barycentric[1] +
-      vertices[2][2] * barycentric[2],
-  ];
 }
 
 function getDominantTextureSampleColor(samples: THREE.Color[]): THREE.Color {
@@ -2978,6 +4239,10 @@ function getVertexKey([x, y, z]: VectorTuple): string {
     Math.round(y / VERTEX_KEY_PRECISION),
     Math.round(z / VERTEX_KEY_PRECISION),
   ].join(',');
+}
+
+function getWorldEdgeKey(left: VectorTuple, right: VectorTuple): string {
+  return [getVertexKey(left), getVertexKey(right)].sort().join('|');
 }
 
 function getSpatialCell([x, y, z]: VectorTuple, size: number): VectorTuple {

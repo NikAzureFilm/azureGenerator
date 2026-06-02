@@ -174,6 +174,41 @@ function getTriangleMaterialColors(modelXml) {
   });
 }
 
+function countSameDirectionSharedEdges(modelXml) {
+  const edgeUses = new Map();
+  for (const [triangleIndex, match] of [
+    ...modelXml.matchAll(/<triangle\b([^>]*)\/>/g),
+  ].entries()) {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+        attributeMatch[1],
+        attributeMatch[2],
+      ]),
+    );
+    const vertices = [
+      Number(attributes.v1),
+      Number(attributes.v2),
+      Number(attributes.v3),
+    ];
+    for (const [a, b] of [
+      [vertices[0], vertices[1]],
+      [vertices[1], vertices[2]],
+      [vertices[2], vertices[0]],
+    ]) {
+      const key = [a, b].sort((left, right) => left - right).join('-');
+      const uses = edgeUses.get(key) ?? [];
+      uses.push({ triangleIndex, a, b });
+      edgeUses.set(key, uses);
+    }
+  }
+
+  return [...edgeUses.values()].filter(
+    (uses) =>
+      uses.length === 2 &&
+      !(uses[0].a === uses[1].b && uses[0].b === uses[1].a),
+  ).length;
+}
+
 function installFakeCanvasDocument() {
   const previousDocument = globalThis.document;
   globalThis.document = {
@@ -228,6 +263,28 @@ function createDataTexture(width, height, getPixelColor) {
     height,
     data,
   });
+}
+
+function assertBambuPrintableTopology(modelXml, message) {
+  const topology = analyzeThreeMfMeshTopology(modelXml);
+  assert.equal(
+    topology.invalidVertexReferenceCount,
+    0,
+    `${message}: invalid vertex references`,
+  );
+  assert.equal(
+    topology.degenerateTriangleCount,
+    0,
+    `${message}: degenerate triangles`,
+  );
+  assert.equal(topology.boundaryEdges, 0, `${message}: boundary edges`);
+  assert.equal(topology.overSharedEdges, 0, `${message}: over-shared edges`);
+  assert.equal(
+    countSameDirectionSharedEdges(modelXml),
+    0,
+    `${message}: same-direction shared edges`,
+  );
+  return topology;
 }
 
 assert.equal(clampThreeMfColorCount(0), 1);
@@ -498,14 +555,10 @@ assert.equal(squareModelXml.match(/<triangle /g)?.length, 2);
 const squareModelBounds = getModelBounds(squareModelXml);
 assert.deepEqual(squareModelBounds.min, [0, 0, 0]);
 assert.deepEqual(squareModelBounds.max, [10, 0, 10]);
-assert.match(
-  squareModelXml,
-  /<triangle v1="0" v2="1" v3="2"[^>]+paint_color="4"\/>/,
-);
-assert.match(
-  squareModelXml,
-  /<triangle v1="0" v2="2" v3="3"[^>]+paint_color="4"\/>/,
-);
+assert.deepEqual(getTriangleMaterialColors(squareModelXml), [
+  '#00FF00',
+  '#00FF00',
+]);
 await squareZipReader.close();
 
 const splitSquareScene = new THREE.Scene();
@@ -534,8 +587,11 @@ const splitSquareModelXml = await getMeshModelXml(
   await splitSquareZipReader.getEntries(),
 );
 assert.equal(splitSquareModelXml.match(/<vertex /g)?.length, 4);
-assert.match(splitSquareModelXml, /<triangle v1="0" v2="1" v3="2"/);
-assert.match(splitSquareModelXml, /<triangle v1="0" v2="2" v3="3"/);
+assert.equal(splitSquareModelXml.match(/<triangle /g)?.length, 2);
+assert.deepEqual(getTriangleMaterialColors(splitSquareModelXml), [
+  '#00FF00',
+  '#00FF00',
+]);
 await splitSquareZipReader.close();
 
 const noisySurfaceScene = new THREE.Scene();
@@ -989,9 +1045,102 @@ try {
     'large textured triangles are subdivided before color assignment',
   );
   await textureDetailZipReader.close();
+
+  const closedTextureDetailScene = new THREE.Scene();
+  const closedTextureDetailGeometry = new THREE.BufferGeometry();
+  closedTextureDetailGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [0, 0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 12],
+      3,
+    ),
+  );
+  closedTextureDetailGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 0.01, 0, 0.02], 2),
+  );
+  closedTextureDetailGeometry.setIndex([
+    0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2,
+  ]);
+  const closedTextureDetailMap = createDataTexture(128, 128, (x) =>
+    x < 64 ? [0, 255, 0] : [255, 255, 255],
+  );
+  closedTextureDetailMap.flipY = false;
+  closedTextureDetailScene.add(
+    new THREE.Mesh(
+      closedTextureDetailGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: closedTextureDetailMap,
+      }),
+    ),
+  );
+
+  const closedTextureDetailBlob = await createThreeMfBlobFromScene({
+    scene: closedTextureDetailScene,
+    filename: 'closed-texture-detail-topology',
+    colorCount: 2,
+    targetMaterialPalette: ['#00FF00', '#FFFFFF'],
+  });
+  const closedTextureDetailZipReader = new ZipReader(
+    new BlobReader(closedTextureDetailBlob),
+  );
+  const closedTextureDetailModelXml = await getMeshModelXml(
+    await closedTextureDetailZipReader.getEntries(),
+  );
+  const closedTextureDetailTopology = assertBambuPrintableTopology(
+    closedTextureDetailModelXml,
+    'closed textured subdivision',
+  );
+  assert.ok(
+    closedTextureDetailTopology.triangleCount > 4,
+    'closed textured geometry is still subdivided for color detail',
+  );
+  assert.deepEqual(
+    new Set(getTriangleMaterialColors(closedTextureDetailModelXml)),
+    new Set(['#00FF00', '#FFFFFF']),
+  );
+  await closedTextureDetailZipReader.close();
 } finally {
   restoreCanvasDocument();
 }
+
+const manifoldFilterColorScene = new THREE.Scene();
+const manifoldFilterColorGeometry = new THREE.BoxGeometry(10, 12, 14, 12, 12, 12);
+manifoldFilterColorScene.add(
+  new THREE.Mesh(manifoldFilterColorGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+    new THREE.MeshStandardMaterial({ color: '#ffffff' }),
+    new THREE.MeshStandardMaterial({ color: '#111111' }),
+    new THREE.MeshStandardMaterial({ color: '#ffff00' }),
+  ]),
+);
+const manifoldFilterColorBlob = await createThreeMfBlobFromScene({
+  scene: manifoldFilterColorScene,
+  filename: 'manifold-filter-color-box',
+  colorCount: 6,
+});
+const manifoldFilterColorZipReader = new ZipReader(
+  new BlobReader(manifoldFilterColorBlob),
+);
+const manifoldFilterColorModelXml = await getMeshModelXml(
+  await manifoldFilterColorZipReader.getEntries(),
+);
+const manifoldFilterColorTopology = assertBambuPrintableTopology(
+  manifoldFilterColorModelXml,
+  'manifold filter color box',
+);
+assert.ok(
+  manifoldFilterColorTopology.triangleCount >= 512,
+  'large color box exercises the async repair/color transfer path',
+);
+assert.deepEqual(
+  new Set(getTriangleMaterialColors(manifoldFilterColorModelXml)),
+  new Set(['#FF0000', '#00FF00', '#0000FF', '#FFFFFF', '#111111', '#FFFF00']),
+);
+await manifoldFilterColorZipReader.close();
 
 const badgeRecoveryScene = new THREE.Scene();
 const badgeRecoveryGeometry = new THREE.BufferGeometry();
@@ -1040,7 +1189,8 @@ const badgeRecoveryModelXml = await getMeshModelXml(
 const badgeRecoveryIndexes = [
   ...badgeRecoveryModelXml.matchAll(/\bp1="(\d+)"/g),
 ].map((match) => Number(match[1]));
-assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0, 0, 0]);
+assert.deepEqual(badgeRecoveryIndexes.slice(0, 8), [2, 0, 0, 1, 3, 0, 0, 0]);
+assert.equal(badgeRecoveryIndexes.length, 10);
 await badgeRecoveryZipReader.close();
 
 const namedMaterialScene = new THREE.Scene();
@@ -1194,6 +1344,36 @@ assert.equal(cubeTopology.overSharedEdges, 0);
 assert.equal(cubeTopology.degenerateTriangleCount, 0);
 await cubeZipReader.close();
 
+const openTetraScene = new THREE.Scene();
+const openTetraGeometry = new THREE.BufferGeometry();
+openTetraGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10], 3),
+);
+openTetraGeometry.setIndex([0, 1, 3, 1, 2, 3, 2, 0, 3]);
+openTetraScene.add(
+  new THREE.Mesh(
+    openTetraGeometry,
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+  ),
+);
+
+const openTetraBlob = await createThreeMfBlobFromScene({
+  scene: openTetraScene,
+  filename: 'sealed-open-tetra',
+  colorCount: 1,
+});
+const openTetraZipReader = new ZipReader(new BlobReader(openTetraBlob));
+const openTetraModelXml = await getMeshModelXml(
+  await openTetraZipReader.getEntries(),
+);
+const openTetraTopology = assertBambuPrintableTopology(
+  openTetraModelXml,
+  'sealed open tetra',
+);
+assert.equal(openTetraTopology.triangleCount, 4);
+await openTetraZipReader.close();
+
 const closeVertexTopologyXml = buildThreeMfModelXml({
   modelName: 'close-vertex-topology',
   vertices: [
@@ -1251,18 +1431,14 @@ const repairedThreeMfBlob = await createThreeMfBlobFromScene({
 const repairedZipReader = new ZipReader(new BlobReader(repairedThreeMfBlob));
 const repairedEntries = await repairedZipReader.getEntries();
 const repairedModelXml = await getMeshModelXml(repairedEntries);
-assert.equal(repairedModelXml.match(/<triangle /g)?.length, 2);
+const repairedTopology = assertBambuPrintableTopology(
+  repairedModelXml,
+  'repaired color model',
+);
+assert.equal(repairedTopology.triangleCount, 4);
 assert.match(repairedModelXml, /<m:color color="#FF0000FF"\/>/);
 assert.match(repairedModelXml, /<m:color color="#00FF00FF"\/>/);
 assert.doesNotMatch(repairedModelXml, /<m:color color="#0000FFFF"\/>/);
-assert.match(
-  repairedModelXml,
-  /<triangle v1="0" v2="1" v3="2" pid="1" p1="0" p2="0" p3="0" paint_color="4"\/>/,
-);
-assert.match(
-  repairedModelXml,
-  /<triangle v1="1" v2="0" v3="3" pid="1" p1="1" p2="1" p3="1" paint_color="8"\/>/,
-);
 const repairedSettingsEntry = repairedEntries.find(
   (entry) => entry.filename === 'Metadata/project_settings.config',
 );
@@ -1310,11 +1486,11 @@ const nearDuplicateEdgeEntries = await nearDuplicateEdgeZipReader.getEntries();
 const nearDuplicateEdgeModelXml = await getMeshModelXml(
   nearDuplicateEdgeEntries,
 );
-assert.equal(nearDuplicateEdgeModelXml.match(/<triangle /g)?.length, 2);
-assert.equal(
-  analyzeThreeMfMeshTopology(nearDuplicateEdgeModelXml).overSharedEdges,
-  0,
+const nearDuplicateEdgeTopology = assertBambuPrintableTopology(
+  nearDuplicateEdgeModelXml,
+  'near duplicate edge repair',
 );
+assert.equal(nearDuplicateEdgeTopology.triangleCount, 4);
 assert.doesNotMatch(nearDuplicateEdgeModelXml, /<m:color color="#0000FFFF"\/>/);
 const nearDuplicateEdgeSettings = JSON.parse(
   await getZipText(
@@ -1401,7 +1577,11 @@ const coincidentTriangleZipReader = new ZipReader(
 const coincidentTriangleModelXml = await getMeshModelXml(
   await coincidentTriangleZipReader.getEntries(),
 );
-assert.equal(coincidentTriangleModelXml.match(/<triangle /g)?.length, 3);
+const coincidentTriangleTopology = assertBambuPrintableTopology(
+  coincidentTriangleModelXml,
+  'coincident triangle repair',
+);
+assert.equal(coincidentTriangleTopology.triangleCount, 4);
 await coincidentTriangleZipReader.close();
 
 const recolorAfterRepairScene = new THREE.Scene();
