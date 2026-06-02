@@ -1,5 +1,5 @@
 import { useConversation } from '@/contexts/ConversationContext';
-import { supabase } from '@/lib/supabase';
+import { getSupabaseFunctionUrl, supabase } from '@/lib/supabase';
 import {
   Content,
   Conversation,
@@ -17,6 +17,10 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
+
+function shouldUseTextToCad(content?: Content): boolean {
+  return content?.cadBackend === 'text-to-cad';
+}
 
 function messageSentConversationUpdate(
   newMessage: Message,
@@ -169,24 +173,21 @@ export function useCreativeChatMutation({
       let initialized = false;
 
       // Start streaming request
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/creative-chat`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${
-              (await supabase.auth.getSession()).data.session?.access_token
-            }`,
-          },
-          body: JSON.stringify({
-            conversationId,
-            messageId,
-            model,
-            newMessageId,
-          }),
+      const response = await fetch(getSupabaseFunctionUrl('creative-chat'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
         },
-      );
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          model,
+          newMessageId,
+        }),
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -375,24 +376,21 @@ export function useParametricChatMutation({
       let initialized = false;
 
       // Start streaming request
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parametric-chat`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${
-              (await supabase.auth.getSession()).data.session?.access_token
-            }`,
-          },
-          body: JSON.stringify({
-            conversationId,
-            messageId,
-            model,
-            newMessageId,
-          }),
+      const response = await fetch(getSupabaseFunctionUrl('parametric-chat'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
         },
-      );
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          model,
+          newMessageId,
+        }),
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -557,6 +555,120 @@ export function useParametricChatMutation({
   });
 }
 
+export function useTextToCadChatMutation({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
+  const queryClient = useQueryClient();
+  const { mutateAsync: insertMessageAsync } = useInsertMessageMutation();
+
+  return useMutation({
+    mutationKey: ['cad-chat', conversationId],
+    mutationFn: async ({
+      model,
+      messageId,
+      conversationId,
+    }: {
+      model: Model;
+      messageId: string;
+      conversationId: string;
+    }) => {
+      const newMessageId = crypto.randomUUID();
+
+      const response = await fetch(getSupabaseFunctionUrl('cad-chat'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
+        },
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          model,
+          newMessageId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Network response was not ok: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const data = await response.json();
+      if (!data.message) {
+        throw new Error('No message received');
+      }
+
+      queryClient.setQueryData(
+        ['messages', conversationId],
+        (oldMessages: Message[] | undefined) => {
+          if (!oldMessages || oldMessages.length === 0) {
+            return [data.message];
+          }
+          if (oldMessages.find((msg) => msg.id === data.message.id)) {
+            return oldMessages.map((msg) =>
+              msg.id === data.message.id ? data.message : msg,
+            );
+          }
+          return [...oldMessages, data.message];
+        },
+      );
+
+      queryClient.setQueryData(
+        ['conversation', conversationId],
+        (oldConversation: Conversation) => ({
+          ...oldConversation,
+          current_message_leaf_id: newMessageId,
+        }),
+      );
+
+      return data.message as Message;
+    },
+    onSuccess: (newMessage) => {
+      messageInsertedConversationUpdate(
+        queryClient,
+        newMessage,
+        conversationId,
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['userExtraData'] });
+    },
+    onError: async (error, { messageId }) => {
+      Sentry.captureException(error, {
+        extra: {
+          hook: 'useTextToCadChatMutation',
+          messageId,
+          conversationId,
+        },
+      });
+      try {
+        await insertMessageAsync({
+          role: 'assistant',
+          content: {
+            text: 'An error occurred while starting the STEP CAD job.',
+            cadBackend: 'text-to-cad',
+          },
+          parent_message_id: messageId,
+          conversation_id: conversationId,
+        });
+      } catch (insertError) {
+        Sentry.captureException(insertError, {
+          extra: {
+            hook: 'useTextToCadChatMutation insertMessageAsync',
+            messageId,
+            conversationId,
+          },
+        });
+      }
+    },
+  });
+}
+
 export function useSendContentMutation({
   conversation,
 }: {
@@ -571,6 +683,9 @@ export function useSendContentMutation({
   });
 
   const { mutateAsync: sendToParametricChat } = useParametricChatMutation({
+    conversationId: conversation.id,
+  });
+  const { mutateAsync: sendToTextToCadChat } = useTextToCadChatMutation({
     conversationId: conversation.id,
   });
 
@@ -643,6 +758,14 @@ export function useSendContentMutation({
       if (conversation.type === 'creative') {
         await sendToCreativeChat({
           model: normalizeCreativeModel(
+            content.model ?? conversation.settings?.model,
+          ),
+          messageId: userMessage.id,
+          conversationId: conversation.id,
+        });
+      } else if (shouldUseTextToCad(content)) {
+        await sendToTextToCadChat({
+          model: normalizeParametricChatModel(
             content.model ?? conversation.settings?.model,
           ),
           messageId: userMessage.id,
@@ -732,6 +855,9 @@ export function useEditMessageMutation({
   const { mutateAsync: sendToParametricChat } = useParametricChatMutation({
     conversationId: conversation.id,
   });
+  const { mutateAsync: sendToTextToCadChat } = useTextToCadChatMutation({
+    conversationId: conversation.id,
+  });
 
   return useMutation({
     mutationKey: ['edit-message', conversation.id],
@@ -746,6 +872,12 @@ export function useEditMessageMutation({
       if (conversation.type === 'creative') {
         sendToCreativeChat({
           model: normalizeCreativeModel(conversation.settings?.model),
+          messageId: userMessage.id,
+          conversationId: conversation.id,
+        });
+      } else if (shouldUseTextToCad(updatedMessage.content)) {
+        sendToTextToCadChat({
+          model: normalizeParametricChatModel(conversation.settings?.model),
           messageId: userMessage.id,
           conversationId: conversation.id,
         });
@@ -780,11 +912,15 @@ export function useRetryMessageMutation({
     Conversation
   >;
 }) {
+  const queryClient = useQueryClient();
   const { mutateAsync: sendToCreativeChat } = useCreativeChatMutation({
     conversationId: conversation.id,
   });
 
   const { mutateAsync: sendToParametricChat } = useParametricChatMutation({
+    conversationId: conversation.id,
+  });
+  const { mutateAsync: sendToTextToCadChat } = useTextToCadChatMutation({
     conversationId: conversation.id,
   });
 
@@ -810,8 +946,18 @@ export function useRetryMessageMutation({
         current_message_leaf_id: id,
       });
 
+      const parentMessage = queryClient
+        .getQueryData<Message[]>(['messages', conversation.id])
+        ?.find((message) => message.id === id);
+
       if (conversation.type === 'creative') {
         sendToCreativeChat({
+          model: runtimeModel,
+          messageId: id,
+          conversationId: conversation.id,
+        });
+      } else if (shouldUseTextToCad(parentMessage?.content)) {
+        sendToTextToCadChat({
           model: runtimeModel,
           messageId: id,
           conversationId: conversation.id,
@@ -916,24 +1062,21 @@ export function useUpscaleMutation({
         });
       }
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mesh`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${
-              (await supabase.auth.getSession()).data.session?.access_token
-            }`,
-          },
-          body: JSON.stringify({
-            action: 'upscale',
-            meshId,
-            conversationId: conversation.id,
-            parentMessageId,
-          }),
+      const response = await fetch(getSupabaseFunctionUrl('mesh'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
         },
-      );
+        body: JSON.stringify({
+          action: 'upscale',
+          meshId,
+          conversationId: conversation.id,
+          parentMessageId,
+        }),
+      });
 
       if (!response.ok) {
         throw new Error('Failed to upscale');

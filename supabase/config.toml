@@ -71,6 +71,18 @@ verify_jwt = true
 import_map = "./functions/creative-chat/deno.json"
 entrypoint = "./functions/creative-chat/index.ts"
 
+[functions.cad-chat]
+enabled = true
+verify_jwt = true
+import_map = "./functions/cad-chat/deno.json"
+entrypoint = "./functions/cad-chat/index.ts"
+
+[functions.cad-worker-callback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/cad-worker-callback/deno.json"
+entrypoint = "./functions/cad-worker-callback/index.ts"
+
 [storage.buckets.meshes]
 public = false
 
@@ -78,6 +90,9 @@ public = false
 public = false
 
 [storage.buckets.previews]
+public = false
+
+[storage.buckets.cad-artifacts]
 public = false
 
 [db.migrations]

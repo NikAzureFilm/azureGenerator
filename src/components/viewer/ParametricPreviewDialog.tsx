@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { ImageGallery } from '@/components/viewer/ImageGallery';
 import { OpenSCADPreview } from './OpenSCADViewer';
+import { CadJobPreview } from './CadJobPreview';
 import OpenSCADError from '@/lib/OpenSCADError';
 import {
   Sheet,
@@ -179,6 +180,62 @@ export function ParametricPreviewDialog({
                   currentOutput={currentOutput}
                   dxfExporter={dxfExporter}
                 />
+              </div>
+            </SheetPrimitive.Content>
+          </SheetPrimitive.Portal>
+        </Sheet>
+      )}
+      {currentMessage.content.cadJob && !currentMessage.content.artifact && (
+        <Sheet open={open} onOpenChange={handleOpenChange}>
+          <SheetPrimitive.Portal>
+            <SheetPrimitive.Content
+              className={cn(
+                'fixed z-50 shadow-[0_0_10px_rgba(0,0,0,0.5)] transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out',
+                'inset-x-0 bottom-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
+                'rounded-t-3xl bg-adam-bg-secondary-dark',
+              )}
+              style={{
+                height: calculateHeight(),
+              }}
+            >
+              <SheetHeader className="hidden">
+                <SheetTitle>STEP CAD Preview</SheetTitle>
+                <SheetDescription>STEP CAD Preview</SheetDescription>
+              </SheetHeader>
+              <SheetPrimitive.Close
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                className="flex w-full justify-center rounded-sm opacity-70 transition-opacity hover:opacity-100"
+              >
+                <svg
+                  width="32"
+                  height="32"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M21.5262 10.75L11.9999 16L2.47363 10.75"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeWidth="2"
+                    className="text-adam-neutral-400"
+                  />
+                </svg>
+              </SheetPrimitive.Close>
+              <div className="mx-auto flex h-full w-full max-w-xl flex-col items-center pb-6">
+                <div className="h-[70dvh] min-h-[70dvh] w-full px-4">
+                  <div className="h-full w-full overflow-hidden rounded-xl">
+                    <CadJobPreview
+                      cadJob={currentMessage.content.cadJob}
+                      color="#F8248A"
+                      onOutputChange={onOutputChange}
+                      isMobile={true}
+                      backgroundColor="#212121"
+                    />
+                  </div>
+                </div>
               </div>
             </SheetPrimitive.Content>
           </SheetPrimitive.Portal>

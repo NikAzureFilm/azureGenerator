@@ -3,6 +3,15 @@ import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 
+const AUTH_ROUTE_PATHS = new Set([
+  '/signin',
+  '/signup',
+  '/signup-email',
+  '/reset-password',
+  '/confirm-email',
+  '/update-password',
+]);
+
 interface AuthGuardProps {
   children: React.ReactNode;
 }
@@ -16,6 +25,10 @@ export function AuthGuard({ children }: AuthGuardProps) {
     if (!isLoading && !session && !user) {
       // Capture current path for redirect after authentication
       // Only include pathname and search to avoid security issues
+      if (AUTH_ROUTE_PATHS.has(location.pathname)) {
+        return;
+      }
+
       const currentPath = location.pathname + location.searchStr;
       const search = currentPath !== '/' ? { redirect: currentPath } : {};
 

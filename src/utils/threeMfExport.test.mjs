@@ -155,6 +155,60 @@ function getModelBounds(modelXml) {
   return bounds;
 }
 
+function getMaterialColors(modelXml) {
+  return [
+    ...modelXml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g),
+  ].map((match) => match[1].toUpperCase());
+}
+
+function getTriangleMaterialColors(modelXml) {
+  const materialColors = getMaterialColors(modelXml);
+  return [...modelXml.matchAll(/<triangle\b([^>]*)\/>/g)].map((match) => {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+        attributeMatch[1],
+        attributeMatch[2],
+      ]),
+    );
+    return materialColors[Number(attributes.p1 ?? 0)];
+  });
+}
+
+function countSameDirectionSharedEdges(modelXml) {
+  const edgeUses = new Map();
+  for (const [triangleIndex, match] of [
+    ...modelXml.matchAll(/<triangle\b([^>]*)\/>/g),
+  ].entries()) {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((attributeMatch) => [
+        attributeMatch[1],
+        attributeMatch[2],
+      ]),
+    );
+    const vertices = [
+      Number(attributes.v1),
+      Number(attributes.v2),
+      Number(attributes.v3),
+    ];
+    for (const [a, b] of [
+      [vertices[0], vertices[1]],
+      [vertices[1], vertices[2]],
+      [vertices[2], vertices[0]],
+    ]) {
+      const key = [a, b].sort((left, right) => left - right).join('-');
+      const uses = edgeUses.get(key) ?? [];
+      uses.push({ triangleIndex, a, b });
+      edgeUses.set(key, uses);
+    }
+  }
+
+  return [...edgeUses.values()].filter(
+    (uses) =>
+      uses.length === 2 &&
+      !(uses[0].a === uses[1].b && uses[0].b === uses[1].a),
+  ).length;
+}
+
 function installFakeCanvasDocument() {
   const previousDocument = globalThis.document;
   globalThis.document = {
@@ -211,6 +265,28 @@ function createDataTexture(width, height, getPixelColor) {
   });
 }
 
+function assertBambuPrintableTopology(modelXml, message) {
+  const topology = analyzeThreeMfMeshTopology(modelXml);
+  assert.equal(
+    topology.invalidVertexReferenceCount,
+    0,
+    `${message}: invalid vertex references`,
+  );
+  assert.equal(
+    topology.degenerateTriangleCount,
+    0,
+    `${message}: degenerate triangles`,
+  );
+  assert.equal(topology.boundaryEdges, 0, `${message}: boundary edges`);
+  assert.equal(topology.overSharedEdges, 0, `${message}: over-shared edges`);
+  assert.equal(
+    countSameDirectionSharedEdges(modelXml),
+    0,
+    `${message}: same-direction shared edges`,
+  );
+  return topology;
+}
+
 assert.equal(clampThreeMfColorCount(0), 1);
 assert.equal(clampThreeMfColorCount(4), 4);
 assert.equal(clampThreeMfColorCount(20), 16);
@@ -264,14 +340,11 @@ const projectSettings = JSON.parse(
   buildThreeMfProjectSettingsConfig(['#112233', '#AABBCC']),
 );
 assert.deepEqual(projectSettings.filament_colour, ['#112233', '#AABBCC']);
-assert.deepEqual(projectSettings.default_filament_colour, [
-  '#112233',
-  '#AABBCC',
-]);
+assert.deepEqual(projectSettings.default_filament_colour, ['', '']);
 assert.deepEqual(projectSettings.filament_type, ['PLA', 'PLA']);
 assert.deepEqual(projectSettings.filament_settings_id, [
-  'Generic PLA',
-  'Generic PLA',
+  'Bambu PLA Basic @BBL P1P',
+  'Bambu PLA Basic @BBL P1P',
 ]);
 assert.deepEqual(projectSettings.filament_is_support, ['0', '0']);
 assert.deepEqual(projectSettings.filament_soluble, ['0', '0']);
@@ -282,7 +355,9 @@ assert.deepEqual(projectSettings.filament_minimal_purge_on_wipe_tower, [
 assert.equal(projectSettings.name, 'project_settings');
 assert.equal(projectSettings.from, 'project');
 assert.equal(projectSettings.single_extruder_multi_material, '1');
-assert.deepEqual(projectSettings.filament_vendor, ['Generic', 'Generic']);
+assert.equal(projectSettings.printer_model, 'Bambu Lab P1P');
+assert.equal(projectSettings.printer_settings_id, 'Bambu Lab P1P 0.4 nozzle');
+assert.deepEqual(projectSettings.filament_vendor, ['Bambu Lab', 'Bambu Lab']);
 assert.deepEqual(projectSettings.filament_diameter, ['1.75', '1.75']);
 assert.deepEqual(projectSettings.nozzle_temperature, ['220', '220']);
 assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
@@ -290,6 +365,18 @@ assert.deepEqual(projectSettings.nozzle_temperature_initial_layer, [
   '220',
 ]);
 assert.deepEqual(projectSettings.nozzle_diameter, ['0.4']);
+assert.deepEqual(projectSettings.flush_volumes_matrix, [
+  '0',
+  '140',
+  '140',
+  '0',
+]);
+assert.deepEqual(projectSettings.flush_volumes_vector, [
+  '140',
+  '140',
+  '140',
+  '140',
+]);
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -331,7 +418,23 @@ assert.deepEqual(entryNames, [
 ]);
 
 const rootModelXml = await getZipText(entries, '3D/3dmodel.model');
+assert.match(
+  rootModelXml,
+  /<metadata name="Application">BambuStudio-01\.08\.02\.56<\/metadata>/,
+);
+assert.doesNotMatch(
+  rootModelXml,
+  /<metadata name="Application">AzureFilm Generator<\/metadata>/,
+);
+assert.match(
+  rootModelXml,
+  /<metadata name="BambuStudio:3mfVersion">1<\/metadata>/,
+);
 assert.match(rootModelXml, /<metadata name="Title">red-part<\/metadata>/);
+assert.match(
+  rootModelXml,
+  /<metadata name="Designer">AzureFilm Generator<\/metadata>/,
+);
 assert.match(
   rootModelXml,
   /<component p:path="\/3D\/Objects\/Object_1_1\.model" objectid="1"/,
@@ -360,7 +463,7 @@ const packagedSettings = JSON.parse(
   await settingsEntry.getData(new TextWriter()),
 );
 assert.deepEqual(packagedSettings.filament_colour, ['#FF0000']);
-assert.deepEqual(packagedSettings.default_filament_colour, ['#FF0000']);
+assert.deepEqual(packagedSettings.default_filament_colour, ['']);
 assert.deepEqual(packagedSettings.filament_is_support, ['0']);
 assert.equal(packagedSettings.name, 'project_settings');
 assert.match(
@@ -460,6 +563,10 @@ assert.match(
   squareModelXml,
   /<triangle v1="0" v2="2" v3="3"[^>]+paint_color="4"\/>/,
 );
+assert.deepEqual(getTriangleMaterialColors(squareModelXml), [
+  '#00FF00',
+  '#00FF00',
+]);
 await squareZipReader.close();
 
 const splitSquareScene = new THREE.Scene();
@@ -488,8 +595,11 @@ const splitSquareModelXml = await getMeshModelXml(
   await splitSquareZipReader.getEntries(),
 );
 assert.equal(splitSquareModelXml.match(/<vertex /g)?.length, 4);
-assert.match(splitSquareModelXml, /<triangle v1="0" v2="1" v3="2"/);
-assert.match(splitSquareModelXml, /<triangle v1="0" v2="2" v3="3"/);
+assert.equal(splitSquareModelXml.match(/<triangle /g)?.length, 2);
+assert.deepEqual(getTriangleMaterialColors(splitSquareModelXml), [
+  '#00FF00',
+  '#00FF00',
+]);
 await splitSquareZipReader.close();
 
 const noisySurfaceScene = new THREE.Scene();
@@ -591,14 +701,105 @@ const noisySlotZipReader = new ZipReader(new BlobReader(noisySlotBlob));
 const noisySlotEntries = await noisySlotZipReader.getEntries();
 const noisySlotModelXml = await getMeshModelXml(noisySlotEntries);
 const noisySlotStats = getMaterialRegionStats(noisySlotModelXml);
-assert.equal(noisySlotStats.materialTransitionEdges, 0);
-assert.equal(noisySlotStats.componentCount, 1);
-assert.equal(noisySlotStats.smallComponentCount, 0);
+assert.equal(noisySlotStats.materialTransitionEdges, 33);
+assert.equal(noisySlotStats.componentCount, 13);
+assert.equal(noisySlotStats.smallComponentCount, 12);
+assert.deepEqual(
+  new Set(getTriangleMaterialColors(noisySlotModelXml)),
+  new Set(['#5B7F22', '#FF0000', '#0000FF', '#FFFF00']),
+);
 const noisySlotSettings = JSON.parse(
   await getZipText(noisySlotEntries, 'Metadata/project_settings.config'),
 );
-assert.deepEqual(noisySlotSettings.filament_colour, ['#5B7F22']);
+assert.deepEqual(
+  new Set(noisySlotSettings.filament_colour),
+  new Set(['#5B7F22', '#FF0000', '#0000FF', '#FFFF00']),
+);
 await noisySlotZipReader.close();
+
+const faceColorPreservationScene = new THREE.Scene();
+const faceColorPreservationGeometry = new THREE.BufferGeometry();
+const faceColorPreservationPositions = [];
+const faceColorPreservationIndexes = [];
+const faceColorPreservationGroups = [];
+const faceColorGridSize = 8;
+const faceColorCells = new Map([
+  ['1,1', 1],
+  ['4,2', 2],
+  ['6,6', 3],
+]);
+for (let y = 0; y <= faceColorGridSize; y += 1) {
+  for (let x = 0; x <= faceColorGridSize; x += 1) {
+    faceColorPreservationPositions.push(x, y, 0);
+  }
+}
+const faceColorVertexIndex = (x, y) => y * (faceColorGridSize + 1) + x;
+for (let y = 0; y < faceColorGridSize; y += 1) {
+  for (let x = 0; x < faceColorGridSize; x += 1) {
+    const start = faceColorPreservationIndexes.length;
+    const materialIndex = faceColorCells.get(`${x},${y}`) ?? 0;
+    faceColorPreservationIndexes.push(
+      faceColorVertexIndex(x, y),
+      faceColorVertexIndex(x + 1, y),
+      faceColorVertexIndex(x + 1, y + 1),
+      faceColorVertexIndex(x, y),
+      faceColorVertexIndex(x + 1, y + 1),
+      faceColorVertexIndex(x, y + 1),
+    );
+    faceColorPreservationGroups.push({
+      start,
+      count: 6,
+      materialIndex,
+    });
+  }
+}
+faceColorPreservationGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(faceColorPreservationPositions, 3),
+);
+faceColorPreservationGeometry.setIndex(faceColorPreservationIndexes);
+faceColorPreservationGeometry.clearGroups();
+for (const group of faceColorPreservationGroups) {
+  faceColorPreservationGeometry.addGroup(
+    group.start,
+    group.count,
+    group.materialIndex,
+  );
+}
+faceColorPreservationScene.add(
+  new THREE.Mesh(faceColorPreservationGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#2038ff' }),
+    new THREE.MeshStandardMaterial({ color: '#ff2020' }),
+    new THREE.MeshStandardMaterial({ color: '#20d850' }),
+    new THREE.MeshStandardMaterial({ color: '#ffd200' }),
+  ]),
+);
+const faceColorPreservationBlob = await createThreeMfBlobFromScene({
+  scene: faceColorPreservationScene,
+  filename: 'face-color-preservation',
+  colorCount: 4,
+});
+const faceColorPreservationZipReader = new ZipReader(
+  new BlobReader(faceColorPreservationBlob),
+);
+const faceColorPreservationModelXml = await getMeshModelXml(
+  await faceColorPreservationZipReader.getEntries(),
+);
+const faceColorPreservationTriangleColors = getTriangleMaterialColors(
+  faceColorPreservationModelXml,
+);
+assert.deepEqual(
+  new Set(faceColorPreservationTriangleColors),
+  new Set(['#2038FF', '#FF2020', '#20D850', '#FFD200']),
+);
+for (const accentColor of ['#FF2020', '#20D850', '#FFD200']) {
+  assert.equal(
+    faceColorPreservationTriangleColors.filter((color) => color === accentColor)
+      .length,
+    2,
+  );
+}
+await faceColorPreservationZipReader.close();
 
 const semanticMapScene = new THREE.Scene();
 const semanticMapGeometry = new THREE.BufferGeometry();
@@ -756,9 +957,198 @@ try {
   );
   assert.deepEqual(texturedTriangleSettings.filament_colour, ['#00FF00']);
   await texturedTriangleZipReader.close();
+
+  const flipYFalseTextureScene = new THREE.Scene();
+  const flipYFalseTextureGeometry = new THREE.BufferGeometry();
+  flipYFalseTextureGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0], 3),
+  );
+  flipYFalseTextureGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], 2),
+  );
+  const flipYFalseTexture = createDataTexture(2, 2, (x, y) => {
+    if (x === 0 && y === 0) return [255, 0, 0];
+    if (x === 0 && y === 1) return [0, 255, 0];
+    return [0, 0, 0];
+  });
+  flipYFalseTexture.flipY = false;
+  flipYFalseTextureScene.add(
+    new THREE.Mesh(
+      flipYFalseTextureGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: flipYFalseTexture,
+      }),
+    ),
+  );
+
+  const flipYFalseTextureBlob = await createThreeMfBlobFromScene({
+    scene: flipYFalseTextureScene,
+    filename: 'texture-flipy-false',
+    colorCount: 2,
+    targetMaterialPalette: ['#FF0000', '#00FF00'],
+  });
+  const flipYFalseTextureZipReader = new ZipReader(
+    new BlobReader(flipYFalseTextureBlob),
+  );
+  const flipYFalseTextureSettings = JSON.parse(
+    await getZipText(
+      await flipYFalseTextureZipReader.getEntries(),
+      'Metadata/project_settings.config',
+    ),
+  );
+  assert.deepEqual(flipYFalseTextureSettings.filament_colour, ['#FF0000']);
+  await flipYFalseTextureZipReader.close();
+
+  const textureDetailScene = new THREE.Scene();
+  const textureDetailGeometry = new THREE.BufferGeometry();
+  textureDetailGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([0, 0, 0, 100, 0, 0, 0, 100, 0], 3),
+  );
+  textureDetailGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2),
+  );
+  const textureDetailMap = createDataTexture(128, 128, (x, y) =>
+    x >= 16 && x < 64 && y >= 16 && y < 64 ? [255, 255, 255] : [0, 255, 0],
+  );
+  textureDetailMap.flipY = false;
+  textureDetailScene.add(
+    new THREE.Mesh(
+      textureDetailGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: textureDetailMap,
+      }),
+    ),
+  );
+
+  const textureDetailBlob = await createThreeMfBlobFromScene({
+    scene: textureDetailScene,
+    filename: 'texture-detail-subdivision',
+    colorCount: 2,
+    targetMaterialPalette: ['#00FF00', '#FFFFFF'],
+  });
+  const textureDetailZipReader = new ZipReader(
+    new BlobReader(textureDetailBlob),
+  );
+  const textureDetailEntries = await textureDetailZipReader.getEntries();
+  const textureDetailModelXml = await getMeshModelXml(textureDetailEntries);
+  const textureDetailSettings = JSON.parse(
+    await getZipText(textureDetailEntries, 'Metadata/project_settings.config'),
+  );
+  assert.deepEqual(textureDetailSettings.filament_colour, [
+    '#00FF00',
+    '#FFFFFF',
+  ]);
+  assert.deepEqual(
+    new Set(getTriangleMaterialColors(textureDetailModelXml)),
+    new Set(['#00FF00', '#FFFFFF']),
+  );
+  assert.ok(
+    textureDetailModelXml.match(/<triangle /g).length > 1,
+    'large textured triangles are subdivided before color assignment',
+  );
+  await textureDetailZipReader.close();
+
+  const closedTextureDetailScene = new THREE.Scene();
+  const closedTextureDetailGeometry = new THREE.BufferGeometry();
+  closedTextureDetailGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [0, 0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 12],
+      3,
+    ),
+  );
+  closedTextureDetailGeometry.setAttribute(
+    'uv',
+    new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 0.01, 0, 0.02], 2),
+  );
+  closedTextureDetailGeometry.setIndex([
+    0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2,
+  ]);
+  const closedTextureDetailMap = createDataTexture(128, 128, (x) =>
+    x < 64 ? [0, 255, 0] : [255, 255, 255],
+  );
+  closedTextureDetailMap.flipY = false;
+  closedTextureDetailScene.add(
+    new THREE.Mesh(
+      closedTextureDetailGeometry,
+      new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map: closedTextureDetailMap,
+      }),
+    ),
+  );
+
+  const closedTextureDetailBlob = await createThreeMfBlobFromScene({
+    scene: closedTextureDetailScene,
+    filename: 'closed-texture-detail-topology',
+    colorCount: 2,
+    targetMaterialPalette: ['#00FF00', '#FFFFFF'],
+  });
+  const closedTextureDetailZipReader = new ZipReader(
+    new BlobReader(closedTextureDetailBlob),
+  );
+  const closedTextureDetailModelXml = await getMeshModelXml(
+    await closedTextureDetailZipReader.getEntries(),
+  );
+  const closedTextureDetailTopology = assertBambuPrintableTopology(
+    closedTextureDetailModelXml,
+    'closed textured subdivision',
+  );
+  assert.ok(
+    closedTextureDetailTopology.triangleCount > 4,
+    'closed textured geometry is still subdivided for color detail',
+  );
+  assert.deepEqual(
+    new Set(getTriangleMaterialColors(closedTextureDetailModelXml)),
+    new Set(['#00FF00', '#FFFFFF']),
+  );
+  await closedTextureDetailZipReader.close();
 } finally {
   restoreCanvasDocument();
 }
+
+const manifoldFilterColorScene = new THREE.Scene();
+const manifoldFilterColorGeometry = new THREE.BoxGeometry(10, 12, 14, 12, 12, 12);
+manifoldFilterColorScene.add(
+  new THREE.Mesh(manifoldFilterColorGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+    new THREE.MeshStandardMaterial({ color: '#ffffff' }),
+    new THREE.MeshStandardMaterial({ color: '#111111' }),
+    new THREE.MeshStandardMaterial({ color: '#ffff00' }),
+  ]),
+);
+const manifoldFilterColorBlob = await createThreeMfBlobFromScene({
+  scene: manifoldFilterColorScene,
+  filename: 'manifold-filter-color-box',
+  colorCount: 6,
+});
+const manifoldFilterColorZipReader = new ZipReader(
+  new BlobReader(manifoldFilterColorBlob),
+);
+const manifoldFilterColorModelXml = await getMeshModelXml(
+  await manifoldFilterColorZipReader.getEntries(),
+);
+const manifoldFilterColorTopology = assertBambuPrintableTopology(
+  manifoldFilterColorModelXml,
+  'manifold filter color box',
+);
+assert.ok(
+  manifoldFilterColorTopology.triangleCount >= 512,
+  'large color box exercises the async repair/color transfer path',
+);
+assert.deepEqual(
+  new Set(getTriangleMaterialColors(manifoldFilterColorModelXml)),
+  new Set(['#FF0000', '#00FF00', '#0000FF', '#FFFFFF', '#111111', '#FFFF00']),
+);
+await manifoldFilterColorZipReader.close();
 
 const badgeRecoveryScene = new THREE.Scene();
 const badgeRecoveryGeometry = new THREE.BufferGeometry();
@@ -769,13 +1159,15 @@ badgeRecoveryGeometry.setAttribute(
       -0.2, -0.2, 0, 0.2, -0.2, 0, 0, 0.2, 0, -0.2, -0.2, 0.35, 0.2, -0.2, 0.35,
       0, 0.2, 0.35, -0.9, -0.9, 0, -0.7, -0.9, 0, -0.8, -0.7, 0, 0.35, -0.2, 0,
       0.55, -0.2, 0, 0.45, 0, 0, 0.6, -0.2, 0, 0.8, -0.2, 0, 0.7, 0, 0, 0.25, 0,
-      0,
+      0, -0.25, -0.15, 0.35, 0.25, -0.15, 0.35, 0, 0.1, 0.35, -0.22, -0.12,
+      -0.35, 0.22, -0.12, -0.35, 0, 0.08, -0.35,
     ],
     3,
   ),
 );
 badgeRecoveryGeometry.setIndex([
-  0, 1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13, 14, 9, 11, 15,
+  0, 1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13, 14, 9, 11, 15, 16, 17, 18, 19,
+  20, 21,
 ]);
 badgeRecoveryGeometry.addGroup(0, 3, 0);
 badgeRecoveryGeometry.addGroup(3, 3, 0);
@@ -783,6 +1175,8 @@ badgeRecoveryGeometry.addGroup(6, 3, 0);
 badgeRecoveryGeometry.addGroup(9, 3, 1);
 badgeRecoveryGeometry.addGroup(12, 3, 2);
 badgeRecoveryGeometry.addGroup(15, 3, 0);
+badgeRecoveryGeometry.addGroup(18, 3, 2);
+badgeRecoveryGeometry.addGroup(21, 3, 2);
 badgeRecoveryScene.add(
   new THREE.Mesh(badgeRecoveryGeometry, [
     new THREE.MeshStandardMaterial({ color: '#ECEDEC' }),
@@ -803,7 +1197,8 @@ const badgeRecoveryModelXml = await getMeshModelXml(
 const badgeRecoveryIndexes = [
   ...badgeRecoveryModelXml.matchAll(/\bp1="(\d+)"/g),
 ].map((match) => Number(match[1]));
-assert.deepEqual(badgeRecoveryIndexes, [2, 0, 0, 1, 3, 0]);
+assert.deepEqual(badgeRecoveryIndexes.slice(0, 8), [2, 0, 0, 1, 3, 0, 0, 0]);
+assert.equal(badgeRecoveryIndexes.length, 10);
 await badgeRecoveryZipReader.close();
 
 const namedMaterialScene = new THREE.Scene();
@@ -957,6 +1352,36 @@ assert.equal(cubeTopology.overSharedEdges, 0);
 assert.equal(cubeTopology.degenerateTriangleCount, 0);
 await cubeZipReader.close();
 
+const openTetraScene = new THREE.Scene();
+const openTetraGeometry = new THREE.BufferGeometry();
+openTetraGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10], 3),
+);
+openTetraGeometry.setIndex([0, 1, 3, 1, 2, 3, 2, 0, 3]);
+openTetraScene.add(
+  new THREE.Mesh(
+    openTetraGeometry,
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+  ),
+);
+
+const openTetraBlob = await createThreeMfBlobFromScene({
+  scene: openTetraScene,
+  filename: 'sealed-open-tetra',
+  colorCount: 1,
+});
+const openTetraZipReader = new ZipReader(new BlobReader(openTetraBlob));
+const openTetraModelXml = await getMeshModelXml(
+  await openTetraZipReader.getEntries(),
+);
+const openTetraTopology = assertBambuPrintableTopology(
+  openTetraModelXml,
+  'sealed open tetra',
+);
+assert.equal(openTetraTopology.triangleCount, 4);
+await openTetraZipReader.close();
+
 const closeVertexTopologyXml = buildThreeMfModelXml({
   modelName: 'close-vertex-topology',
   vertices: [
@@ -1014,18 +1439,14 @@ const repairedThreeMfBlob = await createThreeMfBlobFromScene({
 const repairedZipReader = new ZipReader(new BlobReader(repairedThreeMfBlob));
 const repairedEntries = await repairedZipReader.getEntries();
 const repairedModelXml = await getMeshModelXml(repairedEntries);
-assert.equal(repairedModelXml.match(/<triangle /g)?.length, 2);
+const repairedTopology = assertBambuPrintableTopology(
+  repairedModelXml,
+  'repaired color model',
+);
+assert.equal(repairedTopology.triangleCount, 4);
 assert.match(repairedModelXml, /<m:color color="#FF0000FF"\/>/);
 assert.match(repairedModelXml, /<m:color color="#00FF00FF"\/>/);
 assert.doesNotMatch(repairedModelXml, /<m:color color="#0000FFFF"\/>/);
-assert.match(
-  repairedModelXml,
-  /<triangle v1="0" v2="1" v3="2" pid="1" p1="0" p2="0" p3="0" paint_color="4"\/>/,
-);
-assert.match(
-  repairedModelXml,
-  /<triangle v1="1" v2="0" v3="3" pid="1" p1="1" p2="1" p3="1" paint_color="8"\/>/,
-);
 const repairedSettingsEntry = repairedEntries.find(
   (entry) => entry.filename === 'Metadata/project_settings.config',
 );
@@ -1035,6 +1456,61 @@ const repairedSettings = JSON.parse(
 );
 assert.deepEqual(repairedSettings.filament_colour, ['#FF0000', '#00FF00']);
 await repairedZipReader.close();
+
+const nearDuplicateEdgeScene = new THREE.Scene();
+const nearDuplicateEdgeGeometry = new THREE.BufferGeometry();
+nearDuplicateEdgeGeometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(
+    [
+      0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10, 0.004, 0, 0, 10.004, 0, 0, 10, 10,
+      0,
+    ],
+    3,
+  ),
+);
+nearDuplicateEdgeGeometry.setIndex([0, 1, 2, 1, 0, 3, 4, 5, 6]);
+nearDuplicateEdgeGeometry.clearGroups();
+nearDuplicateEdgeGeometry.addGroup(0, 3, 0);
+nearDuplicateEdgeGeometry.addGroup(3, 3, 1);
+nearDuplicateEdgeGeometry.addGroup(6, 3, 2);
+nearDuplicateEdgeScene.add(
+  new THREE.Mesh(nearDuplicateEdgeGeometry, [
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+    new THREE.MeshStandardMaterial({ color: '#00ff00' }),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+  ]),
+);
+
+const nearDuplicateEdgeBlob = await createThreeMfBlobFromScene({
+  scene: nearDuplicateEdgeScene,
+  filename: 'near-duplicate-edge-repair',
+  colorCount: 3,
+});
+const nearDuplicateEdgeZipReader = new ZipReader(
+  new BlobReader(nearDuplicateEdgeBlob),
+);
+const nearDuplicateEdgeEntries = await nearDuplicateEdgeZipReader.getEntries();
+const nearDuplicateEdgeModelXml = await getMeshModelXml(
+  nearDuplicateEdgeEntries,
+);
+const nearDuplicateEdgeTopology = assertBambuPrintableTopology(
+  nearDuplicateEdgeModelXml,
+  'near duplicate edge repair',
+);
+assert.equal(nearDuplicateEdgeTopology.triangleCount, 4);
+assert.doesNotMatch(nearDuplicateEdgeModelXml, /<m:color color="#0000FFFF"\/>/);
+const nearDuplicateEdgeSettings = JSON.parse(
+  await getZipText(
+    nearDuplicateEdgeEntries,
+    'Metadata/project_settings.config',
+  ),
+);
+assert.deepEqual(nearDuplicateEdgeSettings.filament_colour, [
+  '#FF0000',
+  '#00FF00',
+]);
+await nearDuplicateEdgeZipReader.close();
 
 const degenerateRepairScene = new THREE.Scene();
 const degenerateRepairGeometry = new THREE.BufferGeometry();
@@ -1109,7 +1585,11 @@ const coincidentTriangleZipReader = new ZipReader(
 const coincidentTriangleModelXml = await getMeshModelXml(
   await coincidentTriangleZipReader.getEntries(),
 );
-assert.equal(coincidentTriangleModelXml.match(/<triangle /g)?.length, 3);
+const coincidentTriangleTopology = assertBambuPrintableTopology(
+  coincidentTriangleModelXml,
+  'coincident triangle repair',
+);
+assert.equal(coincidentTriangleTopology.triangleCount, 4);
 await coincidentTriangleZipReader.close();
 
 const recolorAfterRepairScene = new THREE.Scene();
@@ -1168,7 +1648,12 @@ const invalidModelXml = buildThreeMfModelXml({
   ],
   triangles: [{ v1: 0, v2: 1, v3: 2, colorIndex: 0 }],
   palette: ['#FF0000'],
-}).replace('p1="0" p2="0" p3="0"', 'p1="1" p2="0" p3="0"');
+})
+  .replace(
+    '<metadata name="Title">',
+    '<metadata name="Application">BambuStudio-01.08.02.56</metadata>\n  <metadata name="Title">',
+  )
+  .replace('p1="0" p2="0" p3="0"', 'p1="1" p2="0" p3="0"');
 
 const invalidZipWriter = new ZipWriter(new BlobWriter('model/3mf'));
 await invalidZipWriter.add(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Content, Message, Model, normalizeCreativeModel } from '@shared/types';
 import TextAreaChat from '@/components/TextAreaChat';
@@ -24,13 +24,19 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
-import { Share } from 'lucide-react';
+import { MessageCircle, Pencil, Share } from 'lucide-react';
 import { useMeshData } from '@/hooks/useMeshData';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
+import {
+  getComposerQuickActionDraft,
+  shouldShowComposerQuickActions,
+  type ComposerQuickAction,
+} from '@/utils/chatComposerActions';
+import { getComposerCadBackendHint } from '@/utils/cadBackendSelection';
 
 interface ChatSectionProps {
   messages: TreeNode<Message>[];
@@ -69,6 +75,10 @@ export function ChatSection({
 }: ChatSectionProps) {
   const isMobile = useIsMobile();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [composerFocusRequest, setComposerFocusRequest] = useState<{
+    id: number;
+    draft?: string;
+  }>();
   const { conversation, updateConversation } = useConversation();
   const { session, billing } = useAuth();
   const totalTokens = billing?.tokens.total ?? 0;
@@ -158,6 +168,24 @@ export function ChatSection({
       lastMessage?.content?.suggestions ||
       []
     : [];
+  const cadBackendHint = getComposerCadBackendHint(lastMessage);
+  const showComposerQuickActions = shouldShowComposerQuickActions({
+    lastMessage,
+    isLoading,
+    limitReached,
+  });
+
+  const handleComposerQuickAction = useCallback(
+    (action: ComposerQuickAction) => {
+      const draft = getComposerQuickActionDraft(action);
+      setComposerFocusRequest((current) => ({
+        id: (current?.id ?? 0) + 1,
+        ...(draft !== undefined ? { draft } : {}),
+      }));
+      requestAnimationFrame(scrollToBottom);
+    },
+    [scrollToBottom],
+  );
 
   const handleSuggestionSelect = useCallback(
     (suggestion: string) => {
@@ -309,6 +337,30 @@ export function ChatSection({
       </ScrollArea>
       {onSendMessage && (
         <div className="w-full min-w-52 max-w-xl bg-transparent px-4 pb-6">
+          {showComposerQuickActions && (
+            <div className="flex flex-wrap gap-2 pb-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handleComposerQuickAction('continue')}
+                className="h-8 rounded-full border-adam-neutral-700 bg-adam-neutral-800 px-3 text-xs text-adam-text-primary hover:bg-adam-neutral-700 hover:text-white"
+              >
+                <MessageCircle className="mr-1.5 h-3.5 w-3.5" />
+                Continue
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handleComposerQuickAction('edit-output')}
+                className="h-8 rounded-full border-adam-neutral-700 bg-adam-neutral-800 px-3 text-xs text-adam-text-primary hover:bg-adam-neutral-700 hover:text-white"
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                Edit output
+              </Button>
+            </div>
+          )}
           <SuggestionPills
             disabled={limitReached}
             suggestions={suggestions}
@@ -330,6 +382,8 @@ export function ChatSection({
             }
             setImageGenerationModel={handleImageGenerationModelChange}
             conversation={conversation}
+            cadBackendHint={cadBackendHint}
+            composerFocusRequest={composerFocusRequest}
           />
         </div>
       )}

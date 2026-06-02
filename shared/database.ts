@@ -83,6 +83,63 @@ export type Database = {
           },
         ];
       };
+      cad_jobs: {
+        Row: {
+          artifacts: Json;
+          conversation_id: string;
+          created_at: string;
+          error: string | null;
+          id: string;
+          message_id: string | null;
+          prompt: Json;
+          status: Database['public']['Enums']['generation-status'];
+          updated_at: string;
+          user_id: string;
+          worker_request_id: string | null;
+        };
+        Insert: {
+          artifacts?: Json;
+          conversation_id: string;
+          created_at?: string;
+          error?: string | null;
+          id?: string;
+          message_id?: string | null;
+          prompt?: Json;
+          status?: Database['public']['Enums']['generation-status'];
+          updated_at?: string;
+          user_id: string;
+          worker_request_id?: string | null;
+        };
+        Update: {
+          artifacts?: Json;
+          conversation_id?: string;
+          created_at?: string;
+          error?: string | null;
+          id?: string;
+          message_id?: string | null;
+          prompt?: Json;
+          status?: Database['public']['Enums']['generation-status'];
+          updated_at?: string;
+          user_id?: string;
+          worker_request_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'cad_jobs_conversation_id_fkey';
+            columns: ['conversation_id'];
+            isOneToOne: false;
+            referencedRelation: 'conversations';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'cad_jobs_message_id_fkey';
+            columns: ['message_id'];
+            isOneToOne: false;
+            referencedRelation: 'messages';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       meshes: {
         Row: {
           conversation_id: string;

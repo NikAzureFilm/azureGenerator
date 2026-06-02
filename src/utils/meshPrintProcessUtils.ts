@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { GLTF, STLExporter, STLExporterOptionsBinary } from 'three-stdlib';
+import { STLExporter } from 'three-stdlib';
+import type { GLTF, STLExporterOptionsBinary } from 'three-stdlib';
 
 // Print processing constants
 const PRINT_CONSTANTS = {

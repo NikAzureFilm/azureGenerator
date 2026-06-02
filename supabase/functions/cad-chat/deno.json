@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "@shared/": "../../../shared/"
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-import-prefix", "no-unversioned-import"]
+    }
+  }
+}

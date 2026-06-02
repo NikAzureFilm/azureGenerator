@@ -42,12 +42,6 @@ const THREE_MF_COLOR_OPTIONS = Array.from(
   { length: MAX_THREE_MF_COLOR_COUNT },
   (_, index) => index + 1,
 );
-const DEFAULT_FOUR_COLOR_PRINT_PALETTE: ThreeMfTargetMaterialPalette = [
-  '#D8D8D2', // light silver
-  '#111111', // black
-  '#6E8E18', // green
-  '#FFD600', // yellow
-];
 
 function getThreeMfSemanticMaterialMap(
   value: unknown,
@@ -84,10 +78,8 @@ function getThreeMfSemanticMaterialMap(
 }
 
 function getThreeMfTargetMaterialPalette({
-  colorCount,
   semanticMaterialMap,
 }: {
-  colorCount: number;
   semanticMaterialMap: ThreeMfSemanticMaterialMap | null;
 }): ThreeMfTargetMaterialPalette | null {
   if (semanticMaterialMap?.triangleMaterialIds?.length) {
@@ -100,7 +92,7 @@ function getThreeMfTargetMaterialPalette({
     );
   }
 
-  return colorCount === 4 ? DEFAULT_FOUR_COLOR_PRINT_PALETTE : null;
+  return null;
 }
 
 // Reusable download menu items component
@@ -242,7 +234,6 @@ export function DownloadMenu({
             colorCount,
             semanticMaterialMap,
             targetMaterialPalette: getThreeMfTargetMaterialPalette({
-              colorCount,
               semanticMaterialMap,
             }),
           });
