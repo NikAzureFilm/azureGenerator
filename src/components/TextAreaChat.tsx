@@ -493,13 +493,14 @@ const CAD_BACKEND_OPTIONS: Array<{
   {
     id: 'openscad',
     label: 'SCAD',
-    description: 'Editable OpenSCAD CAD',
+    description:
+      'OpenSCAD source for editable parametric CAD and quick previews',
     Icon: Ruler,
   },
   {
     id: 'text-to-cad',
     label: 'STEP',
-    description: 'STEP-first text-to-CAD',
+    description: 'STEP-first build123d CAD for solid exports and CAD workflows',
     Icon: FileCode2,
   },
 ];
@@ -562,7 +563,7 @@ function CadBackendSelector({
       <DropdownMenuContent
         align="end"
         side="top"
-        className="flex w-64 flex-col gap-1 rounded-lg bg-adam-neutral-700 p-1"
+        className="flex w-80 flex-col gap-1 rounded-lg bg-adam-neutral-700 p-1"
         onClick={(e) => e.stopPropagation()}
       >
         {CAD_BACKEND_OPTIONS.map((option) => {
