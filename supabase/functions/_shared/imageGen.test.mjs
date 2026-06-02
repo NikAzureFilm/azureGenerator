@@ -51,3 +51,23 @@ assert.match(
   /const enforcedPrompt = enforce3DObjectPrompt\(promptText\);/,
   'Flux prompt provider should enforce 3D object output before enhancing prompts',
 );
+assert.match(
+  imageGenSource,
+  /watertight/i,
+  'mesh image instructions should request watertight printable forms',
+);
+assert.match(
+  imageGenSource,
+  /manifold/i,
+  'mesh image instructions should request manifold printable forms',
+);
+assert.match(
+  imageGenSource,
+  /minimum wall thickness/i,
+  'mesh image instructions should steer away from fragile, unprintable thin walls',
+);
+assert.match(
+  imageGenSource,
+  /print bed/i,
+  'mesh image instructions should ask for stable build-plate contact',
+);

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 import uuid
 from pathlib import Path
@@ -109,10 +110,10 @@ def runner_source() -> str:
             if model is None:
                 raise RuntimeError("gen_step() returned None")
             export_step(model, output_dir / "model.step")
-            try:
-                export_stl(model, output_dir / "model.stl")
-            except Exception:
-                pass
+            export_stl(model, output_dir / "model.stl")
+            stl_path = output_dir / "model.stl"
+            if not stl_path.exists() or stl_path.stat().st_size == 0:
+                raise RuntimeError("STL export did not produce a file")
             print(json.dumps({"ok": True}))
         except Exception as exc:
             print(json.dumps({
@@ -132,7 +133,7 @@ def run_build123d(job: JobRequest, job_dir: Path) -> dict[str, Any]:
     runner_path.write_text(runner_source(), encoding="utf-8")
 
     result = subprocess.run(
-        ["python", str(runner_path), str(source_path), str(job_dir)],
+        [sys.executable, str(runner_path), str(source_path), str(job_dir)],
         cwd=job_dir,
         capture_output=True,
         text=True,
@@ -147,6 +148,9 @@ def run_build123d(job: JobRequest, job_dir: Path) -> dict[str, Any]:
     step_path = job_dir / "model.step"
     if not step_path.exists() or step_path.stat().st_size == 0:
         raise RuntimeError("STEP export did not produce a file")
+    stl_path = job_dir / "model.stl"
+    if not stl_path.exists() or stl_path.stat().st_size == 0:
+        raise RuntimeError("STL export did not produce a file")
 
     return {
         "stdout": result.stdout,
@@ -196,10 +200,9 @@ def create_job(
     artifact_url = f"{base_url}/artifacts/{job_name}"
     artifacts: dict[str, str] = {
         "stepPath": f"{artifact_url}/model.step",
+        "stlPath": f"{artifact_url}/model.stl",
         "sourcePath": f"{artifact_url}/source.py",
     }
-    if (job_dir / "model.stl").exists():
-        artifacts["stlPath"] = f"{artifact_url}/model.stl"
 
     return {
         "requestId": job.jobId,

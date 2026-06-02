@@ -916,7 +916,6 @@ export function MeshPreview({ meshId }: { meshId: string }) {
                 hasPBRMaps={hasPBRMaps}
                 meshData={meshData}
                 gltf={gltf}
-                mesh={mesh}
                 brightness={brightness}
                 roughness={roughness}
                 normalIntensity={normalIntensity}
@@ -942,7 +941,6 @@ export function MeshPreview({ meshId }: { meshId: string }) {
             hasPBRMaps={hasPBRMaps}
             meshData={meshData}
             gltf={gltf}
-            mesh={mesh}
             brightness={brightness}
             roughness={roughness}
             normalIntensity={normalIntensity}

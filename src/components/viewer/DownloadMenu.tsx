@@ -100,7 +100,6 @@ export function DownloadMenu({
   hasPBRMaps,
   meshData,
   gltf,
-  mesh,
   brightness,
   roughness,
   normalIntensity,
@@ -109,7 +108,6 @@ export function DownloadMenu({
   hasPBRMaps: { [key: string]: boolean };
   meshData: MeshData;
   gltf: GLTF;
-  mesh: Blob;
   brightness: number;
   roughness: number;
   normalIntensity: number;
@@ -135,16 +133,6 @@ export function DownloadMenu({
   const [isDownloadingWithTextures, setIsDownloadingWithTextures] =
     useState(false);
   const [isDownloadingGLB, setIsDownloadingGLB] = useState(false);
-  const [isDownloadingFBX, setIsDownloadingFBX] = useState(false);
-
-  // Check if this model supports both GLB and FBX (quad topology models)
-  const isQuadModel = useMemo(() => {
-    return (
-      (meshData?.prompt.model === 'ultra' ||
-        meshData?.prompt.model === 'quality') &&
-      meshData?.file_type === 'fbx'
-    );
-  }, [meshData?.prompt.model, meshData?.file_type]);
 
   // Generate a safe filename for downloads
   const filename = useMemo(() => {
@@ -505,78 +493,6 @@ export function DownloadMenu({
     }, 0);
   }, [isGifReady, meshData, conversation.id, toast]);
 
-  const downloadWithTextures = useCallback(() => {
-    posthog.capture('3d_model_download', {
-      meshId: meshData.id,
-      model_name: meshData?.prompt.model || 'Unknown Model',
-      format: 'ZIP_WITH_TEXTURES',
-      conversation_id: conversation.id,
-      texture_types: Object.entries(hasPBRMaps)
-        .filter(([_, hasMap]) => hasMap)
-        .map(([type, _]) => type),
-    });
-
-    setIsDownloadingWithTextures(true);
-
-    setTimeout(async () => {
-      try {
-        const fileExtension = meshData?.file_type || 'glb';
-
-        const success = await extractAndDownloadTextures(
-          gltf,
-          mesh,
-          filename,
-          fileExtension,
-        );
-
-        if (!success) {
-          throw new Error('Texture extraction returned false');
-        }
-      } catch (error) {
-        Sentry.captureException(error, {
-          extra: {
-            meshId: meshData.id,
-            format: 'ZIP_WITH_TEXTURES',
-            error: error instanceof Error ? error.message : 'Unknown error',
-            texture_types: Object.entries(hasPBRMaps)
-              .filter(([_, hasMap]) => hasMap)
-              .map(([type, _]) => type),
-          },
-        });
-
-        // Provide more helpful error messages
-        let errorDescription = 'Failed to extract textures. ';
-
-        if (error instanceof Error) {
-          if (error.message.includes('No PBR textures found')) {
-            errorDescription +=
-              'The model does not contain any PBR texture maps.';
-          } else if (error.message.includes('Failed to convert')) {
-            errorDescription +=
-              'Texture conversion failed. The texture format might not be supported.';
-          } else if (error.message.includes('WebGL')) {
-            errorDescription +=
-              'Graphics rendering issue. Try refreshing the page.';
-          }
-        } else {
-          errorDescription +=
-            'Unknown error occurred during texture extraction.';
-        }
-
-        toast({
-          title: 'Texture extraction failed',
-          description:
-            errorDescription + ' You can still download the standard GLB file.',
-          variant: 'destructive',
-          duration: 8000,
-        });
-      } finally {
-        setIsDownloadingWithTextures(false);
-        setIsDropdownOpen(false);
-      }
-    }, 0);
-  }, [gltf, mesh, hasPBRMaps, meshData, conversation.id, toast, filename]);
-
   // Helper function to apply current UI settings to a material
   const applyCurrentSettingsToMaterial = useCallback(
     (material: THREE.MeshStandardMaterial) => {
@@ -673,11 +589,105 @@ export function DownloadMenu({
     [applyCurrentSettingsToMaterial],
   );
 
+  const downloadWithTextures = useCallback(() => {
+    posthog.capture('3d_model_download', {
+      meshId: meshData.id,
+      model_name: meshData?.prompt.model || 'Unknown Model',
+      format: 'ZIP_WITH_PRINTABLE_GLB_AND_TEXTURES',
+      conversation_id: conversation.id,
+      texture_types: Object.entries(hasPBRMaps)
+        .filter(([_, hasMap]) => hasMap)
+        .map(([type, _]) => type),
+    });
+
+    setIsDownloadingWithTextures(true);
+
+    setTimeout(async () => {
+      let processedScene: THREE.Scene | null = null;
+      try {
+        processedScene = await processUserModelForDownload(gltf);
+        const printableGlb = await createEnhancedGLB(processedScene, filename);
+
+        const success = await extractAndDownloadTextures(
+          gltf,
+          printableGlb,
+          filename,
+          'glb',
+        );
+
+        if (!success) {
+          throw new Error('Texture extraction returned false');
+        }
+      } catch (error) {
+        Sentry.captureException(error, {
+          extra: {
+            meshId: meshData.id,
+            format: 'ZIP_WITH_PRINTABLE_GLB_AND_TEXTURES',
+            error: error instanceof Error ? error.message : 'Unknown error',
+            texture_types: Object.entries(hasPBRMaps)
+              .filter(([_, hasMap]) => hasMap)
+              .map(([type, _]) => type),
+          },
+        });
+
+        // Provide more helpful error messages
+        let errorDescription = 'Failed to extract textures. ';
+
+        if (error instanceof Error) {
+          if (error.message.includes('No PBR textures found')) {
+            errorDescription +=
+              'The model does not contain any PBR texture maps.';
+          } else if (error.message.includes('Failed to convert')) {
+            errorDescription +=
+              'Texture conversion failed. The texture format might not be supported.';
+          } else if (error.message.includes('WebGL')) {
+            errorDescription +=
+              'Graphics rendering issue. Try refreshing the page.';
+          }
+        } else {
+          errorDescription +=
+            'Unknown error occurred during texture extraction.';
+        }
+
+        toast({
+          title: 'Texture extraction failed',
+          description:
+            errorDescription + ' You can still download the standard GLB file.',
+          variant: 'destructive',
+          duration: 8000,
+        });
+      } finally {
+        if (processedScene) {
+          processedScene.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => mat.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
+          });
+        }
+        setIsDownloadingWithTextures(false);
+        setIsDropdownOpen(false);
+      }
+    }, 0);
+  }, [
+    createEnhancedGLB,
+    filename,
+    gltf,
+    hasPBRMaps,
+    meshData,
+    conversation.id,
+    toast,
+  ]);
+
   const downloadGLB = useCallback(() => {
     posthog.capture('3d_model_download', {
       meshId: meshData.id,
       model_name: meshData?.prompt.model || 'Unknown Model',
-      format: 'GLB_ENHANCED',
+      format: 'GLB_PRINTABLE_ENHANCED',
       conversation_id: conversation.id,
       has_embedded_textures: Object.values(hasPBRMaps).some(Boolean),
       has_material_adjustments:
@@ -689,9 +699,10 @@ export function DownloadMenu({
     setIsDownloadingGLB(true);
 
     setTimeout(async () => {
+      let processedScene: THREE.Scene | null = null;
       try {
-        // Create enhanced GLB with embedded textures and applied settings
-        const enhancedBlob = await createEnhancedGLB(gltf.scene, filename);
+        processedScene = await processUserModelForDownload(gltf);
+        const enhancedBlob = await createEnhancedGLB(processedScene, filename);
 
         const url = URL.createObjectURL(enhancedBlob);
         const a = document.createElement('a');
@@ -705,42 +716,33 @@ export function DownloadMenu({
         Sentry.captureException(error, {
           extra: {
             meshId: meshData.id,
-            format: 'GLB_ENHANCED',
+            format: 'GLB_PRINTABLE_ENHANCED',
           },
         });
 
         toast({
           title: 'Error',
-          description:
-            'Failed to create enhanced GLB. Downloading original file instead.',
+          description: 'Failed to create printable GLB.',
           variant: 'destructive',
         });
-
-        // Fallback to original GLB download
-        try {
-          const url = URL.createObjectURL(mesh);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${filename}.glb`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        } catch (fallbackError) {
-          Sentry.captureException(fallbackError, {
-            extra: {
-              meshId: meshData.id,
-              format: 'GLB_ENHANCED',
-            },
+      } finally {
+        if (processedScene) {
+          processedScene.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => mat.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
           });
         }
-      } finally {
         setIsDownloadingGLB(false);
         setIsDropdownOpen(false);
       }
     }, 0);
   }, [
-    mesh,
     gltf,
     meshData,
     conversation.id,
@@ -752,47 +754,6 @@ export function DownloadMenu({
     normalIntensity,
     filename,
   ]);
-
-  const downloadFBX = useCallback(() => {
-    posthog.capture('3d_model_download', {
-      meshId: meshData.id,
-      model_name: meshData?.prompt.model || 'Unknown Model',
-      format: 'FBX_ORIGINAL',
-      conversation_id: conversation.id,
-    });
-
-    setIsDownloadingFBX(true);
-
-    setTimeout(async () => {
-      try {
-        // Download the original FBX file (preserves quad topology but has "tripo node" names)
-        const url = URL.createObjectURL(mesh);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${filename}.fbx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } catch (error) {
-        Sentry.captureException(error, {
-          extra: {
-            meshId: meshData.id,
-            format: 'FBX_ORIGINAL',
-          },
-        });
-
-        toast({
-          title: 'Error',
-          description: 'Failed to download FBX file. Please try again.',
-          variant: 'destructive',
-        });
-      } finally {
-        setIsDownloadingFBX(false);
-        setIsDropdownOpen(false);
-      }
-    }, 0);
-  }, [mesh, meshData, conversation.id, toast, filename]);
 
   return (
     <>
@@ -866,62 +827,22 @@ export function DownloadMenu({
             </span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          {isQuadModel ? (
-            <>
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.preventDefault();
-                  downloadGLB();
-                }}
-                className="cursor-pointer text-adam-text-primary"
-                disabled={isDownloadingGLB}
-              >
-                {isDownloadingGLB ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                <span className="text-sm">.GLB</span>
-                <span className="ml-3 text-xs text-adam-text-primary/60">
-                  {isDownloadingGLB ? 'Downloading...' : 'Web & XR'}
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.preventDefault();
-                  downloadFBX();
-                }}
-                className="cursor-pointer text-adam-text-primary"
-                disabled={isDownloadingFBX}
-              >
-                {isDownloadingFBX ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                <span className="text-sm">.FBX</span>
-                <span className="ml-3 text-xs text-adam-text-primary/60">
-                  {isDownloadingFBX ? 'Downloading...' : '3D Scene'}
-                </span>
-              </DropdownMenuItem>
-            </>
-          ) : (
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.preventDefault();
-                downloadGLB();
-              }}
-              className="cursor-pointer text-adam-text-primary"
-              disabled={isDownloadingGLB}
-            >
-              {isDownloadingGLB ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              <span className="text-sm">
-                .{(meshData?.file_type || 'glb').toUpperCase()}
-              </span>
-              <span className="ml-3 text-xs text-adam-text-primary/60">
-                {isDownloadingGLB ? 'Downloading...' : 'Web & XR'}
-              </span>
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.preventDefault();
+              downloadGLB();
+            }}
+            className="cursor-pointer text-adam-text-primary"
+            disabled={isDownloadingGLB}
+          >
+            {isDownloadingGLB ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            <span className="text-sm">.GLB</span>
+            <span className="ml-3 text-xs text-adam-text-primary/60">
+              {isDownloadingGLB ? 'Downloading...' : 'Web & XR'}
+            </span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
@@ -949,7 +870,7 @@ export function DownloadMenu({
                   downloadWithTextures();
                 }}
                 className="cursor-pointer text-adam-text-primary"
-                disabled={!gltf || !mesh || isDownloadingWithTextures}
+                disabled={!gltf || isDownloadingWithTextures}
               >
                 {isDownloadingWithTextures ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

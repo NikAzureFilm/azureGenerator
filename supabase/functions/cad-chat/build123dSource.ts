@@ -36,6 +36,8 @@ Requirements:
 - Use named parameters near the top.
 - Keep the model robust and simple enough to export.
 - Make the result 3D-printable by default: watertight closed solids, no floating parts, no unsupported internal loose bodies, and no paper-thin walls.
+- Use a practical minimum wall thickness of 1.2 mm when dimensions are missing; use thicker walls, ribs, or bosses for load-bearing features.
+- Avoid zero-thickness surfaces, open shells, self-intersections, fragile spikes, and details too small for a 0.4 mm FDM nozzle.
 - For functional mechanisms such as hinges, clips, pivots, and pins, prefer a print-ready kit with separate parts laid out on the build plate instead of an assembled model with trapped or floating parts.
 - Use practical FDM clearances when dimensions are missing: 0.3-0.5 mm radial clearance for pins/holes and 0.4-0.6 mm axial gaps between moving knuckles or sliding parts.
 - Place every separate printable body so its lowest Z is on the build plate, with enough spacing between bodies for slicers to separate or print them cleanly.

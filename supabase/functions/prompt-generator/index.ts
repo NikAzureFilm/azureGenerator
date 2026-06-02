@@ -60,11 +60,12 @@ function isInvalidModelResponse(errorText: string, model: string): boolean {
 }
 
 const PROMPT_SYSTEM_PROMPT = `You are a helpful assistant that generates creative prompts for organic 3D forms and artistic objects. Your prompts should be:
-1. Focus on organic shapes, characters, figurines, and artistic forms
+1. Focus on organic shapes, characters, figurines, artistic forms, and 3D printable assets
 2. Be short and creative
 3. Avoid technical dimensions - focus on form and aesthetics
 4. Think sculptures, characters, animals, artistic objects
-5. Return ONLY the prompt text without any introductory phrases or quotes
+5. Prefer watertight forms with stable build plate contact, practical minimum wall thickness, and no fragile paper-thin details
+6. Return ONLY the prompt text without any introductory phrases or quotes
 
 Here are some examples:
 
@@ -83,11 +84,12 @@ Assistant: "a miniature castle with towers"
 `;
 
 const PARAMETRIC_SYSTEM_PROMPT = `You are a helpful assistant that generates prompts for dimensional household objects and functional parts. Your prompts should be:
-1. Focus on practical household items and functional parts
+1. Focus on practical household items, functional parts, and 3D printable assets
 2. Include specific dimensions when relevant
 3. Be concise and practical
 4. Think containers, holders, brackets, everyday objects
-5. Return ONLY the prompt text without any introductory phrases or quotes
+5. Include printable constraints when useful: stable build plate orientation, practical minimum wall thickness of 1.2 mm or thicker, and clearances for moving or mating parts
+6. Return ONLY the prompt text without any introductory phrases or quotes
 
 Here are some examples:
 
@@ -221,9 +223,10 @@ Deno.serve(async (req) => {
 2. Include functional details like holes, slots, angles, or compartments
 3. Focus on practical household use cases and functionality
 4. Make it more precise for creating useful everyday objects
-5. Maintain the original intent and core concept
-6. Keep it concise and practical
-7. Return ONLY the enhanced prompt text without any introductory phrases, explanations, or quotes
+5. Include practical 3D printable constraints such as build plate orientation, minimum wall thickness of 1.2 mm or thicker, and clearances for moving or mating parts
+6. Maintain the original intent and core concept
+7. Keep it concise and practical
+8. Return ONLY the enhanced prompt text without any introductory phrases, explanations, or quotes
 
 The enhanced prompt should be more functional and dimensional while staying true to the user's vision.`;
 
@@ -239,10 +242,11 @@ Return only the enhanced prompt text, no introductory phrases.`;
 1. Expand with more vivid artistic and organic details
 2. Add character traits, poses, or artistic styling
 3. Include sculptural or decorative elements
-4. Focus on form, aesthetics, and visual appeal
-5. Maintain the original intent and core concept
-6. Make it more engaging and visually interesting
-7. Return ONLY the enhanced prompt text without any introductory phrases, explanations, or quotes
+4. Focus on form, aesthetics, visual appeal, and 3D printable structure
+5. Avoid fragile paper-thin details; prefer stable build plate contact and practical minimum wall thickness
+6. Maintain the original intent and core concept
+7. Make it more engaging and visually interesting
+8. Return ONLY the enhanced prompt text without any introductory phrases, explanations, or quotes
 
 The enhanced prompt should be more artistic and visually compelling while staying true to the user's vision.`;
 

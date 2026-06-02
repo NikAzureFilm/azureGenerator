@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.main import JobRequest, Prompt, run_build123d
+from app.main import JobRequest, Prompt, run_build123d, runner_source
 
 
 BAD_BOX_FILLET_SOURCE = """
@@ -30,12 +30,20 @@ class Build123dRegressionTest(unittest.TestCase):
             run_build123d(job, job_dir)
 
             step_path = job_dir / "model.step"
+            stl_path = job_dir / "model.stl"
             self.assertTrue(step_path.exists())
             self.assertGreater(step_path.stat().st_size, 0)
+            self.assertTrue(stl_path.exists())
+            self.assertGreater(stl_path.stat().st_size, 0)
             self.assertIn(
                 "main_body = Part(main_body).fillet(6.0, vertical_edges)",
                 (job_dir / "source.py").read_text(encoding="utf-8"),
             )
+
+    def test_runner_requires_printable_stl_export(self):
+        source = runner_source()
+        self.assertNotIn("except Exception:\n                pass", source)
+        self.assertIn("STL export did not produce a file", source)
 
 
 if __name__ == "__main__":

@@ -44,3 +44,18 @@ assert.match(
   /Do not call \.fillet\(\), \.chamfer\(\), or boolean\/topology edit methods directly on primitives like Box/,
   'prompt must forbid build123d primitive topology chaining',
 );
+assert.match(
+  buildCadSystemPrompt(),
+  /minimum wall thickness/i,
+  'STEP CAD prompt should require practical printable wall thickness defaults',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /1\.2 mm/i,
+  'STEP CAD prompt should provide a concrete FDM minimum wall thickness',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /build plate/i,
+  'STEP CAD prompt should require bodies to be laid out for printing',
+);
