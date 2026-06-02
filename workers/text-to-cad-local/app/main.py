@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.source_normalization import normalize_build123d_source
+
 
 ARTIFACT_ROOT = Path(os.getenv("ARTIFACT_ROOT", "/data/artifacts"))
 WORKER_TOKEN = os.getenv("TEXT_TO_CAD_WORKER_TOKEN", "").strip()
@@ -73,12 +75,6 @@ def clean_source(source: str) -> str:
         source = fence.group(1).strip()
     source = normalize_build123d_source(source)
     return source
-
-
-def normalize_build123d_source(source: str) -> str:
-    # LLMs often infer SortBy.X/Y/Z from natural language, but build123d uses
-    # Axis.X/Y/Z for coordinate sorting.
-    return re.sub(r"\bSortBy\.(X|Y|Z)\b", r"Axis.\1", source)
 
 
 def slug(value: str) -> str:

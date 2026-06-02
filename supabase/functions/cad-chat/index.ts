@@ -9,6 +9,11 @@ import {
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import {
+  buildCadSystemPrompt,
+  buildCadUserPrompt,
+  extractPythonSource,
+} from './build123dSource.ts';
 
 initSentry();
 
@@ -29,62 +34,6 @@ function jsonResponse(body: unknown, status = 200) {
 
 function workerConfigured(): boolean {
   return Boolean(TEXT_TO_CAD_WORKER_URL && TEXT_TO_CAD_WORKER_TOKEN);
-}
-
-function extractPythonSource(text: string): string {
-  const fence = text.match(/```(?:python)?\s*([\s\S]*?)```/);
-  const source = normalizeBuild123dSource((fence?.[1] ?? text).trim());
-  if (!source.includes('def gen_step')) {
-    throw new Error('Generated CAD source did not define gen_step().');
-  }
-  return source;
-}
-
-function normalizeBuild123dSource(source: string): string {
-  return source.replace(/\bSortBy\.(X|Y|Z)\b/g, 'Axis.$1');
-}
-
-function buildCadSystemPrompt(): string {
-  return `You generate build123d Python CAD source for STEP export.
-
-Return only Python source code. No markdown.
-
-Requirements:
-- Use millimeters.
-- Import from build123d.
-- Define a function named gen_step().
-- gen_step() must return one closed STEP-ready build123d Part, Solid, Compound, or Assembly.
-- Prefer precise mechanical geometry: boxes, cylinders, holes, slots, chamfers, fillets, ribs, bosses, standoffs.
-- Use named parameters near the top.
-- Keep the model robust and simple enough to export.
-- Make the result 3D-printable by default: watertight closed solids, no floating parts, no unsupported internal loose bodies, and no paper-thin walls.
-- For functional mechanisms such as hinges, clips, pivots, and pins, prefer a print-ready kit with separate parts laid out on the build plate instead of an assembled model with trapped or floating parts.
-- Use practical FDM clearances when dimensions are missing: 0.3-0.5 mm radial clearance for pins/holes and 0.4-0.6 mm axial gaps between moving knuckles or sliding parts.
-- Place every separate printable body so its lowest Z is on the build plate, with enough spacing between bodies for slicers to separate or print them cleanly.
-- For coordinate sorting, use sort_by(Axis.X), sort_by(Axis.Y), or sort_by(Axis.Z). Do not use SortBy.X, SortBy.Y, or SortBy.Z.
-- Do not read files, write files, use network, subprocess, shell, or external services.
-- Do not call export_step; the worker does that.`;
-}
-
-function buildCadUserPrompt(
-  promptText: string,
-  previousError?: string,
-): string {
-  const correction = previousError
-    ? `
-
-The previous generated source failed with this build123d error:
-${previousError}
-
-Return corrected Python source that avoids that error.`
-    : '';
-
-  return `Create STEP-first build123d CAD source for this request:
-
-${promptText}
-
-If dimensions are missing, make reasonable printable assumptions and encode them as named parameters.
-If the request describes an assembly that cannot print as one reliable object, return a print-ready kit: separate closed solids arranged on the build plate with assembly clearances.${correction}`;
 }
 
 async function generateBuild123dSource(

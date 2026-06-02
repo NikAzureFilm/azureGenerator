@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import {
+  buildCadSystemPrompt,
+  extractPythonSource,
+  normalizeBuild123dSource,
+} from './build123dSource.ts';
+
+const badPrimitiveFilletSource = `
+from build123d import Box, Axis
+
+def gen_step():
+    main_body = Box(60, 30, 12)
+    vertical_edges = main_body.edges().filter_by(SortBy.Z)
+    main_body = main_body.fillet(6.0, vertical_edges)
+    return main_body
+`;
+
+const normalized = normalizeBuild123dSource(badPrimitiveFilletSource);
+
+assert.match(
+  normalized,
+  /from build123d import Box, Axis, Part/,
+  'normalization must import Part when wrapping primitive operations',
+);
+assert.match(
+  normalized,
+  /vertical_edges = main_body\.edges\(\)\.filter_by\(Axis\.Z\)/,
+  'normalization must keep existing SortBy axis repair',
+);
+assert.match(
+  normalized,
+  /main_body = Part\(main_body\)\.fillet\(6\.0, vertical_edges\)/,
+  'normalization must wrap primitive Box before fillet',
+);
+
+assert.equal(
+  extractPythonSource(`\`\`\`python\n${badPrimitiveFilletSource}\n\`\`\``),
+  normalizeBuild123dSource(badPrimitiveFilletSource.trim()),
+  'source extraction must apply build123d normalization after fence stripping',
+);
+
+assert.match(
+  buildCadSystemPrompt(),
+  /Do not call \.fillet\(\), \.chamfer\(\), or boolean\/topology edit methods directly on primitives like Box/,
+  'prompt must forbid build123d primitive topology chaining',
+);
