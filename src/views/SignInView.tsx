@@ -99,7 +99,7 @@ export function SignInView() {
       const message =
         error.message === 'Invalid login credentials'
           ? 'Invalid email or password'
-          : 'An error occurred while signing in';
+          : 'We could not sign you in. Please try again.';
       setError(message);
       toast({
         title: 'Whoopsies',
@@ -181,7 +181,7 @@ export function SignInView() {
                 Check your email
               </h3>
               <p className="text-center text-sm text-gray-400">
-                We sent a magic link to{' '}
+                We emailed a sign-in link to{' '}
                 <span className="font-medium text-white">{email}</span>
               </p>
             </div>
@@ -195,7 +195,7 @@ export function SignInView() {
             <div className="relative flex items-center gap-3 py-2">
               <div className="h-px flex-1 bg-gray-700" />
               <span className="text-xs text-gray-500">
-                or enter code manually
+                or type the 6-digit code from that email
               </span>
               <div className="h-px flex-1 bg-gray-700" />
             </div>
@@ -259,7 +259,7 @@ export function SignInView() {
                     Verifying...
                   </>
                 ) : (
-                  'Verify Code'
+                  'Continue'
                 )}
               </Button>
             </form>
@@ -347,8 +347,8 @@ export function SignInView() {
                 }}
               >
                 {mode === 'password'
-                  ? 'Sign in with magic link instead'
-                  : 'Sign in with password instead'}
+                  ? 'Email me a sign-in link instead'
+                  : 'Use my password instead'}
               </button>
             </div>
 
@@ -359,9 +359,9 @@ export function SignInView() {
                   {mode === 'password' ? 'Signing in...' : 'Sending...'}
                 </>
               ) : mode === 'password' ? (
-                'Sign In'
+                'Sign in'
               ) : (
-                'Send Magic Link'
+                'Email me the link'
               )}
             </Button>
 
