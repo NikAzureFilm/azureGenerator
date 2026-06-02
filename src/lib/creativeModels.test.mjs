@@ -48,6 +48,18 @@ const messageServiceSource = readFileSync(
   fileURLToPath(new URL('../services/messageService.ts', import.meta.url)),
   'utf8',
 );
+const messageUtilsSource = readFileSync(
+  fileURLToPath(
+    new URL('../../supabase/functions/_shared/messageUtils.ts', import.meta.url),
+  ),
+  'utf8',
+);
+const creativeChatSource = readFileSync(
+  fileURLToPath(
+    new URL('../../supabase/functions/creative-chat/index.ts', import.meta.url),
+  ),
+  'utf8',
+);
 
 assert.equal(utilsSource.includes("id: 'ultra'"), true);
 assert.equal(utilsSource.includes("id: 'multiview'"), true);
@@ -133,5 +145,18 @@ assert.equal(
     ),
     'utf8',
   ).includes('...(multiviewImages && { multiviewImages })'),
+  true,
+);
+assert.equal(
+  messageUtilsSource.includes('message.content.multiviewImages?.front'),
+  true,
+);
+assert.equal(messageUtilsSource.includes('labeled multiview'), true);
+assert.equal(
+  creativeChatSource.includes('isDirectMultiviewMeshRequest'),
+  true,
+);
+assert.equal(
+  creativeChatSource.includes('direct_multiview_mesh_request'),
   true,
 );

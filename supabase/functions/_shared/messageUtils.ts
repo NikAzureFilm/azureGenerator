@@ -1,7 +1,9 @@
-import { CoreMessage } from '@shared/types.ts';
+import { CoreMessage, MultiviewSlot } from '@shared/types.ts';
 import { SupabaseClient } from './supabaseClient.ts';
 import { ContentBlockParam } from 'npm:@anthropic-ai/sdk/resources/messages';
 import { detectImageMediaType } from './imageMime.ts';
+
+const MULTIVIEW_SLOTS: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
 /**
  * Reformats a Supabase signed URL to use the correct host (local ngrok or production)
@@ -314,6 +316,47 @@ export async function formatCreativeUserMessage(
         text: `User uploaded image(s) with the ID(s) ${message.content.images.join(', ')}`,
       });
     }
+  }
+
+  if (message.content.multiviewImages?.front) {
+    const labeledImages = MULTIVIEW_SLOTS.flatMap((slot) => {
+      const imageId = message.content.multiviewImages?.[slot];
+      return typeof imageId === 'string' && imageId.length > 0
+        ? [{ slot, imageId }]
+        : [];
+    });
+
+    const imageFiles = labeledImages.map(
+      ({ imageId }) => `${userId}/${conversationId}/${imageId}`,
+    );
+    const base64Images = await getBase64Images(
+      supabaseClient,
+      'images',
+      imageFiles,
+    );
+    const labels = labeledImages
+      .map(({ slot, imageId }) => `${slot}: ${imageId}`)
+      .join(', ');
+
+    parts.push({
+      type: 'text',
+      text: `Create a 3D mesh from these labeled multiview reference images (${labels}). Use the front, left, back, and right labels as fixed viewpoints.`,
+    });
+
+    parts.push(
+      ...base64Images.map((image) => ({
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: image.mediaType as
+            | 'image/jpeg'
+            | 'image/png'
+            | 'image/gif'
+            | 'image/webp',
+          data: image.data.split(',')[1],
+        },
+      })),
+    );
   }
 
   // Add mesh preview if it exists (inline base64, same reasoning as above)

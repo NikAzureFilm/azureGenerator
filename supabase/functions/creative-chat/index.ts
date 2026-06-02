@@ -288,6 +288,17 @@ const tools: Anthropic.Messages.ToolUnion[] = [
   },
 ];
 
+function isDirectMultiviewMeshRequest(
+  model: Model,
+  content: Content | undefined,
+): boolean {
+  return (
+    model === 'multiview' &&
+    typeof content?.multiviewImages?.front === 'string' &&
+    content.multiviewImages.front.length > 0
+  );
+}
+
 // Helper function to streamline controller.enqueue calls
 function streamMessage(
   controller: ReadableStreamDefaultController,
@@ -588,6 +599,96 @@ Deno.serve(async (req) => {
 
     if (!newMessage) {
       throw new Error('Message not found');
+    }
+
+    if (isDirectMultiviewMeshRequest(model, newMessage.content)) {
+      const meshRequestBody = {
+        conversationId,
+        text: newMessage.content.text,
+        model,
+        ...(newMessage.content.imageGenerationModel && {
+          imageGenerationModel: newMessage.content.imageGenerationModel,
+        }),
+        multiviewImages: newMessage.content.multiviewImages,
+        ...(newMessage.content.semanticMaterialMap && {
+          semanticMaterialMap: newMessage.content.semanticMaterialMap,
+        }),
+      };
+
+      trace('direct_multiview_mesh_request', {
+        conversationId,
+        messageId,
+        model,
+        slots: Object.keys(newMessage.content.multiviewImages ?? {}),
+      });
+
+      const result = await fetch(`${supabaseHost}/functions/v1/mesh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: req.headers.get('Authorization') ?? '',
+        },
+        body: JSON.stringify(meshRequestBody),
+        signal: abortSignal,
+      });
+
+      const data = await result.json().catch(() => ({}));
+
+      if (!result.ok) {
+        if (result.status === 402) {
+          content = { error: 'insufficient_tokens' };
+        } else {
+          const errorMessage =
+            typeof data?.error?.message === 'string'
+              ? data.error.message
+              : typeof data?.error === 'string'
+                ? data.error
+                : `Mesh endpoint returned ${result.status}`;
+          throw new Error(errorMessage);
+        }
+      } else if (typeof data?.id === 'string') {
+        content = {
+          ...content,
+          text:
+            newMessage.content.text?.trim() ||
+            'Generating a 3D mesh from the four multiview references.',
+          mesh: {
+            id: data.id,
+            fileType: typeof data.fileType === 'string' ? data.fileType : 'glb',
+          },
+        };
+      } else {
+        throw new Error('Mesh endpoint did not return a mesh id');
+      }
+
+      const { data: updatedMessageData, error: updatedMessageError } =
+        await supabaseClient
+          .from('messages')
+          .update({ content })
+          .eq('id', newMessageData.id)
+          .select()
+          .single()
+          .overrideTypes<{
+            content: Content;
+            role: 'assistant';
+          }>();
+
+      if (updatedMessageError) {
+        throw updatedMessageError;
+      }
+
+      return new Response(
+        JSON.stringify({
+          message: updatedMessageData,
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders,
+          },
+        },
+      );
     }
 
     const currentMessageBranch = messageTree.getPath(newMessage.id);
