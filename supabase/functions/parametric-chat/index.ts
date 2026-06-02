@@ -15,6 +15,10 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import {
+  RefundableTokenLedger,
+  type RefundFailure,
+} from '../_shared/refundableTokenLedger.ts';
+import {
   FEATURE_COSTS,
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
@@ -23,6 +27,20 @@ import { getCodeGenerationModelCandidates } from '../../../shared/parametricRout
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
 initSentry();
+
+const logRefundFailure = ({ error, charge }: RefundFailure) => {
+  logError(error, {
+    functionName: 'parametric-chat',
+    statusCode: 502,
+    userId: charge.body.userId,
+    additionalContext: {
+      stage: 'refund_after_generation_error',
+      operation: charge.body.operation,
+      referenceId: charge.body.referenceId,
+      tokens: charge.body.tokens,
+    },
+  });
+};
 
 // OpenRouter API configuration
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -616,8 +634,9 @@ Deno.serve(async (req) => {
     });
   }
 
+  const tokenLedger = new RefundableTokenLedger(billing);
   try {
-    const result = await billing.consume(userData.user.email, {
+    const result = await tokenLedger.consume(userData.user.email, {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
       referenceId: crypto.randomUUID(),
@@ -676,6 +695,7 @@ Deno.serve(async (req) => {
     .order('created_at', { ascending: true })
     .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
   if (messagesError) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -690,6 +710,7 @@ Deno.serve(async (req) => {
     );
   }
   if (!messages || messages.length === 0) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(JSON.stringify({ error: 'Messages not found' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
@@ -711,6 +732,7 @@ Deno.serve(async (req) => {
     .single()
     .overrideTypes<{ content: Content; role: 'assistant' }>();
   if (!newMessageData) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -988,7 +1010,11 @@ Deno.serve(async (req) => {
           }
         } catch (error) {
           console.error(error);
-          if (!content.text && !content.artifact) {
+          const hasUsefulContent = !!content.text || !!content.artifact;
+          if (!hasUsefulContent) {
+            await tokenLedger.refundAll(logRefundFailure);
+          }
+          if (!hasUsefulContent) {
             content = {
               ...content,
               text: 'An error occurred while processing your request.',
@@ -1001,6 +1027,11 @@ Deno.serve(async (req) => {
           // the outer try completed without throwing but a tool call was
           // left pending by an unreachable path), never persist pending.
           content = markPendingToolsAsError(content);
+          for (const toolCall of content.toolCalls ?? []) {
+            if (toolCall.status === 'error' && toolCall.id) {
+              await tokenLedger.refundReference(toolCall.id, logRefundFailure);
+            }
+          }
           // Fallback: If no artifact was created but text contains OpenSCAD code,
           // extract it and create an artifact. This handles cases where the LLM
           // outputs code directly instead of using tools (common in long conversations).
@@ -1044,7 +1075,14 @@ Deno.serve(async (req) => {
           // renders nothing visible).
           const hasToolCalls =
             !!content.toolCalls && content.toolCalls.length > 0;
+          const hasOnlyErroredToolCalls =
+            hasToolCalls &&
+            content.toolCalls?.every((toolCall) => toolCall.status === 'error');
+          if (!content.artifact && !content.text && hasOnlyErroredToolCalls) {
+            await tokenLedger.refundAll(logRefundFailure);
+          }
           if (!content.artifact && !content.text && !hasToolCalls) {
+            await tokenLedger.refundAll(logRefundFailure);
             console.error(
               '[parametric-chat] empty response from model — no text, tool call, or artifact',
             );
@@ -1096,9 +1134,25 @@ Deno.serve(async (req) => {
             // that renders as a perpetually streaming code block.
             let resolved = false;
             try {
+              let toolInput: {
+                text?: string;
+                imageIds?: string[];
+                baseCode?: string;
+                error?: string;
+              } = {};
+              try {
+                toolInput = JSON.parse(toolCall.arguments);
+              } catch (e) {
+                console.error('Invalid tool input JSON', e);
+                content = markToolAsError(content, toolCall.id);
+                streamMessage(controller, { ...newMessageData, content });
+                resolved = true;
+                return;
+              }
+
               // Deduct parametric tokens (5) for model building
               try {
-                const paramResult = await billing.consume(
+                const paramResult = await tokenLedger.consume(
                   userData.user!.email!,
                   {
                     tokens: getParametricModelTokenCost(model),
@@ -1133,21 +1187,6 @@ Deno.serve(async (req) => {
                   ...markToolAsError(content, toolCall.id),
                   error: 'billing_unavailable',
                 };
-                streamMessage(controller, { ...newMessageData, content });
-                resolved = true;
-                return;
-              }
-              let toolInput: {
-                text?: string;
-                imageIds?: string[];
-                baseCode?: string;
-                error?: string;
-              } = {};
-              try {
-                toolInput = JSON.parse(toolCall.arguments);
-              } catch (e) {
-                console.error('Invalid tool input JSON', e);
-                content = markToolAsError(content, toolCall.id);
                 streamMessage(controller, { ...newMessageData, content });
                 resolved = true;
                 return;
@@ -1331,6 +1370,10 @@ Deno.serve(async (req) => {
                 title = 'Generated Object';
 
               if (codeGenFailed || !code) {
+                await tokenLedger.refundReference(
+                  toolCall.id,
+                  logRefundFailure,
+                );
                 // Preserve whatever partial artifact was streamed rather than
                 // unsetting it. Clearing `artifact` here flipped `hasArtifact`
                 // back to false on the client mid-stream, which crashed the
@@ -1345,6 +1388,7 @@ Deno.serve(async (req) => {
                   ),
                 };
               } else {
+                tokenLedger.settleReference(toolCall.id);
                 const artifact: ParametricArtifact = {
                   title,
                   version: 'v1',
@@ -1371,6 +1415,10 @@ Deno.serve(async (req) => {
               // `pending` gets flipped to `error` here so the DB write in
               // the outer finally never persists a zombie pending state.
               if (!resolved) {
+                await tokenLedger.refundReference(
+                  toolCall.id,
+                  logRefundFailure,
+                );
                 content = markToolAsError(content, toolCall.id);
                 streamMessage(controller, { ...newMessageData, content });
               }
@@ -1469,7 +1517,12 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error(error);
 
-    if (!content.text && !content.artifact) {
+    const hasUsefulContent = !!content.text || !!content.artifact;
+    if (!hasUsefulContent) {
+      await tokenLedger.refundAll(logRefundFailure);
+    }
+
+    if (!hasUsefulContent) {
       content = {
         ...content,
         text: 'An error occurred while processing your request.',

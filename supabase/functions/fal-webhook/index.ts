@@ -1,5 +1,10 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { getServiceRoleSupabaseClient } from '../_shared/supabaseClient.ts';
+import { billing } from '../_shared/billingClient.ts';
+import {
+  FEATURE_COSTS,
+  getCreativeModelTokenCost,
+} from '../../../shared/tokenCosts.ts';
 import { unzipSync } from 'npm:fflate@0.8.2';
 
 const supabaseClient = getServiceRoleSupabaseClient();
@@ -10,6 +15,50 @@ const DEBUG_LOGS =
 const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
+
+function getMeshRefundTokenCost(meshData: Record<string, unknown>): number {
+  const prompt =
+    meshData.prompt && typeof meshData.prompt === 'object'
+      ? (meshData.prompt as Record<string, unknown>)
+      : {};
+  if (typeof prompt.upscaledFrom === 'string') {
+    return FEATURE_COSTS.upscaleMesh.tokens;
+  }
+  const model = typeof prompt.model === 'string' ? prompt.model : 'quality';
+  return getCreativeModelTokenCost(
+    model === 'fast' ||
+      model === 'quality' ||
+      model === 'ultra' ||
+      model === 'multiview'
+      ? model
+      : 'quality',
+  );
+}
+
+async function refundFailedMeshJob(
+  id: string,
+  meshData: Record<string, unknown>,
+) {
+  if (typeof meshData.user_id !== 'string') return;
+
+  const { data: userData, error: userError } =
+    await supabaseClient.auth.admin.getUserById(meshData.user_id);
+  if (userError || !userData.user?.email) {
+    console.error('Failed to load user for mesh refund:', {
+      id,
+      userId: meshData.user_id,
+      error: userError?.message,
+    });
+    return;
+  }
+
+  await billing.refund(userData.user.email, {
+    tokens: getMeshRefundTokenCost(meshData),
+    operation: 'mesh',
+    referenceId: id,
+    userId: meshData.user_id,
+  });
+}
 
 Deno.serve(async (request) => {
   debugLog('=== FAL WEBHOOK CALLED ===');
@@ -258,11 +307,10 @@ Deno.serve(async (request) => {
 
         debugLog('Found GLB in zip:', glbFilename);
         const glbData = unzipped[glbFilename];
-        // Create a proper ArrayBuffer from the Uint8Array (not a view)
-        model = glbData.buffer.slice(
-          glbData.byteOffset,
-          glbData.byteOffset + glbData.byteLength,
-        );
+        // Create a proper ArrayBuffer from the Uint8Array (not a shared view).
+        const glbCopy = new Uint8Array(glbData.byteLength);
+        glbCopy.set(glbData);
+        model = glbCopy.buffer;
         debugLog('Extracted GLB size:', model.byteLength, 'bytes');
       } catch (zipError) {
         console.error('Failed to extract GLB from zip:', zipError);
@@ -333,6 +381,20 @@ Deno.serve(async (request) => {
         status: meshStatus,
       })
       .eq('id', id);
+
+    if (mode !== 'preview') {
+      try {
+        await refundFailedMeshJob(id, meshData as Record<string, unknown>);
+      } catch (refundError) {
+        console.error('Failed to refund mesh tokens after webhook failure:', {
+          id,
+          error:
+            refundError instanceof Error
+              ? refundError.message
+              : String(refundError),
+        });
+      }
+    }
   }
 
   debugLog('=== SENDING BROADCAST ===');

@@ -14,6 +14,10 @@ import { reformatSignedUrl } from '../_shared/messageUtils.ts';
 import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import {
+  RefundableTokenLedger,
+  type RefundFailure,
+} from '../_shared/refundableTokenLedger.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 import { getImageGenerationTokenCost } from '../../../shared/imageGeneration.ts';
 import { Buffer } from 'node:buffer';
@@ -47,7 +51,22 @@ const isOpenAiSafetyRejection = (error: unknown): boolean => {
   return /request was rejected by the safety system/i.test(message);
 };
 
+const logRefundFailure = ({ error, charge }: RefundFailure) => {
+  logError(error, {
+    functionName: 'generate-view',
+    statusCode: 502,
+    userId: charge.body.userId,
+    additionalContext: {
+      stage: 'refund_after_generation_error',
+      operation: charge.body.operation,
+      referenceId: charge.body.referenceId,
+      tokens: charge.body.tokens,
+    },
+  });
+};
+
 Deno.serve(async (req) => {
+  const tokenLedger = new RefundableTokenLedger(billing);
   try {
     if (req.method === 'OPTIONS') {
       return new Response('ok', { headers: corsHeaders });
@@ -168,7 +187,7 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const consumeResult = await billing.consume(userData.user.email, {
+      const consumeResult = await tokenLedger.consume(userData.user.email, {
         tokens: tokenCost,
         operation: 'chat',
         referenceId: crypto.randomUUID(),
@@ -305,6 +324,7 @@ Deno.serve(async (req) => {
     );
   } catch (error) {
     console.error('generate-view failed:', error);
+    await tokenLedger.refundAll(logRefundFailure);
     logError(error instanceof Error ? error : new Error(String(error)), {
       functionName: 'generate-view',
       statusCode: 500,

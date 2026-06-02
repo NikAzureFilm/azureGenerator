@@ -33,6 +33,10 @@ import {
 import { reformatSignedUrl } from '../_shared/messageUtils.ts';
 import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import {
+  RefundableTokenLedger,
+  type RefundFailure,
+} from '../_shared/refundableTokenLedger.ts';
 import { initSentry, logError, logApiError } from '../_shared/sentry.ts';
 import { Buffer } from 'node:buffer';
 
@@ -51,6 +55,20 @@ const DEBUG_LOGS =
   Deno.env.get('DEBUG_LOGS') === 'true';
 const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
+};
+
+const logRefundFailure = ({ error, charge }: RefundFailure) => {
+  logError(error, {
+    functionName: 'mesh',
+    statusCode: 502,
+    userId: charge.body.userId,
+    additionalContext: {
+      stage: 'refund_after_mesh_error',
+      operation: charge.body.operation,
+      referenceId: charge.body.referenceId,
+      tokens: charge.body.tokens,
+    },
+  });
 };
 
 const QUALITY_CAPTION_TIMEOUT_MS = 10000;
@@ -519,6 +537,7 @@ Be quirky and excited! Use wordplay or puns if appropriate.
 Do NOT use quotes around your response.`;
 
 Deno.serve(async (req) => {
+  const tokenLedger = new RefundableTokenLedger(billing);
   try {
     debugLog('=== DENO.SERVE MESH FUNCTION ENTRY POINT ===');
     debugLog('Mesh function called', {
@@ -630,6 +649,65 @@ Deno.serve(async (req) => {
 
     debugLog('Model parameter extracted:', model);
 
+    if (!conversationId) {
+      logError(new Error('Conversation ID is required'), {
+        functionName: 'mesh',
+        statusCode: 400,
+        userId: userData.user?.id,
+      });
+      return new Response(
+        JSON.stringify({ error: { message: 'Conversation ID is required' } }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    const hasMultiviewImages =
+      model === 'multiview' &&
+      !!multiviewImages?.front &&
+      typeof multiviewImages.front === 'string';
+
+    if (action === 'upscale' && !upscaleMeshId) {
+      return new Response(
+        JSON.stringify({ error: { message: 'Mesh ID is required' } }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    if (
+      action !== 'upscale' &&
+      (!images || !Array.isArray(images) || images.length === 0) &&
+      !text &&
+      !mesh &&
+      !hasMultiviewImages
+    ) {
+      logError(new Error('Images or text not found'), {
+        functionName: 'mesh',
+        statusCode: 400,
+        userId: userData.user?.id,
+        conversationId,
+        additionalContext: {
+          hasImages: !!images,
+          imagesLength: images?.length,
+          hasText: !!text,
+          hasMesh: !!mesh,
+          hasMultiviewImages,
+        },
+      });
+      return new Response(
+        JSON.stringify({ error: { message: 'Images or text not found' } }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
     const meshTokenCost =
       action === 'upscale'
         ? FEATURE_COSTS.upscaleMesh.tokens
@@ -644,7 +722,7 @@ Deno.serve(async (req) => {
 
     const meshReferenceId = crypto.randomUUID();
     try {
-      const result = await billing.consume(userData.user.email, {
+      const result = await tokenLedger.consume(userData.user.email, {
         tokens: meshTokenCost,
         operation: 'mesh',
         referenceId: meshReferenceId,
@@ -696,6 +774,7 @@ Deno.serve(async (req) => {
           .single();
 
       if (originalMeshError || !originalMesh) {
+        await tokenLedger.refundAll(logRefundFailure);
         return new Response(
           JSON.stringify({ error: { message: 'Original mesh not found' } }),
           {
@@ -708,6 +787,7 @@ Deno.serve(async (req) => {
       // Get the seed image from the mesh's images column
       const seedImageId = originalMesh.images?.[0];
       if (!seedImageId) {
+        await tokenLedger.refundAll(logRefundFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'No seed image found for this mesh' },
@@ -726,6 +806,7 @@ Deno.serve(async (req) => {
           .download(`${userData.user.id}/${conversationId}/${seedImageId}`);
 
       if (downloadError || !imageBlob) {
+        await tokenLedger.refundAll(logRefundFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'Failed to download seed image' },
@@ -773,6 +854,7 @@ Deno.serve(async (req) => {
         .single();
 
       if (newMeshError || !newMeshData) {
+        await tokenLedger.refundAll(logRefundFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'Failed to create upscaled mesh entry' },
@@ -922,6 +1004,11 @@ Deno.serve(async (req) => {
             controller.close();
           } catch (error) {
             debugLog('Error in upscale stream:', error);
+            await tokenLedger.refundAll(logRefundFailure);
+            await supabaseClient
+              .from('meshes')
+              .update({ status: 'failure' })
+              .eq('id', newMeshData.id);
             controller.error(error);
           }
         },
@@ -936,54 +1023,6 @@ Deno.serve(async (req) => {
           Connection: 'keep-alive',
         },
       });
-    }
-
-    if (!conversationId) {
-      logError(new Error('Conversation ID is required'), {
-        functionName: 'mesh',
-        statusCode: 400,
-        userId: userData.user?.id,
-      });
-      return new Response(
-        JSON.stringify({ error: { message: 'Conversation ID is required' } }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
-    }
-
-    const hasMultiviewImages =
-      model === 'multiview' &&
-      !!multiviewImages?.front &&
-      typeof multiviewImages.front === 'string';
-
-    if (
-      (!images || !Array.isArray(images) || images.length === 0) &&
-      !text &&
-      !mesh &&
-      !hasMultiviewImages
-    ) {
-      logError(new Error('Images or text not found'), {
-        functionName: 'mesh',
-        statusCode: 400,
-        userId: userData.user?.id,
-        conversationId,
-        additionalContext: {
-          hasImages: !!images,
-          imagesLength: images?.length,
-          hasText: !!text,
-          hasMesh: !!mesh,
-          hasMultiviewImages,
-        },
-      });
-      return new Response(
-        JSON.stringify({ error: { message: 'Images or text not found' } }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      );
     }
 
     // Determine file type based on model, topology, and user preference
@@ -1024,6 +1063,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (meshError) {
+      await tokenLedger.refundAll(logRefundFailure);
       logError(meshError, {
         functionName: 'mesh',
         statusCode: 500,
@@ -1080,6 +1120,8 @@ Deno.serve(async (req) => {
         polygonCount,
         imageGenerationModel,
         multiviewImages,
+        tokenLedger,
+        meshReferenceId,
       ),
     );
 
@@ -1094,6 +1136,7 @@ Deno.serve(async (req) => {
       'Error stack:',
       unexpectedError instanceof Error ? unexpectedError.stack : undefined,
     );
+    await tokenLedger.refundAll(logRefundFailure);
 
     return new Response(
       JSON.stringify({
@@ -1127,6 +1170,8 @@ async function submitMeshJob(
   polygonCount: number | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
   multiviewImages: MultiviewImages | undefined,
+  tokenLedger: RefundableTokenLedger,
+  meshReferenceId: string,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
@@ -1965,6 +2010,7 @@ Output:`;
       conversationId,
       requestData: { meshId, model, meshTopology, polygonCount },
     });
+    await tokenLedger.refundReference(meshReferenceId, logRefundFailure);
 
     // Persist the error into prompt JSONB for diagnostic visibility (no logs pipeline)
     const errorMessage =

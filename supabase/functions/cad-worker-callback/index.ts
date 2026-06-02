@@ -2,7 +2,9 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { getServiceRoleSupabaseClient } from '../_shared/supabaseClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
+import { billing } from '../_shared/billingClient.ts';
 import { CadJobArtifact, Content } from '@shared/types.ts';
+import { getCadBackendTokenCost } from '../../../shared/tokenCosts.ts';
 
 initSentry();
 
@@ -26,6 +28,39 @@ function isCallbackAuthorized(req: Request): boolean {
   if (!configuredToken) return false;
   const authHeader = req.headers.get('Authorization') ?? '';
   return authHeader === `Bearer ${configuredToken}`;
+}
+
+async function refundFailedCadJob(
+  supabaseClient: ReturnType<typeof getServiceRoleSupabaseClient>,
+  job: {
+    id: string;
+    user_id: string;
+    prompt: unknown;
+  },
+) {
+  const prompt =
+    job.prompt && typeof job.prompt === 'object'
+      ? (job.prompt as Record<string, unknown>)
+      : {};
+  const model = typeof prompt.model === 'string' ? prompt.model : 'auto';
+  const { data: userData, error: userError } =
+    await supabaseClient.auth.admin.getUserById(job.user_id);
+
+  if (userError || !userData.user?.email) {
+    console.error('Failed to load user for CAD job refund:', {
+      jobId: job.id,
+      userId: job.user_id,
+      error: userError?.message,
+    });
+    return;
+  }
+
+  await billing.refund(userData.user.email, {
+    tokens: getCadBackendTokenCost('text-to-cad', model),
+    operation: 'parametric',
+    referenceId: job.id,
+    userId: job.user_id,
+  });
 }
 
 Deno.serve(async (req) => {
@@ -58,6 +93,10 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'CAD job not found' }, 404);
   }
 
+  if (job.status !== 'pending') {
+    return jsonResponse({ ok: true, alreadyProcessed: true });
+  }
+
   const artifacts = body.artifacts ?? {};
   const error =
     body.status === 'failure' ? body.error || 'CAD job failed' : null;
@@ -80,6 +119,23 @@ Deno.serve(async (req) => {
       conversationId: job.conversation_id,
     });
     return jsonResponse({ error: updateJobError.message }, 500);
+  }
+
+  if (body.status === 'failure') {
+    try {
+      await refundFailedCadJob(supabaseClient, job);
+    } catch (refundError) {
+      logError(refundError, {
+        functionName: 'cad-worker-callback',
+        statusCode: 502,
+        userId: job.user_id,
+        conversationId: job.conversation_id,
+        additionalContext: {
+          stage: 'refund_after_worker_failure',
+          jobId: job.id,
+        },
+      });
+    }
   }
 
   if (job.message_id) {

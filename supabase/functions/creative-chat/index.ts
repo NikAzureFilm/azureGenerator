@@ -18,6 +18,10 @@ import Tree from '@shared/Tree.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
+  RefundableTokenLedger,
+  type RefundFailure,
+} from '../_shared/refundableTokenLedger.ts';
+import {
   getSignedUrl,
   getSignedUrls,
   formatCreativeUserMessage,
@@ -42,6 +46,21 @@ const trace = (label: string, data?: unknown) => {
     data !== undefined ? JSON.stringify(data).slice(0, 500) : '',
   );
 };
+
+const logRefundFailure = ({ error, charge }: RefundFailure) => {
+  logError(error, {
+    functionName: 'creative-chat',
+    statusCode: 502,
+    userId: charge.body.userId,
+    additionalContext: {
+      stage: 'refund_after_generation_error',
+      operation: charge.body.operation,
+      referenceId: charge.body.referenceId,
+      tokens: charge.body.tokens,
+    },
+  });
+};
+
 async function formatAssistantMessage(
   message: CoreMessage,
   supabaseClient: SupabaseClient,
@@ -392,8 +411,9 @@ Deno.serve(async (req) => {
     });
   }
 
+  const tokenLedger = new RefundableTokenLedger(billing);
   try {
-    const result = await billing.consume(userData.user.email, {
+    const result = await tokenLedger.consume(userData.user.email, {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
       referenceId: crypto.randomUUID(),
@@ -488,6 +508,7 @@ Deno.serve(async (req) => {
     .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
 
   if (messagesError) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -506,6 +527,7 @@ Deno.serve(async (req) => {
   }
 
   if (!messages || messages.length === 0) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(
       JSON.stringify({
         error: 'Messages not found',
@@ -541,6 +563,7 @@ Deno.serve(async (req) => {
     }>();
 
   if (!newMessageData) {
+    await tokenLedger.refundAll(logRefundFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -860,6 +883,10 @@ Deno.serve(async (req) => {
               !!content.mesh);
 
           if (!hasNonDefaultContent) {
+            await tokenLedger.refundAll(logRefundFailure);
+          }
+
+          if (!hasNonDefaultContent) {
             if (abortSignal.aborted) {
               content = {
                 ...content,
@@ -943,6 +970,10 @@ Deno.serve(async (req) => {
       ((content.text && content.text.length > 0) ||
         (content.images && content.images.length > 0) ||
         !!content.mesh);
+
+    if (!hasNonDefaultContent) {
+      await tokenLedger.refundAll(logRefundFailure);
+    }
 
     if (!hasNonDefaultContent) {
       content = {

@@ -4,10 +4,10 @@
 
 import {
   PLAN_CATALOG,
-  PLAN_ORDER,
   TOKEN_PACK_CATALOG,
   type PaidPlanLevel,
 } from '../../../shared/pricingCatalog.ts';
+import type { Database } from '../../../shared/database.ts';
 import { getServiceRoleSupabaseClient } from './supabaseClient.ts';
 
 export type SubscriptionLevel = PaidPlanLevel;
@@ -110,13 +110,13 @@ const localConsume = (tokens: number): ConsumeSuccess => ({
   totalBalance: Math.max(LOCAL_SUBSCRIPTION_TOKENS - tokens, 0),
 });
 
-const paidPlanLevels = PLAN_ORDER.filter(
-  (level): level is PaidPlanLevel => level !== 'free',
-);
+const paidPlanLevels: PaidPlanLevel[] = ['standard', 'pro', 'max'];
 
 const localProducts = (): BillingProduct[] => [
   ...paidPlanLevels.flatMap((level) => {
     const plan = PLAN_CATALOG[level];
+    const monthlyPriceCents: number = plan.monthlyPriceCents;
+    const yearlyPriceCents: number | null = plan.yearlyPriceCents;
     return [
       {
         id: `local-${level}-monthly`,
@@ -138,7 +138,7 @@ const localProducts = (): BillingProduct[] => [
         subscriptionLevel: level,
         tokenAmount: plan.tokenAmount ?? 0,
         name: `${plan.displayName} Annual`,
-        priceCents: plan.yearlyPriceCents ?? plan.monthlyPriceCents * 12,
+        priceCents: yearlyPriceCents ?? monthlyPriceCents * 12,
         interval: 'year',
         active: true,
       },
@@ -387,14 +387,14 @@ const enc = (email: string): string => encodeURIComponent(email.toLowerCase());
 
 type ConsumeBody = {
   tokens: number;
-  operation?: string;
+  operation?: Database['public']['Enums']['token_operation_type'];
   referenceId?: string;
   userId?: string;
 };
 
 type RefundBody = {
   tokens: number;
-  operation?: string;
+  operation?: Database['public']['Enums']['token_operation_type'];
   referenceId?: string;
   userId?: string;
 };

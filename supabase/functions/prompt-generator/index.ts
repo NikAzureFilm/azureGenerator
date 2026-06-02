@@ -8,6 +8,10 @@ import { corsHeaders } from '../_shared/cors.ts';
 import 'jsr:@std/dotenv/load';
 import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import {
+  RefundableTokenLedger,
+  type RefundFailure,
+} from '../_shared/refundableTokenLedger.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -59,6 +63,16 @@ function isInvalidModelResponse(errorText: string, model: string): boolean {
   );
 }
 
+const logRefundFailure = ({ error, charge }: RefundFailure) => {
+  console.error('Error refunding prompt generator tokens:', {
+    error,
+    userId: charge.body.userId,
+    operation: charge.body.operation,
+    referenceId: charge.body.referenceId,
+    tokens: charge.body.tokens,
+  });
+};
+
 const PROMPT_SYSTEM_PROMPT = `You are a helpful assistant that generates creative prompts for organic 3D forms and artistic objects. Your prompts should be:
 1. Focus on organic shapes, characters, figurines, artistic forms, and 3D printable assets
 2. Be short and creative
@@ -109,6 +123,7 @@ Assistant: "a cable management clip for 8mm cables"
 
 // Main server function handling incoming requests
 Deno.serve(async (req) => {
+  const tokenLedger = new RefundableTokenLedger(billing);
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -172,7 +187,7 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const consumeResult = await billing.consume(userData.user.email, {
+      const consumeResult = await tokenLedger.consume(userData.user.email, {
         tokens: PROMPT_GENERATOR_TOKEN_COST,
         operation: 'chat',
         referenceId: crypto.randomUUID(),
@@ -328,6 +343,7 @@ Return only the enhanced prompt text, no introductory phrases.`;
     });
   } catch (error) {
     console.error('Error generating prompt:', error);
+    await tokenLedger.refundAll(logRefundFailure);
 
     return new Response(
       JSON.stringify({

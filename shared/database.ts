@@ -494,6 +494,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      ensure_free_tier_fresh: {
+        Args: { p_user_id: string };
+        Returns: undefined;
+      };
       get_subscription_token_limit: {
         Args: { p_user_id: string };
         Returns: number;
