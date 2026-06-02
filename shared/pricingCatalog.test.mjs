@@ -10,6 +10,7 @@ import {
   FEATURE_COSTS,
   TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE,
+  getCadBackendTokenCost,
   getParametricModelTokenCost,
   tokensForProviderCost,
 } from './tokenCosts.ts';
@@ -70,6 +71,7 @@ assert.deepEqual(
     promptGeneration: 10,
     parametric: 50,
     parametricCadReasoning: 120,
+    textToCadWorker: 140,
     generatedInputImage: 22,
     generatedInputImageNanoBanana: 7,
     multiviewFrontImage: 22,
@@ -96,3 +98,12 @@ assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 50);
 assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 50);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
 assert.equal(getParametricModelTokenCost('legacy-model'), 50);
+assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 60);
+assert.equal(
+  getCadBackendTokenCost('text-to-cad', 'google/gemini-3.5-flash'),
+  200,
+);
+assert.equal(
+  getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
+  270,
+);

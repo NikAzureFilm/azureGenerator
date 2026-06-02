@@ -4,10 +4,7 @@ import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { CadJobArtifact, Content, Model } from '@shared/types.ts';
-import {
-  FEATURE_COSTS,
-  getParametricModelTokenCost,
-} from '../../../shared/tokenCosts.ts';
+import { getCadBackendTokenCost } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
 import {
   buildCadSystemPrompt,
@@ -177,7 +174,7 @@ function consumeTokens(
   referenceId: string,
 ) {
   return billing.consume(email, {
-    tokens: FEATURE_COSTS.chat.tokens + getParametricModelTokenCost(model),
+    tokens: getCadBackendTokenCost('text-to-cad', model),
     operation: 'parametric',
     referenceId,
     userId,
@@ -191,7 +188,7 @@ function refundTokens(
   referenceId: string,
 ) {
   return billing.refund(email, {
-    tokens: FEATURE_COSTS.chat.tokens + getParametricModelTokenCost(model),
+    tokens: getCadBackendTokenCost('text-to-cad', model),
     operation: 'parametric',
     referenceId,
     userId,

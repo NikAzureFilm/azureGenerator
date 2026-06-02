@@ -39,13 +39,10 @@ assert.equal(
   undefined,
 );
 
-assert.equal(
-  getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'),
-  60,
-);
+assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 60);
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'google/gemini-3.5-flash'),
-  60,
+  200,
 );
 assert.equal(
   getCadBackendTokenCost('openscad', 'anthropic/claude-opus-4.7'),
@@ -53,5 +50,5 @@ assert.equal(
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
-  130,
+  270,
 );
