@@ -494,13 +494,13 @@ const CAD_BACKEND_OPTIONS: Array<{
     id: 'openscad',
     label: 'SCAD',
     description:
-      'OpenSCAD source for editable parametric CAD and quick previews',
+      'Best for simple CAD parts you want to edit and preview quickly',
     Icon: Ruler,
   },
   {
     id: 'text-to-cad',
     label: 'STEP',
-    description: 'STEP-first build123d CAD for solid exports and CAD workflows',
+    description: 'Best for more complex solid CAD designs and export workflows',
     Icon: FileCode2,
   },
 ];
