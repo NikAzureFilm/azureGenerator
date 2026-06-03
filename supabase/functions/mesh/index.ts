@@ -18,14 +18,6 @@ import {
   type SemanticMaterialMap,
 } from '@shared/types.ts';
 import {
-  appendMeshBasePromptDirective,
-  getMeshBaseOption,
-  normalizeAddedMeshBase,
-  normalizeMeshBaseSettings,
-  type MeshBaseSettings,
-  type MeshBaseId,
-} from '@shared/meshBase.ts';
-import {
   getImageGenerationProvider,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
@@ -631,8 +623,6 @@ Deno.serve(async (req) => {
       model,
       meshTopology,
       polygonCount,
-      meshBase,
-      meshBaseSettings,
       preferredFormat,
       action,
       meshId: actionMeshId,
@@ -648,10 +638,8 @@ Deno.serve(async (req) => {
       model?: Model;
       meshTopology?: 'quads' | 'polys';
       polygonCount?: number;
-      meshBase?: MeshBaseId;
-      meshBaseSettings?: Partial<MeshBaseSettings>;
       preferredFormat?: 'glb' | 'fbx';
-      action?: 'upscale' | 'add-base';
+      action?: 'upscale';
       meshId?: string;
       parentMessageId?: string;
       imageGenerationModel?: ImageGenerationModel;
@@ -681,7 +669,7 @@ Deno.serve(async (req) => {
       !!multiviewImages?.front &&
       typeof multiviewImages.front === 'string';
 
-    if ((action === 'upscale' || action === 'add-base') && !actionMeshId) {
+    if (action === 'upscale' && !actionMeshId) {
       return new Response(
         JSON.stringify({ error: { message: 'Mesh ID is required' } }),
         {
@@ -693,7 +681,6 @@ Deno.serve(async (req) => {
 
     if (
       action !== 'upscale' &&
-      action !== 'add-base' &&
       (!images || !Array.isArray(images) || images.length === 0) &&
       !text &&
       !mesh &&
@@ -724,16 +711,14 @@ Deno.serve(async (req) => {
     const meshTokenCost =
       action === 'upscale'
         ? FEATURE_COSTS.upscaleMesh.tokens
-        : action === 'add-base'
-          ? getCreativeModelTokenCost('ultra')
-          : getCreativeModelTokenCost(
-              model === 'fast' ||
-                model === 'quality' ||
-                model === 'ultra' ||
-                model === 'multiview'
-                ? model
-                : 'quality',
-            );
+        : getCreativeModelTokenCost(
+            model === 'fast' ||
+              model === 'quality' ||
+              model === 'ultra' ||
+              model === 'multiview'
+              ? model
+              : 'quality',
+          );
 
     const meshReferenceId = crypto.randomUUID();
     try {
@@ -1026,200 +1011,6 @@ Deno.serve(async (req) => {
               .eq('id', newMeshData.id);
             controller.error(error);
           }
-        },
-      });
-
-      return new Response(responseStream, {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      });
-    }
-
-    if (action === 'add-base' && actionMeshId && conversationId) {
-      debugLog('=== ADD BASE ACTION ===');
-      debugLog('Adding base to mesh:', actionMeshId);
-
-      const normalizedMeshBase = normalizeAddedMeshBase(meshBase);
-      const normalizedMeshBaseSettings =
-        normalizeMeshBaseSettings(meshBaseSettings);
-      const selectedBase = getMeshBaseOption(normalizedMeshBase);
-
-      const { data: originalMesh, error: originalMeshError } =
-        await supabaseClient
-          .from('meshes')
-          .select('*')
-          .eq('id', actionMeshId)
-          .eq('user_id', userData.user.id)
-          .eq('conversation_id', conversationId)
-          .single();
-
-      if (originalMeshError || !originalMesh) {
-        await tokenLedger.refundAll(logRefundFailure);
-        return new Response(
-          JSON.stringify({ error: { message: 'Original mesh not found' } }),
-          {
-            status: 404,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-
-      const sourceImageIds = Array.isArray(originalMesh.images)
-        ? (originalMesh.images as unknown[]).filter(
-            (imageId): imageId is string => typeof imageId === 'string',
-          )
-        : [];
-
-      if (sourceImageIds.length === 0) {
-        await tokenLedger.refundAll(logRefundFailure);
-        return new Response(
-          JSON.stringify({
-            error: { message: 'No seed image found for this mesh' },
-          }),
-          {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-
-      const originalPrompt =
-        originalMesh.prompt && typeof originalMesh.prompt === 'object'
-          ? (originalMesh.prompt as Record<string, unknown>)
-          : {};
-      const originalPromptText =
-        typeof originalPrompt.text === 'string'
-          ? originalPrompt.text
-          : undefined;
-      const addBasePrompt =
-        appendMeshBasePromptDirective(
-          originalPromptText,
-          normalizedMeshBase,
-          normalizedMeshBaseSettings,
-        ) ??
-        appendMeshBasePromptDirective(
-          'Preserve the existing generated mesh subject and add a display base underneath it.',
-          normalizedMeshBase,
-          normalizedMeshBaseSettings,
-        );
-      const actionImageGenerationModel =
-        imageGenerationModel ??
-        (typeof originalPrompt.imageGenerationModel === 'string'
-          ? normalizeImageGenerationModel(originalPrompt.imageGenerationModel)
-          : undefined);
-
-      const { data: newMeshData, error: newMeshError } = await supabaseClient
-        .from('meshes')
-        .insert({
-          user_id: userData.user.id,
-          images: sourceImageIds,
-          conversation_id: conversationId,
-          file_type: 'glb',
-          prompt: {
-            ...originalPrompt,
-            text: addBasePrompt,
-            images: sourceImageIds,
-            mesh: actionMeshId,
-            baseAddedFrom: actionMeshId,
-            meshBase: normalizedMeshBase,
-            meshBaseSettings: normalizedMeshBaseSettings,
-            model: 'ultra',
-            ...(actionImageGenerationModel && {
-              imageGenerationModel: actionImageGenerationModel,
-            }),
-          },
-        })
-        .select()
-        .single();
-
-      if (newMeshError || !newMeshData) {
-        await tokenLedger.refundAll(logRefundFailure);
-        return new Response(
-          JSON.stringify({
-            error: { message: 'Failed to create base mesh entry' },
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-
-      const newMessageId = crypto.randomUUID();
-      const content = {
-        text: `Adding a ${selectedBase.label.toLowerCase()} printable base to this mesh.`,
-        mesh: { id: newMeshData.id, fileType: 'glb' as const },
-        model: 'ultra' as const,
-      };
-      const messageData = {
-        id: newMessageId,
-        conversation_id: conversationId,
-        role: 'assistant',
-        content,
-        parent_message_id: parentMessageId || null,
-        created_at: new Date().toISOString(),
-      };
-
-      const { error: messageError } = await supabaseClient
-        .from('messages')
-        .insert({
-          id: newMessageId,
-          conversation_id: conversationId,
-          role: 'assistant',
-          content,
-          parent_message_id: parentMessageId || null,
-        });
-
-      if (messageError) {
-        await tokenLedger.refundAll(logRefundFailure);
-        await supabaseClient
-          .from('meshes')
-          .update({ status: 'failure' })
-          .eq('id', newMeshData.id);
-        return new Response(
-          JSON.stringify({
-            error: { message: 'Failed to create add-base message' },
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-
-      await supabaseClient
-        .from('conversations')
-        .update({ current_message_leaf_id: newMessageId })
-        .eq('id', conversationId);
-
-      EdgeRuntime.waitUntil(
-        submitMeshJob(
-          supabaseClient,
-          addBasePrompt,
-          undefined,
-          actionMeshId,
-          userData.user.id,
-          conversationId,
-          newMeshData.id,
-          'ultra',
-          meshTopology,
-          polygonCount,
-          actionImageGenerationModel,
-          undefined,
-          tokenLedger,
-          meshReferenceId,
-        ),
-      );
-
-      const responseStream = new ReadableStream({
-        start(controller) {
-          streamMessage(controller, messageData);
-          controller.close();
         },
       });
 

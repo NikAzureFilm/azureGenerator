@@ -3,40 +3,40 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-assert.match(
+assert.doesNotMatch(
   source,
   /action\?: 'upscale' \| 'add-base'/,
-  'mesh function should accept add-base as a post-generation mesh action',
+  'mesh function should not accept add-base as a post-generation mesh action',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /if \(action === 'add-base' && actionMeshId && conversationId\)/,
-  'mesh function should handle add-base only as an action on an existing mesh',
+  'mesh function should not handle add-base actions on existing meshes',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /const normalizedMeshBase = normalizeAddedMeshBase\(meshBase\)/,
-  'add-base action should normalize missing or invalid base choices to a printable default',
+  'mesh function should not normalize add-base choices',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /const normalizedMeshBaseSettings\s*=\s*normalizeMeshBaseSettings\(meshBaseSettings\)/,
-  'add-base action should normalize requested base rotation, scale, and thickness',
+  'mesh function should not normalize add-base transform settings',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /appendMeshBasePromptDirective\([\s\S]*originalPromptText[\s\S]*normalizedMeshBase[\s\S]*normalizedMeshBaseSettings[\s\S]*\)/,
-  'add-base action should derive a follow-up prompt with the selected base directive and transform settings',
+  'mesh function should not derive add-base follow-up prompts',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /baseAddedFrom: actionMeshId[\s\S]*meshBase: normalizedMeshBase[\s\S]*meshBaseSettings: normalizedMeshBaseSettings/s,
-  'add-base action should persist the source mesh, selected base, and transform settings on the derived mesh prompt',
+  'mesh function should not persist add-base metadata on derived mesh prompts',
 );
 
 assert.doesNotMatch(

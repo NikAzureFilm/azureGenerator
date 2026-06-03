@@ -3,50 +3,50 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./AssistantMessage.tsx', import.meta.url), 'utf8');
 
-assert.match(
+assert.doesNotMatch(
   source,
   /onAddBase\?:/,
-  'assistant message should expose a post-generation add-base callback',
+  'assistant message should not expose a post-generation add-base callback',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /meshBaseSettings:/,
-  'assistant add-base callback should include rotation, scale, and thickness settings',
+  'assistant message should not include add-base transform settings',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /const canAddBase =[\s\S]*meshDataQuery\.data\?\.status === 'success'[\s\S]*!meshDataQuery\.data\?\.prompt\?\.meshBase/s,
-  'add-base action should only show for completed meshes that do not already have a generated base',
+  'assistant message should not compute add-base availability',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /MESH_BASE_OPTIONS\.filter\([\s\S]*option\.id !== DEFAULT_MESH_BASE[\s\S]*\)/,
-  'post-generation add-base menu should offer base presets and omit "No base"',
+  'assistant message should not build add-base options',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /<span>Add base<\/span>/,
-  'completed mesh messages should render an Add base action',
+  'completed mesh messages should not render an Add base action',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /DEFAULT_MESH_BASE_SETTINGS/,
-  'add-base menu should initialize transform controls from shared defaults',
+  'assistant message should not import add-base defaults',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /Rotation[\s\S]*Scale[\s\S]*Thickness/s,
-  'add-base menu should expose rotation, scale, and thickness controls',
+  'assistant message should not expose add-base transform controls',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /<Slider[\s\S]*baseRotation[\s\S]*<Slider[\s\S]*baseScale[\s\S]*<Slider[\s\S]*baseThickness/s,
-  'rotation, scale, and thickness should be adjustable with sliders',
+  'assistant message should not render add-base sliders',
 );

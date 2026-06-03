@@ -3,20 +3,20 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./messageService.ts', import.meta.url), 'utf8');
 
-assert.match(
+assert.doesNotMatch(
   source,
   /export function useAddBaseMutation/,
-  'message service should expose an add-base mutation',
+  'message service should not expose an add-base mutation',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /mutationKey:\s*\['add-base', conversation\.id\]/,
-  'add-base mutation should have its own query key',
+  'message service should not register an add-base mutation key',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /action:\s*'add-base'[\s\S]*meshBase[\s\S]*meshBaseSettings[\s\S]*parentMessageId/s,
-  'add-base mutation should call the mesh edge function with the existing mesh, selected base, transform settings, and parent message',
+  'message service should not call the mesh edge function with add-base settings',
 );

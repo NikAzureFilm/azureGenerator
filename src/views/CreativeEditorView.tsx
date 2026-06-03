@@ -11,7 +11,6 @@ import {
   useRestoreMessageMutation,
   useChangeRatingMutation,
   useUpscaleMutation,
-  useAddBaseMutation,
 } from '@/services/messageService';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import Tree from '@shared/Tree';
@@ -51,9 +50,6 @@ export function CreativeEditorView() {
   const { mutate: upscaleMessage, isPending: isUpscalingMessage } =
     useUpscaleMutation({ conversation, updateConversationAsync });
 
-  const { mutate: addBaseMessage, isPending: isAddingBaseMessage } =
-    useAddBaseMutation({ conversation, updateConversationAsync });
-
   const isSending = useIsMutating({
     mutationKey: ['creative-chat', conversation.id],
   });
@@ -63,8 +59,7 @@ export function CreativeEditorView() {
     isSendingMessage ||
     isRetryingMessage ||
     isEditingMessage ||
-    isUpscalingMessage ||
-    isAddingBaseMessage;
+    isUpscalingMessage;
 
   const { data: messages = [] } = useMessagesQuery();
 
@@ -146,7 +141,6 @@ export function CreativeEditorView() {
       editMessage={editMessage}
       changeRating={changeRating}
       upscaleMessage={upscaleMessage}
-      addBaseMessage={addBaseMessage}
     />
   );
 }

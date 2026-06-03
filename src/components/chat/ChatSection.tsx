@@ -7,7 +7,6 @@ import {
   MultiviewImages,
   normalizeCreativeModel,
 } from '@shared/types';
-import type { MeshBaseId, MeshBaseSettings } from '@shared/meshBase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { SuggestionPills } from '@/components/chat/SuggestionPills';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -67,17 +66,6 @@ interface ChatSectionProps {
     meshId: string;
     parentMessageId: string | null;
   }) => void;
-  addBaseMessage?: ({
-    meshId,
-    parentMessageId,
-    meshBase,
-    meshBaseSettings,
-  }: {
-    meshId: string;
-    parentMessageId: string | null;
-    meshBase: MeshBaseId;
-    meshBaseSettings: MeshBaseSettings;
-  }) => void;
 }
 
 export function ChatSection({
@@ -90,7 +78,6 @@ export function ChatSection({
   restoreMessage,
   retryMessage,
   upscaleMessage,
-  addBaseMessage,
 }: ChatSectionProps) {
   const isMobile = useIsMobile();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -339,7 +326,6 @@ export function ChatSection({
                     limitReached={limitReached}
                     onRetry={retryMessage}
                     onUpscale={upscaleMessage}
-                    onAddBase={addBaseMessage}
                   />
                 ) : (
                   <UserMessage
