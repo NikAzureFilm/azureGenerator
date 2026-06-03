@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { pickSpinnerVerb } from '@/constants/spinnerVerbs';
-import { AzureFilm3DMark } from '@/components/viewer/AzureFilm3DMark';
+import { GlbPreview } from './GlbPreview';
 
 type Props = {
   message?: string;
@@ -18,6 +18,7 @@ const Loader = ({ message }: Props) => {
   const fadeTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const [changingMessage, setChangingMessage] = useState(message);
+  const startTime = useMemo(() => Date.now(), []);
 
   useEffect(() => {
     const swapMessage = (next: string) => {
@@ -86,7 +87,7 @@ const Loader = ({ message }: Props) => {
   return (
     <div className="flex flex-col items-center justify-center">
       <div className="relative h-32 w-32">
-        <AzureFilm3DMark />
+        <GlbPreview startTime={startTime} />
       </div>
       {message && (
         <p

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { BufferGeometry } from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import { CircleAlert, Loader2 } from 'lucide-react';
+import { CircleAlert } from 'lucide-react';
 import { CadJob } from '@shared/types';
 import { ThreeScene } from './ThreeScene';
+import { CadLoadingPreview } from './CadLoadingPreview';
 
 interface CadJobPreviewProps {
   cadJob: CadJob;
@@ -130,11 +131,13 @@ export function CadJobPreview({
   }
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-adam-text-primary">
-      <Loader2 className="h-7 w-7 animate-spin text-adam-blue" />
-      <p className="text-xs font-medium text-adam-text-primary/70">
-        Loading preview...
-      </p>
-    </div>
+    <CadLoadingPreview
+      generationId={cadJob.id}
+      label={
+        cadJob.status === 'pending'
+          ? 'Generating STEP CAD model...'
+          : 'Loading STEP CAD preview...'
+      }
+    />
   );
 }
