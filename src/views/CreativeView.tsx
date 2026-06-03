@@ -13,7 +13,7 @@ import { useRef, useState, useMemo, useCallback } from 'react';
 import { ChevronsRight } from 'lucide-react';
 import { TreeNode } from '@shared/Tree';
 import { CreativePreviewDialog } from '@/components/viewer/CreativePreviewDialog';
-import type { MeshBaseId } from '@shared/meshBase';
+import type { MeshBaseId, MeshBaseSettings } from '@shared/meshBase';
 
 // Panel size constants
 const PANEL_SIZES = {
@@ -54,10 +54,12 @@ type CreativeViewProps = {
     meshId,
     parentMessageId,
     meshBase,
+    meshBaseSettings,
   }: {
     meshId: string;
     parentMessageId: string | null;
     meshBase: MeshBaseId;
+    meshBaseSettings: MeshBaseSettings;
   }) => void;
 };
 

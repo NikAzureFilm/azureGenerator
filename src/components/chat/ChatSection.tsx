@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Content, Message, Model, normalizeCreativeModel } from '@shared/types';
-import type { MeshBaseId } from '@shared/meshBase';
+import type { MeshBaseId, MeshBaseSettings } from '@shared/meshBase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { SuggestionPills } from '@/components/chat/SuggestionPills';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -65,10 +65,12 @@ interface ChatSectionProps {
     meshId,
     parentMessageId,
     meshBase,
+    meshBaseSettings,
   }: {
     meshId: string;
     parentMessageId: string | null;
     meshBase: MeshBaseId;
+    meshBaseSettings: MeshBaseSettings;
   }) => void;
 }
 

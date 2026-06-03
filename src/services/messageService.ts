@@ -17,7 +17,7 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
-import type { MeshBaseId } from '@shared/meshBase';
+import type { MeshBaseId, MeshBaseSettings } from '@shared/meshBase';
 
 function shouldUseTextToCad(content?: Content): boolean {
   return content?.cadBackend === 'text-to-cad';
@@ -1202,10 +1202,12 @@ export function useAddBaseMutation({
       meshId,
       parentMessageId,
       meshBase,
+      meshBaseSettings,
     }: {
       meshId: string;
       parentMessageId: string | null;
       meshBase: MeshBaseId;
+      meshBaseSettings: MeshBaseSettings;
     }) => {
       if (parentMessageId && updateConversationAsync) {
         await updateConversationAsync({
@@ -1227,6 +1229,7 @@ export function useAddBaseMutation({
           meshId,
           conversationId: conversation.id,
           meshBase,
+          meshBaseSettings,
           parentMessageId,
         }),
       });

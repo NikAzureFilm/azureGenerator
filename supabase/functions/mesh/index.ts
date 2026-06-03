@@ -21,6 +21,8 @@ import {
   appendMeshBasePromptDirective,
   getMeshBaseOption,
   normalizeAddedMeshBase,
+  normalizeMeshBaseSettings,
+  type MeshBaseSettings,
   type MeshBaseId,
 } from '@shared/meshBase.ts';
 import {
@@ -630,6 +632,7 @@ Deno.serve(async (req) => {
       meshTopology,
       polygonCount,
       meshBase,
+      meshBaseSettings,
       preferredFormat,
       action,
       meshId: actionMeshId,
@@ -646,6 +649,7 @@ Deno.serve(async (req) => {
       meshTopology?: 'quads' | 'polys';
       polygonCount?: number;
       meshBase?: MeshBaseId;
+      meshBaseSettings?: Partial<MeshBaseSettings>;
       preferredFormat?: 'glb' | 'fbx';
       action?: 'upscale' | 'add-base';
       meshId?: string;
@@ -1041,6 +1045,8 @@ Deno.serve(async (req) => {
       debugLog('Adding base to mesh:', actionMeshId);
 
       const normalizedMeshBase = normalizeAddedMeshBase(meshBase);
+      const normalizedMeshBaseSettings =
+        normalizeMeshBaseSettings(meshBaseSettings);
       const selectedBase = getMeshBaseOption(normalizedMeshBase);
 
       const { data: originalMesh, error: originalMeshError } =
@@ -1091,10 +1097,15 @@ Deno.serve(async (req) => {
           ? originalPrompt.text
           : undefined;
       const addBasePrompt =
-        appendMeshBasePromptDirective(originalPromptText, normalizedMeshBase) ??
+        appendMeshBasePromptDirective(
+          originalPromptText,
+          normalizedMeshBase,
+          normalizedMeshBaseSettings,
+        ) ??
         appendMeshBasePromptDirective(
           'Preserve the existing generated mesh subject and add a display base underneath it.',
           normalizedMeshBase,
+          normalizedMeshBaseSettings,
         );
       const actionImageGenerationModel =
         imageGenerationModel ??
@@ -1116,6 +1127,7 @@ Deno.serve(async (req) => {
             mesh: actionMeshId,
             baseAddedFrom: actionMeshId,
             meshBase: normalizedMeshBase,
+            meshBaseSettings: normalizedMeshBaseSettings,
             model: 'ultra',
             ...(actionImageGenerationModel && {
               imageGenerationModel: actionImageGenerationModel,

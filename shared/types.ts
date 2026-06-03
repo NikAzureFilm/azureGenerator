@@ -1,6 +1,6 @@
 import type { Database } from './database.ts';
 import type { ImageGenerationModel } from './imageGeneration.ts';
-import type { MeshBaseId } from './meshBase.ts';
+import type { MeshBaseId, MeshBaseSettings } from './meshBase.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
 export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
@@ -30,6 +30,7 @@ export type Prompt = {
   mesh?: string;
   model?: Model;
   meshBase?: MeshBaseId;
+  meshBaseSettings?: MeshBaseSettings;
   multiviewImages?: MultiviewImages;
   semanticMaterialMap?: SemanticMaterialMap;
 };

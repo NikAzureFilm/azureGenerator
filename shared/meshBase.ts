@@ -1,6 +1,18 @@
 export const DEFAULT_MESH_BASE = 'none';
 export const DEFAULT_ADDED_MESH_BASE = 'round';
 
+export type MeshBaseSettings = {
+  rotationDeg: number;
+  scalePercent: number;
+  thicknessPercent: number;
+};
+
+export const DEFAULT_MESH_BASE_SETTINGS: MeshBaseSettings = {
+  rotationDeg: 0,
+  scalePercent: 115,
+  thicknessPercent: 10,
+};
+
 export const MESH_BASE_IDS = [
   'none',
   'round',
@@ -64,6 +76,17 @@ export const MESH_BASE_OPTIONS: readonly MeshBaseOption[] = [
 
 const MESH_BASE_ID_SET = new Set<string>(MESH_BASE_IDS);
 
+function clampNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+) {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numberValue)));
+}
+
 export function normalizeMeshBase(value: unknown): MeshBaseId {
   return typeof value === 'string' && MESH_BASE_ID_SET.has(value)
     ? (value as MeshBaseId)
@@ -75,6 +98,34 @@ export function normalizeAddedMeshBase(value: unknown): MeshBaseId {
   return meshBase === DEFAULT_MESH_BASE ? DEFAULT_ADDED_MESH_BASE : meshBase;
 }
 
+export function normalizeMeshBaseSettings(value: unknown): MeshBaseSettings {
+  const settings =
+    value && typeof value === 'object'
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    rotationDeg: clampNumber(
+      settings.rotationDeg ?? settings.rotation,
+      0,
+      360,
+      DEFAULT_MESH_BASE_SETTINGS.rotationDeg,
+    ),
+    scalePercent: clampNumber(
+      settings.scalePercent ?? settings.scale,
+      80,
+      200,
+      DEFAULT_MESH_BASE_SETTINGS.scalePercent,
+    ),
+    thicknessPercent: clampNumber(
+      settings.thicknessPercent ?? settings.thickness,
+      4,
+      35,
+      DEFAULT_MESH_BASE_SETTINGS.thicknessPercent,
+    ),
+  };
+}
+
 export function getMeshBaseOption(value: unknown): MeshBaseOption {
   const meshBase = normalizeMeshBase(value);
   return (
@@ -83,16 +134,31 @@ export function getMeshBaseOption(value: unknown): MeshBaseOption {
   );
 }
 
-export function buildMeshBasePromptDirective(value: unknown) {
-  return getMeshBaseOption(value).directive;
+export function buildMeshBasePromptDirective(
+  value: unknown,
+  settings?: unknown,
+) {
+  const directive = getMeshBaseOption(value).directive;
+  if (!directive) {
+    return undefined;
+  }
+
+  const normalizedSettings = normalizeMeshBaseSettings(settings);
+  const transformDirective =
+    `Base transform: rotate the base ${normalizedSettings.rotationDeg} degrees around the vertical axis, ` +
+    `keep its footprint scale at ${normalizedSettings.scalePercent}% of the subject footprint, ` +
+    `and make the base thickness around ${normalizedSettings.thicknessPercent}% of the subject height.`;
+
+  return `${directive} ${transformDirective}`;
 }
 
 export function appendMeshBasePromptDirective(
   text: string | undefined,
   value: unknown,
+  settings?: unknown,
 ) {
   const trimmedText = text?.trim();
-  const directive = buildMeshBasePromptDirective(value);
+  const directive = buildMeshBasePromptDirective(value, settings);
 
   if (!directive) {
     return trimmedText || undefined;

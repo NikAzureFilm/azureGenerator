@@ -17,6 +17,6 @@ assert.match(
 
 assert.match(
   source,
-  /action:\s*'add-base'[\s\S]*meshBase[\s\S]*parentMessageId/s,
-  'add-base mutation should call the mesh edge function with the existing mesh, selected base, and parent message',
+  /action:\s*'add-base'[\s\S]*meshBase[\s\S]*meshBaseSettings[\s\S]*parentMessageId/s,
+  'add-base mutation should call the mesh edge function with the existing mesh, selected base, transform settings, and parent message',
 );

@@ -24,6 +24,7 @@ import { StreamingCodeBlock } from '@/components/chat/StreamingCodeBlock';
 import { BrandLogo } from '@/components/BrandLogo';
 import { BRAND_WEBSITE } from '@/config/brand';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
 import { RefreshCw } from 'lucide-react';
 import { Avatar } from '@/components/ui/avatar';
 import {
@@ -44,7 +45,7 @@ import {
 } from '@/components/ui/tooltip';
 import { Separator } from '@/components/ui/separator';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,10 +58,12 @@ import { MeshImagePreview } from '@/components/viewer/MeshImagePreview';
 import { TreeNode } from '@shared/Tree';
 import {
   DEFAULT_ADDED_MESH_BASE,
+  DEFAULT_MESH_BASE_SETTINGS,
   DEFAULT_MESH_BASE,
   MESH_BASE_OPTIONS,
   type MeshBaseId,
   type MeshBaseOption,
+  type MeshBaseSettings,
 } from '@shared/meshBase';
 
 const linkParametricMode = (text: string) =>
@@ -96,10 +99,12 @@ interface AssistantMessageProps {
     meshId,
     parentMessageId,
     meshBase,
+    meshBaseSettings,
   }: {
     meshId: string;
     parentMessageId: string | null;
     meshBase: MeshBaseId;
+    meshBaseSettings: MeshBaseSettings;
   }) => void;
   restoreMessage?: (message: Message) => void;
   limitReached?: boolean;
@@ -132,6 +137,15 @@ export function AssistantMessage({
   const { conversation, updateConversation } = useConversation();
   const { currentMessage, setCurrentMessage } = useCurrentMessage();
   const isMobile = useIsMobile();
+  const [baseRotation, setBaseRotation] = useState(
+    DEFAULT_MESH_BASE_SETTINGS.rotationDeg,
+  );
+  const [baseScale, setBaseScale] = useState(
+    DEFAULT_MESH_BASE_SETTINGS.scalePercent,
+  );
+  const [baseThickness, setBaseThickness] = useState(
+    DEFAULT_MESH_BASE_SETTINGS.thicknessPercent,
+  );
   const model = getBackupModel({
     message,
     parentMessage: message.parent ?? undefined,
@@ -184,6 +198,15 @@ export function AssistantMessage({
     meshDataQuery.data?.status === 'success' &&
     !meshDataQuery.data?.prompt?.meshBase;
 
+  const meshBaseSettings = useMemo<MeshBaseSettings>(
+    () => ({
+      rotationDeg: baseRotation,
+      scalePercent: baseScale,
+      thicknessPercent: baseThickness,
+    }),
+    [baseRotation, baseScale, baseThickness],
+  );
+
   const handleUpscale = useCallback(() => {
     if (!message.content.mesh || !onUpscale) return;
 
@@ -194,16 +217,25 @@ export function AssistantMessage({
   }, [message.content.mesh, message.parent_message_id, onUpscale]);
 
   const handleAddBase = useCallback(
-    (meshBase: MeshBaseId = DEFAULT_ADDED_MESH_BASE) => {
+    (
+      meshBase: MeshBaseId = DEFAULT_ADDED_MESH_BASE,
+      settings: MeshBaseSettings = meshBaseSettings,
+    ) => {
       if (!message.content.mesh || !onAddBase) return;
 
       onAddBase({
         meshId: message.content.mesh.id,
         parentMessageId: message.parent_message_id,
         meshBase,
+        meshBaseSettings: settings,
       });
     },
-    [message.content.mesh, message.parent_message_id, onAddBase],
+    [
+      meshBaseSettings,
+      message.content.mesh,
+      message.parent_message_id,
+      onAddBase,
+    ],
   );
 
   // Check if this message is the last one in the conversation
@@ -547,14 +579,61 @@ export function AssistantMessage({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
-                    className="w-44 rounded-lg border border-adam-neutral-700 bg-adam-neutral-800 p-1"
+                    className="w-56 rounded-lg border border-adam-neutral-700 bg-adam-neutral-800 p-1"
                     align="start"
                   >
+                    <div className="space-y-3 px-2 py-2">
+                      <MeshBaseTransformControl
+                        label="Rotation"
+                        value={`${baseRotation} deg`}
+                      >
+                        <Slider
+                          value={[baseRotation]}
+                          min={0}
+                          max={360}
+                          step={15}
+                          onValueChange={(value) =>
+                            setBaseRotation(value[0] ?? baseRotation)
+                          }
+                        />
+                      </MeshBaseTransformControl>
+                      <MeshBaseTransformControl
+                        label="Scale"
+                        value={`${baseScale}%`}
+                      >
+                        <Slider
+                          value={[baseScale]}
+                          min={80}
+                          max={200}
+                          step={5}
+                          onValueChange={(value) =>
+                            setBaseScale(value[0] ?? baseScale)
+                          }
+                        />
+                      </MeshBaseTransformControl>
+                      <MeshBaseTransformControl
+                        label="Thickness"
+                        value={`${baseThickness}%`}
+                      >
+                        <Slider
+                          value={[baseThickness]}
+                          min={4}
+                          max={35}
+                          step={1}
+                          onValueChange={(value) =>
+                            setBaseThickness(value[0] ?? baseThickness)
+                          }
+                        />
+                      </MeshBaseTransformControl>
+                    </div>
+                    <div className="mx-1 my-1 h-px bg-adam-neutral-700" />
                     {ADD_BASE_OPTIONS.map((option) => (
                       <DropdownMenuItem
                         key={option.id}
                         className="cursor-pointer rounded-md bg-adam-neutral-800 px-2 py-1.5 text-xs text-adam-text-primary hover:bg-adam-neutral-700 focus:bg-adam-bg-secondary-dark"
-                        onClick={() => handleAddBase(option.id)}
+                        onClick={() =>
+                          handleAddBase(option.id, meshBaseSettings)
+                        }
                       >
                         <MeshBaseOptionIcon option={option} />
                         <span>{option.label}</span>
@@ -598,6 +677,26 @@ export function AssistantMessage({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function MeshBaseTransformControl({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-adam-text-secondary">
+        <span>{label}</span>
+        <span className="tabular-nums text-adam-text-primary">{value}</span>
+      </div>
+      {children}
     </div>
   );
 }

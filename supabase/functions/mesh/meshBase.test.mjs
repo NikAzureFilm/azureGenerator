@@ -23,14 +23,20 @@ assert.match(
 
 assert.match(
   source,
-  /appendMeshBasePromptDirective\(originalPromptText, normalizedMeshBase\)/,
-  'add-base action should derive a follow-up prompt with the selected base directive',
+  /const normalizedMeshBaseSettings\s*=\s*normalizeMeshBaseSettings\(meshBaseSettings\)/,
+  'add-base action should normalize requested base rotation, scale, and thickness',
 );
 
 assert.match(
   source,
-  /baseAddedFrom: actionMeshId[\s\S]*meshBase: normalizedMeshBase/s,
-  'add-base action should persist the source mesh and selected base on the derived mesh prompt',
+  /appendMeshBasePromptDirective\([\s\S]*originalPromptText[\s\S]*normalizedMeshBase[\s\S]*normalizedMeshBaseSettings[\s\S]*\)/,
+  'add-base action should derive a follow-up prompt with the selected base directive and transform settings',
+);
+
+assert.match(
+  source,
+  /baseAddedFrom: actionMeshId[\s\S]*meshBase: normalizedMeshBase[\s\S]*meshBaseSettings: normalizedMeshBaseSettings/s,
+  'add-base action should persist the source mesh, selected base, and transform settings on the derived mesh prompt',
 );
 
 assert.doesNotMatch(
