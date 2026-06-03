@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import {
   Menu,
   Plus,
@@ -44,6 +44,7 @@ import { cn } from '@/lib/utils';
 import { Conversation, ConversationSettings } from '@shared/types';
 import { UserAvatar } from '@/components/chat/UserAvatar';
 import { useProfile } from '@/services/profileService';
+import { getActiveSidebarConversationId } from '@/utils/sidebarActiveConversation';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -59,10 +60,14 @@ type SidebarPath =
 
 function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, signOut } = useAuth();
   const isMobile = useIsMobile();
   const { data: profile } = useProfile();
   const showAdminNav = import.meta.env.VITE_SHOW_ADMIN_NAV === 'true';
+  const activeConversationId = getActiveSidebarConversationId(
+    location.pathname,
+  );
 
   // Get 10 most recent conversations
   const { data: recentConversations } = useQuery<Conversation[]>({
@@ -248,23 +253,33 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                           'message_count' | 'last_message_at'
                         >,
                       ) => {
+                        const isActiveConversation =
+                          activeConversationId === conversation.id;
+
                         return (
-                          <Link
-                            to="/editor/$id"
-                            params={{ id: conversation.id }}
-                            key={conversation.id}
-                            onClick={() => {
-                              if (isMobile) {
-                                setIsSidebarOpen(false);
+                          <li key={conversation.id}>
+                            <Link
+                              to="/editor/$id"
+                              params={{ id: conversation.id }}
+                              aria-current={
+                                isActiveConversation ? 'page' : undefined
                               }
-                            }}
-                          >
-                            <li key={conversation.id}>
-                              <span className="line-clamp-1 text-ellipsis text-nowrap rounded-md p-1 text-xs font-medium text-adam-neutral-400 transition-colors duration-200 ease-in-out [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10">
+                              className={cn(
+                                'block rounded-md border border-transparent p-1 text-xs font-medium text-adam-neutral-400 transition-colors duration-200 ease-in-out [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10',
+                                isActiveConversation &&
+                                  'border-adam-blue/70 bg-adam-blue/20 text-adam-neutral-10 shadow-[0_0_0_1px_rgba(15,95,244,0.25)] [@media(hover:hover)]:hover:bg-adam-blue/25 [@media(hover:hover)]:hover:text-adam-neutral-10',
+                              )}
+                              onClick={() => {
+                                if (isMobile) {
+                                  setIsSidebarOpen(false);
+                                }
+                              }}
+                            >
+                              <span className="block truncate">
                                 {conversation.title}
                               </span>
-                            </li>
-                          </Link>
+                            </Link>
+                          </li>
                         );
                       },
                     )}
