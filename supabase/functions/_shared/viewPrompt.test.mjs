@@ -33,6 +33,16 @@ for (const provider of providers) {
       /no cast shadows, no ground shadows/i,
       `${provider} ${view} prompt must avoid shadows in generated reference images`,
     );
+    assert.match(
+      prompt,
+      /no contact shadows/i,
+      `${provider} ${view} prompt must avoid contact shadows under the object`,
+    );
+    assert.match(
+      prompt,
+      /no floor plane or ground plane/i,
+      `${provider} ${view} prompt must avoid floor-plane shadows`,
+    );
     assert.doesNotMatch(
       prompt,
       /soft shadow directly underneath/i,
@@ -87,4 +97,16 @@ assert.match(
   inputReferencePrompt,
   /no baked-in shadow marks/i,
   'reference image edits should avoid baking shadows into the model texture',
+);
+
+assert.match(
+  inputReferencePrompt,
+  /no contact shadows/i,
+  'reference image edits should avoid contact shadows like the dark area under the feet',
+);
+
+assert.match(
+  inputReferencePrompt,
+  /no ambient occlusion/i,
+  'reference image edits should avoid ambient-occlusion shadows around the model',
 );

@@ -76,6 +76,16 @@ assert.match(
   /no cast shadows, no ground shadows/i,
   'mesh image instructions should tell image generators to avoid shadows',
 );
+assert.match(
+  imageGenSource,
+  /no contact shadows/i,
+  'mesh image instructions should prevent contact shadows from becoming texture artifacts',
+);
+assert.match(
+  imageGenSource,
+  /no ambient occlusion/i,
+  'mesh image instructions should prevent baked ambient-occlusion shadows',
+);
 assert.doesNotMatch(
   imageGenSource,
   /soft shadow directly under/i,
