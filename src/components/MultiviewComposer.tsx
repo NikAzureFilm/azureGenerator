@@ -5,7 +5,14 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ImagePlus, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
+import {
+  Download,
+  ImagePlus,
+  Loader2,
+  RefreshCw,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
@@ -20,6 +27,13 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   ImageGenerateDialog,
   type ImageGenerateReference,
 } from '@/components/ImageGenerateDialog';
@@ -32,6 +46,7 @@ import {
   restoreMultiviewSlotAfterFailure,
 } from '@/utils/multiviewReference';
 import { invokeGenerateViewWithFallback } from '@/utils/generateViewWithFallback';
+import { getSafeFilename } from '@/utils/file-utils';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
@@ -48,6 +63,64 @@ const VALID_IMAGE_FORMATS = [
   'image/png',
   'image/webp',
 ];
+
+const IMAGE_EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+function triggerDownload(href: string, filename: string) {
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function getImageExtension(mime: string | undefined, url: string): string {
+  if (mime && IMAGE_EXTENSION_BY_MIME[mime]) {
+    return IMAGE_EXTENSION_BY_MIME[mime];
+  }
+
+  const dataUrlMime = url
+    .match(/^data:(image\/[a-z0-9.+-]+);/i)?.[1]
+    ?.toLowerCase();
+  if (dataUrlMime && IMAGE_EXTENSION_BY_MIME[dataUrlMime]) {
+    return IMAGE_EXTENSION_BY_MIME[dataUrlMime];
+  }
+
+  try {
+    const pathname = new URL(url, window.location.origin).pathname;
+    const extension = pathname.split('.').pop()?.toLowerCase();
+    if (extension && ['jpg', 'jpeg', 'png', 'webp'].includes(extension)) {
+      return extension === 'jpeg' ? 'jpg' : extension;
+    }
+  } catch {
+    // Keep the default extension when the URL cannot be parsed.
+  }
+
+  return 'png';
+}
+
+async function downloadImageUrl(url: string, filenameBase: string) {
+  const safeBase = getSafeFilename(filenameBase, 'multiview-image');
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Image request failed');
+    const blob = await response.blob();
+    const extension = getImageExtension(blob.type, url);
+    const objectUrl = URL.createObjectURL(blob);
+    triggerDownload(objectUrl, `${safeBase}.${extension}`);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch {
+    const extension = getImageExtension(undefined, url);
+    triggerDownload(url, `${safeBase}.${extension}`);
+  }
+}
 
 export interface MultiviewSlotState {
   id?: string; // storage image id once uploaded/generated
@@ -96,6 +169,10 @@ export function MultiviewComposer({
   const [dialogState, setDialogState] = useState<DialogState | null>(null);
   const [isUploadingDialogRef, setIsUploadingDialogRef] = useState(false);
   const [isGeneratingDialog, setIsGeneratingDialog] = useState(false);
+  const [previewSlot, setPreviewSlot] = useState<MultiviewSlot | null>(null);
+  const previewState = previewSlot ? slots[previewSlot] : undefined;
+  const isPreviewOpen = !!previewSlot && hasMultiviewSlotPreview(previewState);
+  const previewIsReference = !!previewSlot && previewSlot === firstFilledSlot;
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
@@ -179,6 +256,15 @@ export function MultiviewComposer({
       });
     },
     [buildReferencesForSlot, prompt],
+  );
+
+  const openPreviewDialog = useCallback(
+    (slot: MultiviewSlot) => {
+      const current = slots[slot];
+      if (!hasMultiviewSlotPreview(current) || current?.isBusy) return;
+      setPreviewSlot(slot);
+    },
+    [slots],
   );
 
   const handleDialogOpenChange = useCallback((open: boolean) => {
@@ -366,6 +452,51 @@ export function MultiviewComposer({
     [slots, conversationId, userId, updateSlot],
   );
 
+  const handleDownloadSlot = useCallback(
+    async (slot: MultiviewSlot) => {
+      const current = slots[slot];
+      if (!current?.url) return;
+
+      try {
+        await downloadImageUrl(
+          current.url,
+          `azurefilm-${SLOT_LABEL[slot].toLowerCase()}-view`,
+        );
+      } catch (error) {
+        console.error('Failed to download multiview image:', error);
+        toast({
+          title: 'Download failed',
+          description: 'Could not download this image.',
+          variant: 'destructive',
+        });
+      }
+    },
+    [slots, toast],
+  );
+
+  const handleDownloadAll = useCallback(async () => {
+    const filledSlots = SLOT_ORDER.filter((slot) => !!slots[slot]?.url);
+    if (filledSlots.length === 0) return;
+
+    try {
+      for (const slot of filledSlots) {
+        const current = slots[slot];
+        if (!current?.url) continue;
+        await downloadImageUrl(
+          current.url,
+          `azurefilm-${SLOT_LABEL[slot].toLowerCase()}-view`,
+        );
+      }
+    } catch (error) {
+      console.error('Failed to download multiview images:', error);
+      toast({
+        title: 'Download failed',
+        description: 'Could not download every image.',
+        variant: 'destructive',
+      });
+    }
+  }, [slots, toast]);
+
   return (
     <div className="flex flex-col gap-2 p-2">
       <div className="flex items-center gap-2">
@@ -388,6 +519,8 @@ export function MultiviewComposer({
             onUpload={handleUpload}
             onGenerate={openGenerateDialog}
             onRemove={handleRemove}
+            onPreview={openPreviewDialog}
+            onDownload={handleDownloadSlot}
             isReference={slot === firstFilledSlot}
           />
         ))}
@@ -412,6 +545,57 @@ export function MultiviewComposer({
           generateLabel={`Generate ${SLOT_LABEL[dialogState.targetSlot]}`}
         />
       ) : null}
+      <Dialog
+        open={isPreviewOpen}
+        onOpenChange={(open) => {
+          if (!open) setPreviewSlot(null);
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] w-[min(calc(100vw-2rem),72rem)] max-w-none overflow-hidden border-adam-neutral-700 bg-adam-background-1 p-0 text-adam-text-primary sm:rounded-xl">
+          {previewSlot && previewState?.url ? (
+            <div className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col">
+              <div className="flex flex-col gap-3 border-b border-adam-neutral-800 bg-adam-background-2 px-4 py-3 pr-12 sm:flex-row sm:items-center sm:justify-between">
+                <DialogHeader className="space-y-1 text-left">
+                  <DialogTitle className="text-base text-adam-text-primary">
+                    {SLOT_LABEL[previewSlot]} view
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-adam-text-secondary">
+                    {previewIsReference
+                      ? 'Reference image for the other views'
+                      : 'Multiview image preview'}
+                    {previewState.kind === 'generated' ? ' - AI generated' : ''}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadSlot(previewSlot)}
+                    className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-adam-neutral-700 bg-adam-neutral-900 px-3 text-xs font-medium text-adam-text-primary hover:bg-adam-neutral-800"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Current
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadAll()}
+                    className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-adam-neutral-700 bg-adam-neutral-900 px-3 text-xs font-medium text-adam-text-primary hover:bg-adam-neutral-800"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    All views
+                  </button>
+                </div>
+              </div>
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3 sm:p-4">
+                <img
+                  src={previewState.url}
+                  alt={`${SLOT_LABEL[previewSlot]} view enlarged`}
+                  className="max-h-[calc(100dvh-9rem)] max-w-full rounded-md object-contain"
+                />
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -423,6 +607,8 @@ interface MultiviewSlotCardProps {
   onUpload: (slot: MultiviewSlot, file: File) => void;
   onGenerate: (slot: MultiviewSlot) => void;
   onRemove: (slot: MultiviewSlot) => void;
+  onPreview: (slot: MultiviewSlot) => void;
+  onDownload: (slot: MultiviewSlot) => void | Promise<void>;
   isReference?: boolean;
 }
 
@@ -433,6 +619,8 @@ function MultiviewSlotCard({
   onUpload,
   onGenerate,
   onRemove,
+  onPreview,
+  onDownload,
   isReference = false,
 }: MultiviewSlotCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -476,13 +664,19 @@ function MultiviewSlotCard({
         }}
       />
 
-      {/* Preview */}
       {hasImage && (
-        <img
-          src={state!.url}
-          alt={`${SLOT_LABEL[slot]} view`}
-          className="absolute inset-0 h-full w-full object-cover"
-        />
+        <button
+          type="button"
+          onClick={() => onPreview(slot)}
+          className="absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-adam-blue focus-visible:ring-offset-2 focus-visible:ring-offset-adam-background-1"
+          aria-label={`Open ${SLOT_LABEL[slot]} view preview`}
+        >
+          <img
+            src={state!.url}
+            alt={`${SLOT_LABEL[slot]} view`}
+            className="h-full w-full object-cover"
+          />
+        </button>
       )}
 
       {/* Busy overlay */}
@@ -502,6 +696,7 @@ function MultiviewSlotCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  type="button"
                   onClick={openFilePicker}
                   disabled={disabled}
                   className="flex h-6 w-6 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-white disabled:opacity-50"
@@ -514,6 +709,7 @@ function MultiviewSlotCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  type="button"
                   onClick={() => onGenerate(slot)}
                   disabled={disabled}
                   className="flex h-6 w-6 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-adam-blue disabled:opacity-50"
@@ -543,13 +739,27 @@ function MultiviewSlotCard({
           </div>
           <div
             className={cn(
-              'absolute right-1 top-1 flex gap-1 transition-opacity',
+              'absolute right-1 top-1 z-20 flex gap-1 transition-opacity',
               isHover ? 'opacity-100' : 'opacity-0',
             )}
           >
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  type="button"
+                  onClick={() => void onDownload(slot)}
+                  className="flex h-6 w-6 items-center justify-center rounded-full border border-adam-neutral-500 bg-adam-neutral-800/90 text-white hover:bg-adam-neutral-700"
+                  aria-label={`Download ${SLOT_LABEL[slot]} view`}
+                >
+                  <Download className="h-3 w-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Download</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
                   onClick={() => onGenerate(slot)}
                   disabled={disabled}
                   className="flex h-6 w-6 items-center justify-center rounded-full border border-adam-neutral-500 bg-adam-neutral-800/90 text-white hover:bg-adam-neutral-700"
@@ -562,6 +772,7 @@ function MultiviewSlotCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  type="button"
                   onClick={() => onRemove(slot)}
                   disabled={disabled}
                   className="flex h-6 w-6 items-center justify-center rounded-full border border-adam-neutral-500 bg-adam-neutral-800/90 text-white hover:bg-adam-neutral-700"
