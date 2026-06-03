@@ -32,3 +32,15 @@ assert.doesNotMatch(
   /downloadFBX/,
   'download menu should not keep an original-FBX download path that bypasses printable repair',
 );
+
+assert.match(
+  source,
+  /setIsDownloading3MF\(true\);\s*setIsDropdownOpen\(false\);\s*setTimeout\(async \(\) => \{/,
+  '3MF downloads should immediately dismiss the static color-count menu while the export is prepared',
+);
+
+assert.match(
+  source,
+  /role="status"[\s\S]*Preparing \.3MF/,
+  '3MF downloads should render a visible accessible busy indicator while the export is prepared',
+);

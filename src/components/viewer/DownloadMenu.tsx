@@ -212,6 +212,7 @@ export function DownloadMenu({
       });
 
       setIsDownloading3MF(true);
+      setIsDropdownOpen(false);
 
       setTimeout(async () => {
         try {
@@ -901,6 +902,26 @@ export function DownloadMenu({
           setReadyToDownload={setIsGifReady}
         />
       </div>
+      {isDownloading3MF ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed bottom-4 right-4 z-50 w-[min(calc(100vw-2rem),20rem)] overflow-hidden rounded-md border border-adam-blue/40 bg-adam-neutral-950/95 text-adam-text-primary shadow-2xl shadow-black/40 backdrop-blur sm:bottom-8 sm:right-8"
+        >
+          <div className="flex items-center gap-3 px-4 py-3">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-adam-blue" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Preparing .3MF</div>
+              <div className="text-xs text-adam-text-secondary">
+                Building color print file
+              </div>
+            </div>
+          </div>
+          <div className="h-1 overflow-hidden bg-adam-neutral-800">
+            <div className="h-full w-1/2 animate-[download-progress_1.1s_ease-in-out_infinite] bg-adam-blue" />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
