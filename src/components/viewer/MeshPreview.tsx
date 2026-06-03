@@ -246,6 +246,10 @@ function ModelWithControls({
               // If showTexture is true and no original setting, leave it alone
             }
 
+            if ('aoMap' in pbrMat) {
+              pbrMat.aoMap = null;
+            }
+
             // Handle roughness - use slider value
             if ('roughness' in pbrMat) {
               pbrMat.roughness = actualRoughness;
@@ -832,6 +836,7 @@ export function MeshPreview({ meshId }: { meshId: string }) {
             environment={null}
             intensity={brightness / 50}
             adjustCamera={false}
+            shadows={false}
           >
             <ambientLight intensity={brightness / 100} />
             {gltf && (

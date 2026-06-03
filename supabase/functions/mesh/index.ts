@@ -970,7 +970,7 @@ Deno.serve(async (req) => {
 
             const hunyuanInput = {
               input_image_url: imageUrl,
-              enable_pbr: true,
+              enable_pbr: false,
               face_count: 500000,
             };
             try {
@@ -1896,7 +1896,7 @@ async function submitMeshJob(
         symmetry_mode: 'auto' as const,
         should_remesh: true,
         should_texture: true,
-        enable_pbr: true,
+        enable_pbr: false,
       };
 
       debugLog('Submitting to Meshy v6 Preview', {

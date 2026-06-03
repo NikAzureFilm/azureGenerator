@@ -66,7 +66,12 @@ function ThreePreview({ geometry }: { geometry: BufferGeometry }) {
         far={1000}
         zoom={0.4}
       />
-      <Stage environment={null} intensity={0.6} position={[0, 0, 0]}>
+      <Stage
+        environment={null}
+        intensity={0.6}
+        position={[0, 0, 0]}
+        shadows={false}
+      >
         <Environment files={vitePublicAssetUrl('city.hdr')} />
         <ambientLight intensity={0.8} />
         <directionalLight position={[5, 5, 5]} intensity={1.2} />
