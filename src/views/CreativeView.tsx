@@ -13,6 +13,7 @@ import { useRef, useState, useMemo, useCallback } from 'react';
 import { ChevronsRight } from 'lucide-react';
 import { TreeNode } from '@shared/Tree';
 import { CreativePreviewDialog } from '@/components/viewer/CreativePreviewDialog';
+import type { MeshBaseId } from '@shared/meshBase';
 
 // Panel size constants
 const PANEL_SIZES = {
@@ -49,6 +50,15 @@ type CreativeViewProps = {
     meshId: string;
     parentMessageId: string | null;
   }) => void;
+  addBaseMessage?: ({
+    meshId,
+    parentMessageId,
+    meshBase,
+  }: {
+    meshId: string;
+    parentMessageId: string | null;
+    meshBase: MeshBaseId;
+  }) => void;
 };
 
 export function CreativeView({
@@ -61,6 +71,7 @@ export function CreativeView({
   editMessage,
   changeRating,
   upscaleMessage,
+  addBaseMessage,
 }: CreativeViewProps) {
   const isMobile = useIsMobile();
   const panelRef = useRef<ImperativePanelHandle>(null);
@@ -145,6 +156,7 @@ export function CreativeView({
               onEdit={editMessage}
               changeRating={changeRating}
               upscaleMessage={upscaleMessage}
+              addBaseMessage={addBaseMessage}
             />
           </>
         ) : (
@@ -166,6 +178,7 @@ export function CreativeView({
                 onEdit={editMessage}
                 changeRating={changeRating}
                 upscaleMessage={upscaleMessage}
+                addBaseMessage={addBaseMessage}
               />
             </Panel>
             <PanelResizeHandle className="resize-handle group relative">

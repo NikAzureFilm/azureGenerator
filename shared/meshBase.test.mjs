@@ -3,14 +3,19 @@ import assert from 'node:assert/strict';
 import {
   appendMeshBasePromptDirective,
   buildMeshBasePromptDirective,
+  DEFAULT_ADDED_MESH_BASE,
   DEFAULT_MESH_BASE,
   MESH_BASE_OPTIONS,
+  normalizeAddedMeshBase,
   normalizeMeshBase,
 } from './meshBase.ts';
 
 assert.equal(DEFAULT_MESH_BASE, 'none');
+assert.equal(DEFAULT_ADDED_MESH_BASE, 'round');
 assert.equal(normalizeMeshBase('round'), 'round');
 assert.equal(normalizeMeshBase('not-a-base'), DEFAULT_MESH_BASE);
+assert.equal(normalizeAddedMeshBase(undefined), DEFAULT_ADDED_MESH_BASE);
+assert.equal(normalizeAddedMeshBase('terrain'), 'terrain');
 assert.equal(buildMeshBasePromptDirective('none'), undefined);
 
 assert.equal(

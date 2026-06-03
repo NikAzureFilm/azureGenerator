@@ -601,8 +601,6 @@ Deno.serve(async (req) => {
       throw new Error('Message not found');
     }
 
-    const meshBase = newMessage?.content?.meshBase;
-
     if (isDirectMultiviewMeshRequest(model, newMessage.content)) {
       const meshRequestBody = {
         conversationId,
@@ -612,7 +610,6 @@ Deno.serve(async (req) => {
           imageGenerationModel: newMessage.content.imageGenerationModel,
         }),
         multiviewImages: newMessage.content.multiviewImages,
-        ...(meshBase && { meshBase }),
         ...(newMessage.content.semanticMaterialMap && {
           semanticMaterialMap: newMessage.content.semanticMaterialMap,
         }),
@@ -622,7 +619,6 @@ Deno.serve(async (req) => {
         conversationId,
         messageId,
         model,
-        meshBase,
         slots: Object.keys(newMessage.content.multiviewImages ?? {}),
       });
 
@@ -853,7 +849,6 @@ Deno.serve(async (req) => {
 
                   const meshTopology = newMessage?.content?.meshTopology;
                   const polygonCount = newMessage?.content?.polygonCount;
-                  const meshBase = newMessage?.content?.meshBase;
                   const imageGenerationModel =
                     newMessage?.content?.imageGenerationModel;
                   const multiviewImages = newMessage?.content?.multiviewImages;
@@ -873,7 +868,6 @@ Deno.serve(async (req) => {
                     model: model,
                     ...(meshTopology && { meshTopology }),
                     ...(polygonCount && { polygonCount }),
-                    ...(meshBase && { meshBase }),
                     ...(imageGenerationModel && { imageGenerationModel }),
                     ...(multiviewImages && { multiviewImages }),
                     ...(semanticMaterialMap && { semanticMaterialMap }),

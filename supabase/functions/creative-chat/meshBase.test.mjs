@@ -3,20 +3,20 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-assert.match(
+assert.doesNotMatch(
   source,
-  /const meshBase = newMessage\?\.content\?\.meshBase/,
-  'creative chat should read the mesh base selection from the user message',
+  /content\?\.meshBase/,
+  'creative chat should not read mesh base selections from initial user messages',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /\.\.\(meshBase && \{ meshBase \}\)/,
-  'creative chat should forward selected mesh base metadata to the mesh endpoint',
+  'creative chat should not forward mesh base metadata during initial generation',
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /direct_multiview_mesh_request[\s\S]*meshBase/s,
-  'direct multiview requests should preserve selected mesh base metadata',
+  'direct multiview requests should not include pre-generation base metadata',
 );

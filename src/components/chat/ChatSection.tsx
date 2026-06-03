@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Content, Message, Model, normalizeCreativeModel } from '@shared/types';
+import type { MeshBaseId } from '@shared/meshBase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { SuggestionPills } from '@/components/chat/SuggestionPills';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -60,6 +61,15 @@ interface ChatSectionProps {
     meshId: string;
     parentMessageId: string | null;
   }) => void;
+  addBaseMessage?: ({
+    meshId,
+    parentMessageId,
+    meshBase,
+  }: {
+    meshId: string;
+    parentMessageId: string | null;
+    meshBase: MeshBaseId;
+  }) => void;
 }
 
 export function ChatSection({
@@ -72,6 +82,7 @@ export function ChatSection({
   restoreMessage,
   retryMessage,
   upscaleMessage,
+  addBaseMessage,
 }: ChatSectionProps) {
   const isMobile = useIsMobile();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -310,6 +321,7 @@ export function ChatSection({
                     limitReached={limitReached}
                     onRetry={retryMessage}
                     onUpscale={upscaleMessage}
+                    onAddBase={addBaseMessage}
                   />
                 ) : (
                   <UserMessage

@@ -17,6 +17,7 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
+import type { MeshBaseId } from '@shared/meshBase';
 
 function shouldUseTextToCad(content?: Content): boolean {
   return content?.cadBackend === 'text-to-cad';
@@ -1179,6 +1180,164 @@ export function useUpscaleMutation({
       Sentry.captureException(error, {
         extra: {
           hook: 'useUpscaleMutation',
+          conversationId: conversation.id,
+        },
+      });
+    },
+  });
+}
+
+export function useAddBaseMutation({
+  conversation,
+  updateConversationAsync,
+}: {
+  conversation: Conversation;
+  updateConversationAsync?: (conversation: Conversation) => Promise<unknown>;
+}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ['add-base', conversation.id],
+    mutationFn: async ({
+      meshId,
+      parentMessageId,
+      meshBase,
+    }: {
+      meshId: string;
+      parentMessageId: string | null;
+      meshBase: MeshBaseId;
+    }) => {
+      if (parentMessageId && updateConversationAsync) {
+        await updateConversationAsync({
+          ...conversation,
+          current_message_leaf_id: parentMessageId,
+        });
+      }
+
+      const response = await fetch(getSupabaseFunctionUrl('mesh'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
+        },
+        body: JSON.stringify({
+          action: 'add-base',
+          meshId,
+          conversationId: conversation.id,
+          meshBase,
+          parentMessageId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to add base');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No reader available');
+      }
+
+      const decoder = new TextDecoder();
+      let leftover = '';
+      let finalMessage: Message | null = null;
+      let initialized = false;
+
+      async function initialize(messageId: string) {
+        await queryClient.cancelQueries({
+          queryKey: ['conversation', conversation.id],
+        });
+        queryClient.setQueryData(
+          ['conversation', conversation.id],
+          (oldConversation: Conversation) => ({
+            ...oldConversation,
+            current_message_leaf_id: messageId,
+          }),
+        );
+      }
+
+      const upsertMessage = (data: Message) => {
+        queryClient.setQueryData(
+          ['messages', conversation.id],
+          (oldMessages: Message[] | undefined) => {
+            if (!oldMessages || oldMessages.length === 0) {
+              return [data];
+            }
+            if (oldMessages.find((msg) => msg.id === data.id)) {
+              return oldMessages.map((msg) =>
+                msg.id === data.id ? data : msg,
+              );
+            }
+            return [...oldMessages, data];
+          },
+        );
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        leftover += decoder.decode(value, { stream: true });
+        const lines = leftover.split('\n');
+        leftover = lines.pop() ?? '';
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          try {
+            const data: Message = JSON.parse(line);
+            finalMessage = data;
+            upsertMessage(data);
+
+            if (!initialized && data.id) {
+              await initialize(data.id);
+              initialized = true;
+            }
+          } catch (parseError) {
+            console.error('Error parsing streaming data:', parseError);
+          }
+        }
+      }
+
+      const flushRemainder = decoder.decode();
+      if (flushRemainder) leftover += flushRemainder;
+      const tail = leftover.trim();
+      if (tail) {
+        try {
+          const data: Message = JSON.parse(tail);
+          finalMessage = data;
+          upsertMessage(data);
+        } catch (parseError) {
+          console.error('Error parsing final streaming data:', parseError);
+        }
+      }
+
+      reader.releaseLock();
+
+      if (!finalMessage) {
+        throw new Error('No final message received');
+      }
+
+      return finalMessage;
+    },
+    onSuccess: (newMessage) => {
+      if (newMessage) {
+        messageInsertedConversationUpdate(
+          queryClient,
+          newMessage,
+          conversation.id,
+        );
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['userExtraData'] });
+    },
+    onError: (error) => {
+      Sentry.captureException(error, {
+        extra: {
+          hook: 'useAddBaseMutation',
           conversationId: conversation.id,
         },
       });

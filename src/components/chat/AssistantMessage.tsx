@@ -13,6 +13,11 @@ import {
   Sparkles,
   FileCode2,
   Download,
+  Circle,
+  Hexagon,
+  Layers2,
+  Mountain,
+  Square as SquareIcon,
 } from 'lucide-react';
 import { Streamdown } from 'streamdown';
 import { StreamingCodeBlock } from '@/components/chat/StreamingCodeBlock';
@@ -50,12 +55,23 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMeshData } from '@/hooks/useMeshData';
 import { MeshImagePreview } from '@/components/viewer/MeshImagePreview';
 import { TreeNode } from '@shared/Tree';
+import {
+  DEFAULT_ADDED_MESH_BASE,
+  DEFAULT_MESH_BASE,
+  MESH_BASE_OPTIONS,
+  type MeshBaseId,
+  type MeshBaseOption,
+} from '@shared/meshBase';
 
 const linkParametricMode = (text: string) =>
   text.replace(
     /(```[\s\S]*?```|`[^`\n]*`)|parametric mode/gi,
     (match, codeSpan) => codeSpan ?? `[${match}](${BRAND_WEBSITE})`,
   );
+
+const ADD_BASE_OPTIONS = MESH_BASE_OPTIONS.filter(
+  (option) => option.id !== DEFAULT_MESH_BASE,
+);
 
 interface AssistantMessageProps {
   message: TreeNode<Message>;
@@ -75,6 +91,15 @@ interface AssistantMessageProps {
   }: {
     meshId: string;
     parentMessageId: string | null;
+  }) => void;
+  onAddBase?: ({
+    meshId,
+    parentMessageId,
+    meshBase,
+  }: {
+    meshId: string;
+    parentMessageId: string | null;
+    meshBase: MeshBaseId;
   }) => void;
   restoreMessage?: (message: Message) => void;
   limitReached?: boolean;
@@ -101,6 +126,7 @@ export function AssistantMessage({
   restoreMessage,
   onRetry,
   onUpscale,
+  onAddBase,
   limitReached,
 }: AssistantMessageProps) {
   const { conversation, updateConversation } = useConversation();
@@ -152,6 +178,12 @@ export function AssistantMessage({
     message.content.mesh &&
     meshDataQuery.data?.status === 'success';
 
+  const canAddBase =
+    message.content.mesh &&
+    onAddBase &&
+    meshDataQuery.data?.status === 'success' &&
+    !meshDataQuery.data?.prompt?.meshBase;
+
   const handleUpscale = useCallback(() => {
     if (!message.content.mesh || !onUpscale) return;
 
@@ -160,6 +192,19 @@ export function AssistantMessage({
       parentMessageId: message.parent_message_id,
     });
   }, [message.content.mesh, message.parent_message_id, onUpscale]);
+
+  const handleAddBase = useCallback(
+    (meshBase: MeshBaseId = DEFAULT_ADDED_MESH_BASE) => {
+      if (!message.content.mesh || !onAddBase) return;
+
+      onAddBase({
+        meshId: message.content.mesh.id,
+        parentMessageId: message.parent_message_id,
+        meshBase,
+      });
+    },
+    [message.content.mesh, message.parent_message_id, onAddBase],
+  );
 
   // Check if this message is the last one in the conversation
   const isLastMessage = conversation.current_message_leaf_id === message.id;
@@ -356,6 +401,8 @@ export function AssistantMessage({
 
           {(updateConversation ||
             changeRating ||
+            canUpscale ||
+            canAddBase ||
             (message.siblings.length > 1 && updateConversation) ||
             (restoreMessage && !isLastMessage)) && (
             <div className="flex flex-wrap items-center gap-1 gap-y-2">
@@ -482,6 +529,40 @@ export function AssistantMessage({
                   </TooltipContent>
                 </Tooltip>
               )}
+              {canAddBase && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading || limitReached}
+                      className={cn(
+                        'h-6 gap-1 rounded-lg px-2 text-xs',
+                        limitReached && 'cursor-not-allowed opacity-50',
+                      )}
+                    >
+                      <Layers2 className="h-3 w-3" />
+                      <span>Add base</span>
+                      <ChevronDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    className="w-44 rounded-lg border border-adam-neutral-700 bg-adam-neutral-800 p-1"
+                    align="start"
+                  >
+                    {ADD_BASE_OPTIONS.map((option) => (
+                      <DropdownMenuItem
+                        key={option.id}
+                        className="cursor-pointer rounded-md bg-adam-neutral-800 px-2 py-1.5 text-xs text-adam-text-primary hover:bg-adam-neutral-700 focus:bg-adam-bg-secondary-dark"
+                        onClick={() => handleAddBase(option.id)}
+                      >
+                        <MeshBaseOptionIcon option={option} />
+                        <span>{option.label}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
               {message.siblings.length > 1 && updateConversation && (
                 <div className="flex h-6 items-center gap-0.5 rounded-lg border border-adam-neutral-700 bg-adam-bg-secondary-dark">
                   <Button
@@ -518,6 +599,25 @@ export function AssistantMessage({
         </div>
       </div>
     </div>
+  );
+}
+
+function MeshBaseOptionIcon({ option }: { option: MeshBaseOption }) {
+  if (option.id === 'round') {
+    return <Circle className="mr-2 h-3.5 w-3.5" />;
+  }
+  if (option.id === 'square') {
+    return <SquareIcon className="mr-2 h-3.5 w-3.5" />;
+  }
+  if (option.id === 'hex') {
+    return <Hexagon className="mr-2 h-3.5 w-3.5" />;
+  }
+  if (option.id === 'terrain') {
+    return <Mountain className="mr-2 h-3.5 w-3.5" />;
+  }
+
+  return (
+    <span className="mr-2 block h-3 w-5 rounded-[999px] border border-current" />
   );
 }
 

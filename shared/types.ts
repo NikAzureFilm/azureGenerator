@@ -106,8 +106,6 @@ export type Content = {
   polygonCount?: number;
   // File format preference for quad topology models
   preferredFormat?: 'glb' | 'fbx';
-  // Optional generated display base preference for creative mesh generation.
-  meshBase?: MeshBaseId;
   // 4-slot labeled images for the 'multiview' model (front/left/back/right)
   multiviewImages?: MultiviewImages;
   // Optional semantic material classes/triangle ids used by 3MF export.

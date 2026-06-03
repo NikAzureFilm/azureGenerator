@@ -1,4 +1,5 @@
 export const DEFAULT_MESH_BASE = 'none';
+export const DEFAULT_ADDED_MESH_BASE = 'round';
 
 export const MESH_BASE_IDS = [
   'none',
@@ -67,6 +68,11 @@ export function normalizeMeshBase(value: unknown): MeshBaseId {
   return typeof value === 'string' && MESH_BASE_ID_SET.has(value)
     ? (value as MeshBaseId)
     : DEFAULT_MESH_BASE;
+}
+
+export function normalizeAddedMeshBase(value: unknown): MeshBaseId {
+  const meshBase = normalizeMeshBase(value);
+  return meshBase === DEFAULT_MESH_BASE ? DEFAULT_ADDED_MESH_BASE : meshBase;
 }
 
 export function getMeshBaseOption(value: unknown): MeshBaseOption {
