@@ -71,3 +71,13 @@ assert.match(
   /print bed/i,
   'mesh image instructions should ask for stable build-plate contact',
 );
+assert.match(
+  imageGenSource,
+  /no cast shadows, no ground shadows/i,
+  'mesh image instructions should tell image generators to avoid shadows',
+);
+assert.doesNotMatch(
+  imageGenSource,
+  /soft shadow directly under/i,
+  'mesh image instructions should not ask for shadows beneath generated models',
+);

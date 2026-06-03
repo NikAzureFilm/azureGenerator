@@ -17,7 +17,7 @@ export const VIEW_DIRECTIVE: Record<ViewLabel, string> = {
 };
 
 const BASE_VIEW_INSTRUCTIONS =
-  'Output a single centered 3D object asset on a plain white or transparent-looking studio background with neutral lighting and a soft shadow directly underneath. Keep the whole object in-frame with 5-10% padding, no cropping, no text, no labels, no logos, no UI, no scenery, and no flat 2D illustration.';
+  'Output a single centered 3D object asset on a plain white or transparent-looking studio background with even neutral lighting, no cast shadows, no ground shadows, and no baked-in shadow marks on the object or texture. Keep the whole object in-frame with 5-10% padding, no cropping, no text, no labels, no logos, no UI, no scenery, and no flat 2D illustration.';
 
 export const buildReferenceContext = (referenceLabels: string[]): string => {
   const cleanedLabels = referenceLabels

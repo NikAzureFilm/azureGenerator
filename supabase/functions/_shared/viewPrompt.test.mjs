@@ -28,6 +28,16 @@ for (const provider of providers) {
       prompt.includes(VIEW_DIRECTIVE[view]),
       `${provider} ${view} prompt must include its view directive`,
     );
+    assert.match(
+      prompt,
+      /no cast shadows, no ground shadows/i,
+      `${provider} ${view} prompt must avoid shadows in generated reference images`,
+    );
+    assert.doesNotMatch(
+      prompt,
+      /soft shadow directly underneath/i,
+      `${provider} ${view} prompt must not request shadows under the object`,
+    );
   }
 }
 
