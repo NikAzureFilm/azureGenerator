@@ -28,6 +28,9 @@ import {
   buildMultiviewGenerationPrompt,
   getMultiviewGenerationMode,
   getMultiviewGenerationReferenceIds,
+  hasMultiviewSlotPreview,
+  markMultiviewSlotBusy,
+  restoreMultiviewSlotAfterFailure,
 } from '@/utils/multiviewReference';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
@@ -257,7 +260,14 @@ export function MultiviewComposer({
     }
 
     setIsGeneratingDialog(true);
-    updateSlot(targetSlot, { isBusy: true, kind: 'generated' });
+    const previousTargetSlot = slots[targetSlot];
+    onSlotsChange((currentSlots) =>
+      markMultiviewSlotBusy({
+        slots: currentSlots,
+        targetSlot,
+        kind: 'generated',
+      }),
+    );
     try {
       const refImageIds =
         references.length > 0
@@ -304,7 +314,13 @@ export function MultiviewComposer({
       setDialogState(null);
     } catch (error) {
       console.error('Error generating view:', error);
-      updateSlot(targetSlot, undefined);
+      onSlotsChange((currentSlots) =>
+        restoreMultiviewSlotAfterFailure({
+          slots: currentSlots,
+          targetSlot,
+          previousSlot: previousTargetSlot,
+        }),
+      );
       toast({
         title: 'Generation failed',
         description:
@@ -320,6 +336,7 @@ export function MultiviewComposer({
     dialogState,
     conversationId,
     imageGenerationModel,
+    onSlotsChange,
     slots,
     updateSlot,
     toast,
@@ -417,7 +434,7 @@ function MultiviewSlotCard({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isHover, setIsHover] = useState(false);
 
-  const hasImage = !!state?.url && !state?.isBusy;
+  const hasImage = hasMultiviewSlotPreview(state);
   const isBusy = !!state?.isBusy;
 
   const openFilePicker = () => {
@@ -507,7 +524,7 @@ function MultiviewSlotCard({
       )}
 
       {/* Filled-state overlay controls */}
-      {hasImage && (
+      {hasImage && !isBusy && (
         <>
           <div
             className={cn(

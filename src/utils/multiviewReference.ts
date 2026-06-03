@@ -4,6 +4,7 @@ export interface MultiviewReferenceSlotState {
   id?: string;
   url?: string;
   isBusy?: boolean;
+  kind?: 'upload' | 'generated';
 }
 
 export type MultiviewReferenceSlotMap = Partial<
@@ -47,6 +48,50 @@ export function buildMultiviewGenerationPrompt({
 
 export function getMultiviewGenerationMode(): 'multiview' {
   return 'multiview';
+}
+
+export function hasMultiviewSlotPreview(
+  state?: MultiviewReferenceSlotState,
+): boolean {
+  return !!state?.url;
+}
+
+export function markMultiviewSlotBusy({
+  slots,
+  targetSlot,
+  kind,
+}: {
+  slots: MultiviewReferenceSlotMap;
+  targetSlot: MultiviewSlot;
+  kind: NonNullable<MultiviewReferenceSlotState['kind']>;
+}): MultiviewReferenceSlotMap {
+  const previousSlot = slots[targetSlot];
+  return {
+    ...slots,
+    [targetSlot]: {
+      ...previousSlot,
+      isBusy: true,
+      kind: previousSlot?.kind ?? kind,
+    },
+  };
+}
+
+export function restoreMultiviewSlotAfterFailure({
+  slots,
+  targetSlot,
+  previousSlot,
+}: {
+  slots: MultiviewReferenceSlotMap;
+  targetSlot: MultiviewSlot;
+  previousSlot?: MultiviewReferenceSlotState;
+}): MultiviewReferenceSlotMap {
+  const nextSlots: MultiviewReferenceSlotMap = { ...slots };
+  if (previousSlot) {
+    nextSlots[targetSlot] = { ...previousSlot };
+  } else {
+    delete nextSlots[targetSlot];
+  }
+  return nextSlots;
 }
 
 export function getMultiviewGenerationReference({

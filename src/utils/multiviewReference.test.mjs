@@ -3,6 +3,9 @@ import {
   buildMultiviewGenerationPrompt,
   getMultiviewGenerationMode,
   getMultiviewGenerationReferenceIds,
+  hasMultiviewSlotPreview,
+  markMultiviewSlotBusy,
+  restoreMultiviewSlotAfterFailure,
 } from './multiviewReference.ts';
 
 assert.deepEqual(
@@ -59,3 +62,93 @@ assert.equal(
 );
 
 assert.equal(getMultiviewGenerationMode(), 'multiview');
+
+assert.equal(
+  hasMultiviewSlotPreview({
+    id: 'front-image-id',
+    url: 'https://example.com/front.png',
+    isBusy: true,
+  }),
+  true,
+  'busy multiview slots should still expose their preview image',
+);
+
+assert.deepEqual(
+  markMultiviewSlotBusy({
+    slots: {
+      front: {
+        id: 'front-image-id',
+        url: 'https://example.com/front.png',
+        kind: 'upload',
+      },
+    },
+    targetSlot: 'front',
+    kind: 'generated',
+  }),
+  {
+    front: {
+      id: 'front-image-id',
+      url: 'https://example.com/front.png',
+      isBusy: true,
+      kind: 'upload',
+    },
+  },
+  'starting generation should keep the previous image in its holder',
+);
+
+assert.deepEqual(
+  markMultiviewSlotBusy({
+    slots: {},
+    targetSlot: 'left',
+    kind: 'generated',
+  }),
+  {
+    left: {
+      isBusy: true,
+      kind: 'generated',
+    },
+  },
+  'empty generated slots should still show a busy holder',
+);
+
+assert.deepEqual(
+  restoreMultiviewSlotAfterFailure({
+    slots: {
+      front: {
+        id: 'front-image-id',
+        url: 'https://example.com/front.png',
+        isBusy: true,
+        kind: 'upload',
+      },
+    },
+    targetSlot: 'front',
+    previousSlot: {
+      id: 'front-image-id',
+      url: 'https://example.com/front.png',
+      kind: 'upload',
+    },
+  }),
+  {
+    front: {
+      id: 'front-image-id',
+      url: 'https://example.com/front.png',
+      kind: 'upload',
+    },
+  },
+  'failed regeneration should restore the previous holder image',
+);
+
+assert.deepEqual(
+  restoreMultiviewSlotAfterFailure({
+    slots: {
+      left: {
+        isBusy: true,
+        kind: 'generated',
+      },
+    },
+    targetSlot: 'left',
+    previousSlot: undefined,
+  }),
+  {},
+  'failed generation from an empty holder should clear only that busy holder',
+);

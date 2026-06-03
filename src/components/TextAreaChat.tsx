@@ -989,7 +989,6 @@ function TextAreaChat({
       };
       onSubmit(content);
       setInput('');
-      setMultiviewSlots({});
       return;
     }
 

@@ -23,3 +23,9 @@ assert.doesNotMatch(
   /description:\s*'[^']*(?:OpenSCAD|build123d|STEP-first)[^']*'/,
   'CAD backend descriptions should avoid implementation details in user-facing copy',
 );
+
+assert.doesNotMatch(
+  source,
+  /onSubmit\(content\);\s*setInput\(''\);\s*setMultiviewSlots\(\{\}\);/s,
+  'submitting multiview generation should keep the four image holders populated while generation is in progress',
+);
