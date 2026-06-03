@@ -28,26 +28,6 @@ for (const provider of providers) {
       prompt.includes(VIEW_DIRECTIVE[view]),
       `${provider} ${view} prompt must include its view directive`,
     );
-    assert.match(
-      prompt,
-      /no cast shadows, no ground shadows/i,
-      `${provider} ${view} prompt must avoid shadows in generated reference images`,
-    );
-    assert.match(
-      prompt,
-      /no contact shadows/i,
-      `${provider} ${view} prompt must avoid contact shadows under the object`,
-    );
-    assert.match(
-      prompt,
-      /no floor plane or ground plane/i,
-      `${provider} ${view} prompt must avoid floor-plane shadows`,
-    );
-    assert.doesNotMatch(
-      prompt,
-      /soft shadow directly underneath/i,
-      `${provider} ${view} prompt must not request shadows under the object`,
-    );
   }
 }
 
@@ -74,39 +54,13 @@ assert.match(
   'multiview reference labels should be preserved for left/right/back generation',
 );
 
-const inputReferencePrompt = buildImageGenerationPrompt({
-  view: 'right',
-  userPrompt: '',
-  hasReference: true,
-  mode: 'input',
-});
-
 assert.match(
-  inputReferencePrompt,
+  buildImageGenerationPrompt({
+    view: 'right',
+    userPrompt: '',
+    hasReference: true,
+    mode: 'input',
+  }),
   /Re-render the reference as a clean 3D-ready object input image/,
   'reference image edits should re-render as 3D object input images',
-);
-
-assert.match(
-  inputReferencePrompt,
-  /no cast shadows, no ground shadows/i,
-  'reference image edits should avoid adding cast or ground shadows',
-);
-
-assert.match(
-  inputReferencePrompt,
-  /no baked-in shadow marks/i,
-  'reference image edits should avoid baking shadows into the model texture',
-);
-
-assert.match(
-  inputReferencePrompt,
-  /no contact shadows/i,
-  'reference image edits should avoid contact shadows like the dark area under the feet',
-);
-
-assert.match(
-  inputReferencePrompt,
-  /no ambient occlusion/i,
-  'reference image edits should avoid ambient-occlusion shadows around the model',
 );

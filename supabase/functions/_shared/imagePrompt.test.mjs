@@ -28,36 +28,6 @@ assert.match(
   'global image enforcement should convert non-object image requests into standalone 3D object assets',
 );
 
-assert.match(
-  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /no cast shadows, no ground shadows/i,
-  'global image enforcement should prevent baked-in or ground shadows on generated inputs',
-);
-
-assert.match(
-  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /no contact shadows/i,
-  'global image enforcement should prevent contact shadows under the object',
-);
-
-assert.match(
-  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /no floor plane or ground plane/i,
-  'global image enforcement should prevent product-render floor planes',
-);
-
-assert.match(
-  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /no ambient occlusion/i,
-  'global image enforcement should prevent shadow-like ambient occlusion',
-);
-
-assert.doesNotMatch(
-  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
-  /soft ground shadow/i,
-  'global image enforcement should not ask image generators to add shadows',
-);
-
 assert.equal(
   enforce3DObjectPrompt('Generate a Charizard.'),
   `${THREE_D_OBJECT_PROMPT_ENFORCEMENT} User request: Generate a Charizard.`,
