@@ -46,11 +46,6 @@ const openAI = new OpenAI({
   apiKey: Deno.env.get('OPENAI_API_KEY')?.trim() ?? '',
 });
 
-const isOpenAiSafetyRejection = (error: unknown): boolean => {
-  const message = error instanceof Error ? error.message : String(error);
-  return /request was rejected by the safety system/i.test(message);
-};
-
 const logRefundFailure = ({ error, charge }: RefundFailure) => {
   logError(error, {
     functionName: 'generate-view',
@@ -281,10 +276,20 @@ Deno.serve(async (req) => {
         imageBytes = result.imageBytes;
         contentType = result.contentType;
       } catch (error) {
-        if (!isOpenAiSafetyRejection(error)) throw error;
-
+        logError(error, {
+          functionName: 'generate-view',
+          statusCode: 500,
+          userId,
+          conversationId,
+          additionalContext: {
+            stage: 'gpt_image_2_fallback',
+            view,
+            refCount: referenceIds.length,
+            mode,
+          },
+        });
         console.warn(
-          'OpenAI image generation rejected by safety system; falling back to Nano Banana.',
+          'OpenAI image generation failed; falling back to Nano Banana.',
         );
         imageBytes = await generateWithNanoBanana();
       }

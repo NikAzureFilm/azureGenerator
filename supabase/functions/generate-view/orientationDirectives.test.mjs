@@ -40,3 +40,17 @@ assert.equal(
   true,
   'right-side directive should distinguish the right profile from the left profile',
 );
+
+assert.equal(
+  source.includes("stage: 'gpt_image_2_fallback'"),
+  true,
+  'generate-view should log OpenAI image failures before falling back',
+);
+
+assert.equal(
+  /catch \(error\) \{\s+logError\(error[\s\S]+imageBytes = await generateWithNanoBanana\(\);/.test(
+    source,
+  ),
+  true,
+  'generate-view should fall back to Nano Banana for any OpenAI image failure',
+);
