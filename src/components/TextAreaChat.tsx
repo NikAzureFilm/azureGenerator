@@ -10,10 +10,16 @@ import React, {
 import {
   ArrowUp,
   ChevronDown,
+  Circle,
+  CircleSlash2,
   ImagePlus,
   Images,
+  Hexagon,
+  Layers2,
   Loader2,
+  Mountain,
   Square,
+  Square as SquareIcon,
   CircleX,
   Wand2,
   Box,
@@ -36,6 +42,13 @@ import {
   MeshFileType,
   Model,
 } from '@shared/types';
+import {
+  DEFAULT_MESH_BASE,
+  getMeshBaseOption,
+  MESH_BASE_OPTIONS,
+  type MeshBaseId,
+  type MeshBaseOption,
+} from '@shared/meshBase';
 import {
   MultiviewComposer,
   MultiviewSlotMap,
@@ -221,6 +234,14 @@ interface QuadsButtonProps {
   isLoading: boolean;
   disabled: boolean;
   onToggle: () => void;
+}
+
+interface MeshBaseButtonProps {
+  meshBase: MeshBaseId;
+  showFullLabels: boolean;
+  isLoading: boolean;
+  disabled: boolean;
+  onChange: (meshBase: MeshBaseId) => void;
 }
 
 const QuadsButton = ({
@@ -468,6 +489,153 @@ const PolygonButton = ({
         <TooltipContent>Adjust polygon count</TooltipContent>
       </Tooltip>
     </div>
+  );
+};
+
+const MeshBaseOptionIcon = ({
+  option,
+  selected,
+}: {
+  option: MeshBaseOption;
+  selected: boolean;
+}) => {
+  const colorClass = selected ? 'text-[#0F5FF4]' : 'text-adam-text-primary';
+  if (option.id === 'none') {
+    return <CircleSlash2 className={cn('h-4 w-4', colorClass)} />;
+  }
+  if (option.id === 'round') {
+    return <Circle className={cn('h-4 w-4', colorClass)} />;
+  }
+  if (option.id === 'square') {
+    return <SquareIcon className={cn('h-4 w-4', colorClass)} />;
+  }
+  if (option.id === 'hex') {
+    return <Hexagon className={cn('h-4 w-4', colorClass)} />;
+  }
+  if (option.id === 'terrain') {
+    return <Mountain className={cn('h-4 w-4', colorClass)} />;
+  }
+
+  return (
+    <span
+      className={cn(
+        'block h-3 w-5 rounded-[999px] border',
+        selected ? 'border-[#0F5FF4]' : 'border-adam-text-primary',
+      )}
+    />
+  );
+};
+
+const MeshBaseButton = ({
+  meshBase,
+  showFullLabels,
+  isLoading,
+  disabled,
+  onChange,
+}: MeshBaseButtonProps) => {
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const selectedOption = getMeshBaseOption(meshBase);
+  const hasBase = meshBase !== DEFAULT_MESH_BASE;
+
+  const buttonContent = (
+    <button
+      type="button"
+      onClick={() => setIsPopoverOpen(true)}
+      disabled={isLoading || disabled}
+      aria-pressed={hasBase}
+      className={cn(
+        'flex h-8 items-center justify-center gap-2 rounded-full border px-2 text-sm transition-colors duration-200',
+        'hover:bg-adam-bg-secondary-dark focus:outline-none focus-visible:outline-none focus-visible:ring-0',
+        hasBase
+          ? 'border-transparent bg-adam-blue-dark/15 hover:bg-adam-blue-dark/20'
+          : 'border-[#2a2a2a] bg-transparent',
+        hasBase && 'pr-[10px]',
+      )}
+    >
+      <Layers2 className={cn('h-4 w-4', hasBase && 'text-[#0F5FF4]')} />
+      {showFullLabels && (
+        <span
+          className={cn(
+            'hidden text-xs lg:inline',
+            hasBase ? 'text-[#0F5FF4]' : 'text-adam-text-primary',
+          )}
+        >
+          {hasBase ? selectedOption.label : 'Base'}
+        </span>
+      )}
+      {hasBase && (
+        <span
+          className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center"
+          title="Remove base"
+        >
+          <X
+            className="h-3.5 w-3.5 cursor-pointer text-[#0F5FF4] transition-opacity hover:opacity-70"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(DEFAULT_MESH_BASE);
+            }}
+          />
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div>
+          <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+            <PopoverTrigger asChild>{buttonContent}</PopoverTrigger>
+            <PopoverContent
+              align="start"
+              side="top"
+              className="w-64 rounded-xl border border-[#2a2a2a] bg-adam-neutral-700 p-2 shadow-none"
+              onOpenAutoFocus={(e) => e.preventDefault()}
+            >
+              <div className="grid grid-cols-2 gap-1">
+                {MESH_BASE_OPTIONS.map((option) => {
+                  const selected = option.id === meshBase;
+                  return (
+                    <Tooltip key={option.id}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onChange(option.id);
+                            setIsPopoverOpen(false);
+                          }}
+                          aria-pressed={selected}
+                          className={cn(
+                            'flex h-10 min-w-0 items-center gap-2 rounded-lg px-2 text-left transition-colors',
+                            selected
+                              ? 'bg-adam-blue-dark/15 text-[#0F5FF4]'
+                              : 'text-adam-text-primary hover:bg-adam-neutral-800',
+                          )}
+                        >
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                            <MeshBaseOptionIcon
+                              option={option}
+                              selected={selected}
+                            />
+                          </span>
+                          <span className="min-w-0 truncate text-xs font-medium">
+                            {option.label}
+                          </span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>{option.description}</TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        {hasBase ? `${selectedOption.label} base enabled` : 'Add base'}
+      </TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -731,6 +899,7 @@ function TextAreaChat({
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
+  const [meshBase, setMeshBase] = useState<MeshBaseId>(DEFAULT_MESH_BASE);
 
   useEffect(() => {
     if (!MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview') {
@@ -1022,6 +1191,9 @@ function TextAreaChat({
           !mesh && { text: DEFAULT_CREATIVE_PROMPT }),
         ...(mesh && {
           mesh: { id: mesh.id, fileType: mesh.fileType || 'glb' },
+        }),
+        ...(meshBase !== DEFAULT_MESH_BASE && {
+          meshBase,
         }),
         // Include meshTopology preference for standard and ultra models
         ...(shouldShowPolygonControls(model as CreativeModel) && {
@@ -2154,6 +2326,16 @@ function TextAreaChat({
                   </TooltipContent>
                 </Tooltip>
               </div>
+            )}
+
+            {type === 'creative' && !isMultiview && (
+              <MeshBaseButton
+                meshBase={meshBase}
+                showFullLabels={showFullLabels}
+                isLoading={isLoading}
+                disabled={disabled}
+                onChange={setMeshBase}
+              />
             )}
 
             {/* Quads vs Polys toggle button - show for standard and ultra models */}

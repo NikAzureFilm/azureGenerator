@@ -18,6 +18,12 @@ import {
   type SemanticMaterialMap,
 } from '@shared/types.ts';
 import {
+  appendMeshBasePromptDirective,
+  DEFAULT_MESH_BASE,
+  normalizeMeshBase,
+  type MeshBaseId,
+} from '@shared/meshBase.ts';
+import {
   getImageGenerationProvider,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
@@ -623,6 +629,7 @@ Deno.serve(async (req) => {
       model,
       meshTopology,
       polygonCount,
+      meshBase,
       preferredFormat,
       action,
       meshId: upscaleMeshId,
@@ -638,6 +645,7 @@ Deno.serve(async (req) => {
       model?: Model;
       meshTopology?: 'quads' | 'polys';
       polygonCount?: number;
+      meshBase?: MeshBaseId;
       preferredFormat?: 'glb' | 'fbx';
       action?: 'upscale';
       meshId?: string;
@@ -646,6 +654,8 @@ Deno.serve(async (req) => {
       multiviewImages?: MultiviewImages;
       semanticMaterialMap?: SemanticMaterialMap;
     } = requestBody;
+
+    const normalizedMeshBase = normalizeMeshBase(meshBase);
 
     debugLog('Model parameter extracted:', model);
 
@@ -1054,6 +1064,9 @@ Deno.serve(async (req) => {
           ...(images && images.length > 0 && { images: images }),
           ...(mesh && { mesh: mesh }),
           ...(model && { model: model }),
+          ...(normalizedMeshBase !== DEFAULT_MESH_BASE && {
+            meshBase: normalizedMeshBase,
+          }),
           ...(imageGenerationModel && { imageGenerationModel }),
           ...(multiviewImages && { multiviewImages }),
           ...(semanticMaterialMap && { semanticMaterialMap }),
@@ -1093,6 +1106,7 @@ Deno.serve(async (req) => {
           text,
           images,
           mesh,
+          normalizedMeshBase,
           userData.user.id,
           conversationId,
           meshData.id,
@@ -1118,6 +1132,7 @@ Deno.serve(async (req) => {
         model ?? 'quality',
         meshTopology,
         polygonCount,
+        normalizedMeshBase,
         imageGenerationModel,
         multiviewImages,
         tokenLedger,
@@ -1168,6 +1183,7 @@ async function submitMeshJob(
   model: Model,
   meshTopology: 'quads' | 'polys' | undefined,
   polygonCount: number | undefined,
+  meshBase: MeshBaseId,
   imageGenerationModel: ImageGenerationModel | undefined,
   multiviewImages: MultiviewImages | undefined,
   tokenLedger: RefundableTokenLedger,
@@ -1191,6 +1207,7 @@ async function submitMeshJob(
   });
 
   let imageInputs: string[] = [];
+  const meshTextPrompt = appendMeshBasePromptDirective(text, meshBase);
 
   try {
     if (model === 'multiview') {
@@ -1346,7 +1363,7 @@ async function submitMeshJob(
     if (model === 'ultra') {
       // Ultra model handles image generation differently, skip to model-specific logic
       debugLog('Skipping initial image generation for ultra model');
-    } else if (text && text.trim() !== '') {
+    } else if (meshTextPrompt && meshTextPrompt.trim() !== '') {
       // Generate images for standard and textureless models
       if (model === 'quality') {
         // Use Gemini 3 Pro with fallback to Flux for quality model
@@ -1357,9 +1374,10 @@ async function submitMeshJob(
             conversation_id: conversationId,
             status: 'pending',
             prompt: {
-              ...(text && { text: text }),
+              ...(meshTextPrompt && { text: meshTextPrompt }),
               ...(allImages.length > 0 && { images: allImages }),
               ...(model && { model: model }),
+              ...(meshBase !== DEFAULT_MESH_BASE && { meshBase }),
               ...(imageGenerationModel && { imageGenerationModel }),
             },
           })
@@ -1379,8 +1397,8 @@ async function submitMeshJob(
 
         const newPrompt =
           allImages.length > 0
-            ? `${instructions3D} Edit the provided image(s) to: ${text}`
-            : `${instructions3D} Generate a new image: ${text}`;
+            ? `${instructions3D} Edit the provided image(s) to: ${meshTextPrompt}`
+            : `${instructions3D} Generate a new image: ${meshTextPrompt}`;
 
         const { imageBytes, imageCallId, contentType } =
           await generateMeshImage(
@@ -1434,9 +1452,10 @@ async function submitMeshJob(
             conversation_id: conversationId,
             status: 'pending',
             prompt: {
-              ...(text && { text: text }),
+              ...(meshTextPrompt && { text: meshTextPrompt }),
               ...(allImages.length > 0 && { images: allImages }),
               ...(model && { model: model }),
+              ...(meshBase !== DEFAULT_MESH_BASE && { meshBase }),
               ...(imageGenerationModel && { imageGenerationModel }),
             },
           })
@@ -1456,8 +1475,8 @@ async function submitMeshJob(
 
         const newPrompt =
           allImages.length > 0
-            ? `${instructions3D} Edit the provided image(s) to: ${text}`
-            : `${instructions3D} Generate a new image: ${text}`;
+            ? `${instructions3D} Edit the provided image(s) to: ${meshTextPrompt}`
+            : `${instructions3D} Generate a new image: ${meshTextPrompt}`;
 
         const { imageBytes, imageCallId, contentType } =
           await generateMeshImage(
@@ -1564,7 +1583,7 @@ async function submitMeshJob(
       const isFirstGeneration =
         !existingCompletedMeshes || existingCompletedMeshes.length === 0;
       const hasUploadedImages = allImages.length > 0;
-      const hasText = text && text.trim() !== '';
+      const hasText = meshTextPrompt && meshTextPrompt.trim() !== '';
 
       debugLog(
         `Ultra generation type: First=${isFirstGeneration}, HasImages=${hasUploadedImages}, HasText=${hasText}`,
@@ -1583,9 +1602,10 @@ async function submitMeshJob(
           conversation_id: conversationId,
           status: 'pending',
           prompt: {
-            ...(text && { text: text }),
+            ...(meshTextPrompt && { text: meshTextPrompt }),
             ...(allImages.length > 0 && { images: allImages }),
             ...(model && { model: model }),
+            ...(meshBase !== DEFAULT_MESH_BASE && { meshBase }),
             ...(imageGenerationModel && { imageGenerationModel }),
           },
         })
@@ -1609,20 +1629,20 @@ async function submitMeshJob(
       let ultraPrompt: string;
       let ultraSubStage: string;
       if (isFirstGeneration && !hasUploadedImages && hasText) {
-        ultraPrompt = `${instructions3D} Generate: ${text}`;
+        ultraPrompt = `${instructions3D} Generate: ${meshTextPrompt}`;
         ultraSubStage = 'first_gen_text_only';
       } else if (isFirstGeneration && hasUploadedImages) {
         ultraPrompt = hasText
-          ? `${instructions3D} Edit this image to: ${text}`
+          ? `${instructions3D} Edit this image to: ${meshTextPrompt}`
           : `${instructions3D} Enhance and optimize this image for 3D model generation`;
         ultraSubStage = 'first_gen_with_upload';
       } else {
         ultraPrompt = hasUploadedImages
           ? hasText
-            ? `${instructions3D} Edit the provided image(s) to: ${text}`
+            ? `${instructions3D} Edit the provided image(s) to: ${meshTextPrompt}`
             : `${instructions3D} Enhance and optimize the provided image(s) for 3D model generation`
           : hasText
-            ? `${instructions3D} Edit/modify the previous generation: ${text}`
+            ? `${instructions3D} Edit/modify the previous generation: ${meshTextPrompt}`
             : `${instructions3D} Enhance and optimize the previous generation`;
         ultraSubStage = 'conversational';
       }
@@ -2008,7 +2028,7 @@ Output:`;
       statusCode: 500,
       userId,
       conversationId,
-      requestData: { meshId, model, meshTopology, polygonCount },
+      requestData: { meshId, model, meshTopology, polygonCount, meshBase },
     });
     await tokenLedger.refundReference(meshReferenceId, logRefundFailure);
 
@@ -2054,6 +2074,7 @@ async function submitPreviewJob(
   text: string | undefined,
   images: string[] | undefined,
   mesh: string | undefined,
+  meshBase: MeshBaseId,
   userId: string,
   conversationId: string,
   meshId: string,
@@ -2065,6 +2086,7 @@ async function submitPreviewJob(
     )?.trim() ?? '';
 
   let imageInputs: string[] = [];
+  const previewTextPrompt = appendMeshBasePromptDirective(text, meshBase);
 
   let previewId: string | null = null;
 
@@ -2136,11 +2158,11 @@ async function submitPreviewJob(
     const allImages = [...(images || []), ...meshImages];
 
     // If text exists, we generate an image from 4o then use that image to generate a mesh
-    if (text && text.trim() !== '') {
+    if (previewTextPrompt && previewTextPrompt.trim() !== '') {
       const newPrompt =
         allImages.length > 0
-          ? `Edit the provided image(s) to: ${text} Style: ${instructions3D}`
-          : `Generate a new image: ${text} Style: ${instructions3D}`;
+          ? `Edit the provided image(s) to: ${previewTextPrompt} Style: ${instructions3D}`
+          : `Generate a new image: ${previewTextPrompt} Style: ${instructions3D}`;
 
       const imageBytes = await generateImageWithFalFlux(
         supabaseClient,
@@ -2217,7 +2239,7 @@ async function submitPreviewJob(
       statusCode: 500,
       userId,
       conversationId,
-      requestData: { previewId, meshId },
+      requestData: { previewId, meshId, meshBase },
     });
     console.error(error);
     if (previewId) {

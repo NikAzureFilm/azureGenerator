@@ -29,3 +29,27 @@ assert.doesNotMatch(
   /onSubmit\(content\);\s*setInput\(''\);\s*setMultiviewSlots\(\{\}\);/s,
   'submitting multiview generation should keep the four image holders populated while generation is in progress',
 );
+
+assert.match(
+  source,
+  /from '@shared\/meshBase'/,
+  'composer should import shared mesh base options instead of duplicating presets',
+);
+
+assert.match(
+  source,
+  /const \[meshBase,\s*setMeshBase\]\s*=\s*useState<MeshBaseId>\([^)]*DEFAULT_MESH_BASE[^)]*\)/s,
+  'composer should keep a mesh base selection with the shared default',
+);
+
+assert.match(
+  source,
+  /type === 'creative' && !isMultiview[\s\S]*<MeshBaseButton/s,
+  'base picker should be shown for normal mesh generation and hidden from multiview',
+);
+
+assert.match(
+  source,
+  /meshBase !== DEFAULT_MESH_BASE[\s\S]*meshBase/s,
+  'composer should include a selected base in the submitted content payload',
+);

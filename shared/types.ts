@@ -1,5 +1,6 @@
 import type { Database } from './database.ts';
 import type { ImageGenerationModel } from './imageGeneration.ts';
+import type { MeshBaseId } from './meshBase.ts';
 export type Model = string;
 export type CreativeModel = 'quality' | 'fast' | 'ultra' | 'multiview';
 export const DEFAULT_CREATIVE_MODEL: CreativeModel = 'ultra';
@@ -28,6 +29,7 @@ export type Prompt = {
   images?: string[];
   mesh?: string;
   model?: Model;
+  meshBase?: MeshBaseId;
   multiviewImages?: MultiviewImages;
   semanticMaterialMap?: SemanticMaterialMap;
 };
@@ -104,6 +106,8 @@ export type Content = {
   polygonCount?: number;
   // File format preference for quad topology models
   preferredFormat?: 'glb' | 'fbx';
+  // Optional generated display base preference for creative mesh generation.
+  meshBase?: MeshBaseId;
   // 4-slot labeled images for the 'multiview' model (front/left/back/right)
   multiviewImages?: MultiviewImages;
   // Optional semantic material classes/triangle ids used by 3MF export.
