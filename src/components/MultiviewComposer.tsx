@@ -10,7 +10,6 @@ import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
-  getImageGenerationProvider,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
 import { supabase } from '@/lib/supabase';
@@ -32,6 +31,7 @@ import {
   markMultiviewSlotBusy,
   restoreMultiviewSlotAfterFailure,
 } from '@/utils/multiviewReference';
+import { invokeGenerateViewWithFallback } from '@/utils/generateViewWithFallback';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
@@ -286,9 +286,13 @@ export function MultiviewComposer({
           targetSlot,
           prompt: '',
         });
-      const { data, error } = await supabase.functions.invoke('generate-view', {
-        method: 'POST',
-        body: {
+      const { data, error } = await invokeGenerateViewWithFallback(
+        (body) =>
+          supabase.functions.invoke('generate-view', {
+            method: 'POST',
+            body,
+          }),
+        {
           conversationId,
           view: targetSlot,
           prompt: generationPrompt,
@@ -297,10 +301,10 @@ export function MultiviewComposer({
             refImageLabels && refImageLabels.length > 0
               ? refImageLabels
               : undefined,
-          provider: getImageGenerationProvider(imageGenerationModel),
           mode: getMultiviewGenerationMode(),
         },
-      });
+        imageGenerationModel,
+      );
       if (error) throw error;
       if (!data?.id || !data?.url) {
         throw new Error('No image returned from generator');
