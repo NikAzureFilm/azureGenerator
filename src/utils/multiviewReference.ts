@@ -1,4 +1,4 @@
-import type { MultiviewSlot } from '@shared/types';
+import type { MultiviewImages, MultiviewSlot } from '@shared/types';
 
 export interface MultiviewReferenceSlotState {
   id?: string;
@@ -34,6 +34,52 @@ export function getMultiviewGenerationReferenceIds({
   });
 }
 
+export function getMultiviewImageEntries(
+  multiviewImages?: MultiviewImages,
+): Array<{ slot: MultiviewSlot; id: string }> {
+  if (!multiviewImages) return [];
+
+  return SLOT_ORDER.flatMap((slot) => {
+    const id = multiviewImages[slot];
+    return typeof id === 'string' && id.length > 0 ? [{ slot, id }] : [];
+  });
+}
+
+export function buildHydratedMultiviewSlots({
+  multiviewImages,
+  imageUrls,
+}: {
+  multiviewImages?: MultiviewImages;
+  imageUrls: Array<{ id: string; url: string }>;
+}): MultiviewReferenceSlotMap {
+  const urlById = new Map(imageUrls.map(({ id, url }) => [id, url]));
+  const slots: MultiviewReferenceSlotMap = {};
+
+  for (const { slot, id } of getMultiviewImageEntries(multiviewImages)) {
+    const url = urlById.get(id);
+    if (!url) continue;
+    slots[slot] = { id, url, kind: 'upload' };
+  }
+
+  return slots;
+}
+
+export function multiviewSlotMapsMatchPreviews(
+  left: MultiviewReferenceSlotMap,
+  right: MultiviewReferenceSlotMap,
+): boolean {
+  return SLOT_ORDER.every((slot) => {
+    const leftSlot = left[slot];
+    const rightSlot = right[slot];
+
+    return (
+      leftSlot?.id === rightSlot?.id &&
+      leftSlot?.url === rightSlot?.url &&
+      !!leftSlot?.isBusy === !!rightSlot?.isBusy &&
+      leftSlot?.kind === rightSlot?.kind
+    );
+  });
+}
 export function buildMultiviewGenerationPrompt({
   targetSlot,
   prompt,

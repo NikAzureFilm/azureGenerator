@@ -35,6 +35,7 @@ import {
   DEFAULT_CREATIVE_MODEL,
   MeshFileType,
   Model,
+  MultiviewImages,
 } from '@shared/types';
 import {
   MultiviewComposer,
@@ -76,7 +77,7 @@ import {
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueries } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { ModelSelector } from '@/components/ModelSelector';
@@ -109,6 +110,11 @@ import {
   DEFAULT_CAD_BACKEND,
   getCadBackendTokenCost,
 } from '@/utils/cadBackendSelection';
+import {
+  buildHydratedMultiviewSlots,
+  getMultiviewImageEntries,
+  multiviewSlotMapsMatchPreviews,
+} from '@/utils/multiviewReference';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -134,6 +140,7 @@ interface TextAreaChatProps {
     id: number;
     draft?: string;
   };
+  seedMultiviewImages?: MultiviewImages;
 }
 
 const MULTIVIEW_ENABLED = true;
@@ -628,6 +635,15 @@ const getMeshFileType = (filename: string): MeshFileType => {
   return 'glb';
 };
 
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  const reader = new FileReader();
+  return new Promise((resolve, reject) => {
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 const isSupportedMeshFile = (
   filename: string,
   type: 'creative' | 'parametric',
@@ -658,6 +674,7 @@ function TextAreaChat({
   conversation,
   cadBackendHint,
   composerFocusRequest,
+  seedMultiviewImages,
 }: TextAreaChatProps) {
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -727,10 +744,46 @@ function TextAreaChat({
 
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
+  const lastHydratedMultiviewSeedRef = useRef<string | null>(null);
   const isMultiview =
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
+
+  const seedMultiviewEntries = useMemo(
+    () => getMultiviewImageEntries(seedMultiviewImages),
+    [seedMultiviewImages],
+  );
+  const seedMultiviewImagesKey = useMemo(
+    () => seedMultiviewEntries.map(({ slot, id }) => `${slot}:${id}`).join('|'),
+    [seedMultiviewEntries],
+  );
+  const seedMultiviewUrlQueries = useQueries({
+    queries: seedMultiviewEntries.map(({ id }) => ({
+      queryKey: [
+        'multiviewSlotPreview',
+        conversation.user_id,
+        conversation.id,
+        id,
+      ],
+      enabled: isMultiview && !!id,
+      queryFn: async () => {
+        const { data, error } = await supabase.storage
+          .from('images')
+          .download(`${conversation.user_id}/${conversation.id}/${id}`);
+        if (error) throw error;
+        if (!data) throw new Error('Failed to download multiview image');
+        return { id, url: await readBlobAsDataUrl(data) };
+      },
+    })),
+  });
+  const hasAllSeedMultiviewUrls =
+    seedMultiviewEntries.length > 0 &&
+    seedMultiviewEntries.every(({ id }) =>
+      seedMultiviewUrlQueries.some(
+        (query) => query.data?.id === id && query.data.url.length > 0,
+      ),
+    );
 
   useEffect(() => {
     if (!MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview') {
@@ -738,6 +791,41 @@ function TextAreaChat({
       setMultiviewSlots({});
     }
   }, [model, setModel, type]);
+
+  useEffect(() => {
+    if (
+      !isMultiview ||
+      !seedMultiviewImages ||
+      !seedMultiviewImagesKey ||
+      !hasAllSeedMultiviewUrls ||
+      lastHydratedMultiviewSeedRef.current === seedMultiviewImagesKey
+    ) {
+      return;
+    }
+
+    const imageUrls = seedMultiviewUrlQueries.flatMap((query) =>
+      query.data ? [query.data] : [],
+    );
+    const hydratedSlots = buildHydratedMultiviewSlots({
+      multiviewImages: seedMultiviewImages,
+      imageUrls,
+    }) as MultiviewSlotMap;
+
+    setMultiviewSlots((currentSlots) => {
+      if (anyMultiviewBusy(currentSlots)) return currentSlots;
+
+      lastHydratedMultiviewSeedRef.current = seedMultiviewImagesKey;
+      return multiviewSlotMapsMatchPreviews(currentSlots, hydratedSlots)
+        ? currentSlots
+        : hydratedSlots;
+    });
+  }, [
+    hasAllSeedMultiviewUrls,
+    isMultiview,
+    seedMultiviewImages,
+    seedMultiviewImagesKey,
+    seedMultiviewUrlQueries,
+  ]);
 
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {

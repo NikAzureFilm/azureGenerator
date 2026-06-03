@@ -5,6 +5,10 @@ const source = readFileSync(
   new URL('./TextAreaChat.tsx', import.meta.url),
   'utf8',
 );
+const chatSectionSource = readFileSync(
+  new URL('./chat/ChatSection.tsx', import.meta.url),
+  'utf8',
+);
 
 assert.match(
   source,
@@ -40,4 +44,16 @@ assert.doesNotMatch(
   source,
   /MeshBaseButton|meshBase !== DEFAULT_MESH_BASE|setMeshBase/,
   'base selection should not be part of the initial mesh generation payload',
+);
+
+assert.match(
+  chatSectionSource,
+  /latestMultiviewImages[\s\S]*message\.role === 'user'[\s\S]*message\.content\.multiviewImages/s,
+  'chat section should find the latest user multiview image set from the active branch',
+);
+
+assert.match(
+  chatSectionSource,
+  /<TextAreaChat[\s\S]*seedMultiviewImages=\{latestMultiviewImages\}/s,
+  'chat section should pass the latest multiview images into the composer',
 );

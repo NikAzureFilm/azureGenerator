@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Content, Message, Model, normalizeCreativeModel } from '@shared/types';
+import {
+  Content,
+  Message,
+  Model,
+  MultiviewImages,
+  normalizeCreativeModel,
+} from '@shared/types';
 import type { MeshBaseId, MeshBaseSettings } from '@shared/meshBase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { SuggestionPills } from '@/components/chat/SuggestionPills';
@@ -144,6 +150,16 @@ export function ChatSection({
     }
     return messages[messages.length - 1];
   }, [messages, conversation.current_message_leaf_id]);
+
+  const latestMultiviewImages = useMemo<MultiviewImages | undefined>(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === 'user' && message.content.multiviewImages?.front) {
+        return message.content.multiviewImages;
+      }
+    }
+    return undefined;
+  }, [messages]);
 
   // Get the current version number based on assistant messages only
   const getCurrentVersion = useCallback(
@@ -398,6 +414,7 @@ export function ChatSection({
             conversation={conversation}
             cadBackendHint={cadBackendHint}
             composerFocusRequest={composerFocusRequest}
+            seedMultiviewImages={latestMultiviewImages}
           />
         </div>
       )}

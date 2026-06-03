@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   buildMultiviewGenerationPrompt,
+  buildHydratedMultiviewSlots,
+  getMultiviewImageEntries,
   getMultiviewGenerationMode,
   getMultiviewGenerationReferenceIds,
   hasMultiviewSlotPreview,
@@ -8,6 +10,47 @@ import {
   restoreMultiviewSlotAfterFailure,
 } from './multiviewReference.ts';
 
+assert.deepEqual(
+  getMultiviewImageEntries({
+    right: 'right-image-id',
+    front: 'front-image-id',
+    left: '',
+    back: 'back-image-id',
+  }),
+  [
+    { slot: 'front', id: 'front-image-id' },
+    { slot: 'back', id: 'back-image-id' },
+    { slot: 'right', id: 'right-image-id' },
+  ],
+  'multiview image entries should be returned in fixed slot order and skip empty IDs',
+);
+
+assert.deepEqual(
+  buildHydratedMultiviewSlots({
+    multiviewImages: {
+      front: 'front-image-id',
+      left: 'left-image-id',
+      back: 'back-image-id',
+    },
+    imageUrls: [
+      { id: 'left-image-id', url: 'data:image/png;base64,left' },
+      { id: 'front-image-id', url: 'data:image/png;base64,front' },
+    ],
+  }),
+  {
+    front: {
+      id: 'front-image-id',
+      url: 'data:image/png;base64,front',
+      kind: 'upload',
+    },
+    left: {
+      id: 'left-image-id',
+      url: 'data:image/png;base64,left',
+      kind: 'upload',
+    },
+  },
+  'stored multiview image IDs should hydrate into previewable composer slots when URLs are available',
+);
 assert.deepEqual(
   getMultiviewGenerationReferenceIds({
     targetSlot: 'left',
