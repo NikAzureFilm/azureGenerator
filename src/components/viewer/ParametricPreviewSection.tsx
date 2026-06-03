@@ -30,7 +30,7 @@ export function ParametricPreviewSection({
     <div className="flex h-full w-full items-center justify-center bg-adam-neutral-700">
       {isLoading ? (
         <div
-          className={`flex h-full items-center justify-center ${isMobile ? 'pb-20 pt-0' : ''}`}
+          className={`flex h-full w-full items-center justify-center ${isMobile ? 'pb-20 pt-0' : ''}`}
         >
           <Loader message="Generating model" />
         </div>

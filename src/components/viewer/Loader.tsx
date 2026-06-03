@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { pickSpinnerVerb } from '@/constants/spinnerVerbs';
 import { GlbPreview } from './GlbPreview';
+import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 type Props = {
   message?: string;
@@ -12,6 +14,7 @@ const VERB_ROTATE_MS = 2800;
 const FADE_MS = 200;
 
 const Loader = ({ message }: Props) => {
+  const isMobile = useIsMobile();
   const dot2 = useRef<HTMLSpanElement>(null);
   const dot3 = useRef<HTMLSpanElement>(null);
   const loadingMessage = useRef<HTMLParagraphElement>(null);
@@ -85,30 +88,39 @@ const Loader = ({ message }: Props) => {
   }, []);
 
   return (
-    <div className="flex flex-col items-center justify-center">
-      <div className="relative h-32 w-32">
+    <div className="relative flex h-full max-h-dvh w-full flex-col items-center justify-center gap-2">
+      <div
+        className={cn('w-full', isMobile ? 'aspect-square h-fit' : 'h-full')}
+      >
         <GlbPreview startTime={startTime} />
       </div>
       {message && (
-        <p
-          ref={loadingMessage}
-          className="mt-4 text-base text-adam-text-primary transition-opacity duration-200"
+        <div
+          className={cn(
+            'flex h-8 w-full max-w-2xl items-center justify-center transition-all duration-300 ease-in-out',
+            !isMobile && 'absolute top-3/4',
+          )}
         >
-          {changingMessage}
-          <span>.</span>
-          <span
-            ref={dot2}
-            className="opacity-0 transition-opacity duration-200"
+          <p
+            ref={loadingMessage}
+            className="text-base text-adam-text-primary transition-opacity duration-200"
           >
-            .
-          </span>
-          <span
-            ref={dot3}
-            className="opacity-0 transition-opacity duration-200"
-          >
-            .
-          </span>
-        </p>
+            {changingMessage}
+            <span>.</span>
+            <span
+              ref={dot2}
+              className="opacity-0 transition-opacity duration-200"
+            >
+              .
+            </span>
+            <span
+              ref={dot3}
+              className="opacity-0 transition-opacity duration-200"
+            >
+              .
+            </span>
+          </p>
+        </div>
       )}
     </div>
   );

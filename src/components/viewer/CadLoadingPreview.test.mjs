@@ -33,6 +33,12 @@ assert.match(
   'CAD loading preview should render the spinnable AzureFilm letter while waiting',
 );
 
+assert.match(
+  previewSource,
+  /relative flex h-full max-h-dvh w-full flex-col items-center justify-center gap-2/,
+  'CAD loading preview should use the same full-size loading shell as mesh generation',
+);
+
 assert.doesNotMatch(
   previewSource,
   /glbBlob=/,

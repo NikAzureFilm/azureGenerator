@@ -21,6 +21,18 @@ assert.match(
   'CAD loader should render the spinnable AzureFilm letter while waiting',
 );
 
+assert.match(
+  source,
+  /relative flex h-full max-h-dvh w-full flex-col items-center justify-center gap-2/,
+  'CAD loader should use the same full-size loading shell as mesh generation',
+);
+
+assert.doesNotMatch(
+  source,
+  /h-32 w-32/,
+  'CAD loader should not shrink the spinnable letter to the old small icon size',
+);
+
 assert.doesNotMatch(
   source,
   /AzureFilm3DMark/,

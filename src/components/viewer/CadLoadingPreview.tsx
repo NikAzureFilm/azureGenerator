@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { GlbPreview } from './GlbPreview';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface CadLoadingPreviewProps {
   generationId?: string;
@@ -15,6 +16,7 @@ export function CadLoadingPreview({
   className,
   markClassName,
 }: CadLoadingPreviewProps) {
+  const isMobile = useIsMobile();
   const [startTime, setStartTime] = useState(() => Date.now());
   const previousGenerationId = useRef(generationId);
 
@@ -28,15 +30,30 @@ export function CadLoadingPreview({
     <div
       data-testid="cad-loading-preview"
       className={cn(
-        'flex h-full w-full flex-col items-center justify-center gap-3 p-4 text-adam-text-primary',
+        'relative flex h-full max-h-dvh w-full flex-col items-center justify-center gap-2 text-adam-text-primary',
         className,
       )}
     >
-      <div className={cn('min-h-0 w-full flex-1', markClassName)}>
+      <div
+        className={cn(
+          'w-full',
+          isMobile ? 'aspect-square h-fit' : 'h-full',
+          markClassName,
+        )}
+      >
         <GlbPreview startTime={startTime} />
       </div>
       {label ? (
-        <p className="text-xs font-medium text-adam-text-primary/70">{label}</p>
+        <div
+          className={cn(
+            'flex h-8 w-full max-w-2xl items-center justify-center transition-all duration-300 ease-in-out',
+            !isMobile && 'absolute top-3/4',
+          )}
+        >
+          <p className="text-xs font-medium text-adam-text-primary/70">
+            {label}
+          </p>
+        </div>
       ) : null}
     </div>
   );
