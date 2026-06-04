@@ -8,6 +8,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   ChevronDown,
+  Download,
   Loader2,
   ImageIcon,
   Sparkles,
@@ -48,6 +49,10 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMeshData } from '@/hooks/useMeshData';
 import { MeshImagePreview } from '@/components/viewer/MeshImagePreview';
 import { TreeNode } from '@shared/Tree';
+import {
+  downloadOBJArtifactFile,
+  downloadSTEPArtifactFile,
+} from '@/utils/downloadUtils';
 
 const linkParametricMode = (text: string) =>
   text.replace(
@@ -324,6 +329,9 @@ export function AssistantMessage({
                   <MeshImagePreview meshId={message.content.mesh.id} />
                 </div>
               )}
+              {message.content.cadJob && (
+                <CadJobArtifactDownloads message={message} />
+              )}
               {message.content.artifact &&
                 !visibleToolCalls.some(
                   (c) =>
@@ -503,6 +511,81 @@ export function AssistantMessage({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CadJobArtifactDownloads({ message }: { message: Message }) {
+  const cadJob = message.content.cadJob;
+  const artifacts = cadJob?.artifacts;
+  const [downloadingFormat, setDownloadingFormat] = useState<
+    'step' | 'obj' | null
+  >(null);
+
+  if (cadJob?.status !== 'success' || !artifacts) {
+    return null;
+  }
+
+  const canDownloadSTEP = !!artifacts.stepPath;
+  const canDownloadOBJ = !!artifacts.stlPath;
+  const isDownloading = downloadingFormat !== null;
+
+  const handleDownloadSTEP = async () => {
+    if (!artifacts.stepPath) return;
+    try {
+      setDownloadingFormat('step');
+      await downloadSTEPArtifactFile(artifacts.stepPath, message);
+    } catch (error) {
+      console.error('[CAD] Failed to download STEP artifact:', error);
+    } finally {
+      setDownloadingFormat(null);
+    }
+  };
+
+  const handleDownloadOBJ = async () => {
+    if (!artifacts.stlPath) return;
+    try {
+      setDownloadingFormat('obj');
+      await downloadOBJArtifactFile(artifacts.stlPath, message);
+    } catch (error) {
+      console.error('[CAD] Failed to download OBJ artifact:', error);
+    } finally {
+      setDownloadingFormat(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-adam-neutral-950 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <Box className="h-4 w-4 shrink-0 text-adam-text-primary" />
+        <span className="truncate text-sm font-medium text-adam-text-primary">
+          CAD exports
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canDownloadSTEP || isDownloading}
+          onClick={handleDownloadSTEP}
+          className="h-8 gap-1 rounded-md px-2 text-xs"
+        >
+          <Download className="h-3.5 w-3.5" />
+          STEP
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canDownloadOBJ || isDownloading}
+          onClick={handleDownloadOBJ}
+          className="h-8 gap-1 rounded-md px-2 text-xs"
+        >
+          <Download className="h-3.5 w-3.5" />
+          OBJ
+        </Button>
       </div>
     </div>
   );

@@ -50,3 +50,15 @@ assert.doesNotMatch(
   /<Slider[\s\S]*baseRotation[\s\S]*<Slider[\s\S]*baseScale[\s\S]*<Slider[\s\S]*baseThickness/s,
   'assistant message should not render add-base sliders',
 );
+
+assert.match(
+  source,
+  /CadJobArtifactDownloads/,
+  'completed STEP-first CAD jobs should render export download controls',
+);
+
+assert.match(
+  source,
+  /downloadSTEPArtifactFile[\s\S]*downloadOBJArtifactFile/s,
+  'CAD job export controls should support native STEP artifacts and OBJ conversion',
+);

@@ -36,6 +36,8 @@ import {
   downloadSTLFile,
   downloadOpenSCADFile,
   downloadDXFFile,
+  downloadSTEPFile,
+  downloadOBJFile,
   DxfExporter,
 } from '@/utils/downloadUtils';
 import { useToast } from '@/hooks/use-toast';
@@ -47,7 +49,7 @@ interface ParameterSectionProps {
   dxfExporter?: DxfExporter | null;
 }
 
-type DownloadFormat = 'stl' | 'scad' | 'dxf';
+type DownloadFormat = 'stl' | 'scad' | 'dxf' | 'step' | 'obj';
 
 export function ParameterSection({
   parameters,
@@ -169,16 +171,62 @@ export function ParameterSection({
     }
   };
 
+  const handleDownloadSTEP = async () => {
+    if (!currentOutput) return;
+
+    try {
+      setIsExporting(true);
+      await downloadSTEPFile(currentOutput, currentMessage);
+    } catch (error) {
+      console.error('[OpenSCAD] Failed to export STEP:', error);
+      toast({
+        title: 'STEP export failed',
+        description:
+          error instanceof Error
+            ? error.message
+            : 'Adam could not export this model as STEP.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleDownloadOBJ = async () => {
+    if (!currentOutput) return;
+
+    try {
+      setIsExporting(true);
+      await downloadOBJFile(currentOutput, currentMessage);
+    } catch (error) {
+      console.error('[OpenSCAD] Failed to export OBJ:', error);
+      toast({
+        title: 'OBJ export failed',
+        description:
+          error instanceof Error
+            ? error.message
+            : 'Adam could not export this model as OBJ.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // Per-format dispatch tables — each supported format is a single line in each map.
   const downloadHandlers: Record<DownloadFormat, () => void | Promise<void>> = {
     stl: handleDownloadSTL,
     scad: handleDownloadOpenSCAD,
     dxf: handleDownloadDXF,
+    step: handleDownloadSTEP,
+    obj: handleDownloadOBJ,
   };
   const formatAvailable: Record<DownloadFormat, boolean> = {
     stl: !!currentOutput,
     scad: !!currentMessage?.content.artifact?.code,
     dxf: !!dxfExporter && !isExporting,
+    step: !!currentOutput && !isExporting,
+    obj: !!currentOutput && !isExporting,
   };
 
   const handleDownload = async () => {
@@ -351,6 +399,26 @@ export function ParameterSection({
                   <span className="text-sm">.DXF</span>
                   <span className="ml-3 text-xs text-adam-text-primary/60">
                     2D Projection to the (x,y) plane
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setSelectedFormat('step')}
+                  disabled={!formatAvailable.step}
+                  className="cursor-pointer text-adam-text-primary"
+                >
+                  <span className="text-sm">.STEP</span>
+                  <span className="ml-3 text-xs text-adam-text-primary/60">
+                    CAD Exchange
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setSelectedFormat('obj')}
+                  disabled={!formatAvailable.obj}
+                  className="cursor-pointer text-adam-text-primary"
+                >
+                  <span className="text-sm">.OBJ</span>
+                  <span className="ml-3 text-xs text-adam-text-primary/60">
+                    3D Mesh
                   </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
