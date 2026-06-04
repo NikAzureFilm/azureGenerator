@@ -44,7 +44,6 @@ const CONFIGURED_TOKENS = {
   promptGeneration: 10,
   parametric: 50,
   parametricCadReasoning: 120,
-  textToCadWorker: 140,
   generatedInputImage: 22,
   generatedInputImageNanoBanana: 7,
   multiviewFrontImage: 22,
@@ -76,11 +75,6 @@ const FEATURE_BREAKDOWNS = [
     id: 'parametricCadReasoning',
     label: 'CAD Reasoning generation',
     components: [{ name: 'CAD reasoning model budget', costUsd: 1.2 }],
-  },
-  {
-    id: 'textToCadWorker',
-    label: 'STEP CAD worker/export surcharge',
-    components: [{ name: 'STEP worker export and retry budget', costUsd: 1.4 }],
   },
   {
     id: 'generatedInputImage',

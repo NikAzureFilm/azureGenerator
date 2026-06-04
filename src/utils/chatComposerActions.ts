@@ -16,10 +16,9 @@ export function getComposerQuickActionDraft(action: ComposerQuickAction) {
 function hasAssistantOutput(content: Content) {
   return Boolean(
     content.text?.trim() ||
-    content.artifact ||
-    content.mesh ||
-    content.cadJob ||
-    (content.images && content.images.length > 0),
+      content.artifact ||
+      content.mesh ||
+      (content.images && content.images.length > 0),
   );
 }
 

@@ -2,6 +2,7 @@ import type { CadBackend, CreativeModel } from './types.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
+const TEXT_TO_CAD_WORKER_TOKENS = 140;
 
 export function tokensForProviderCost(providerCostUsd: number): number {
   return Math.max(
@@ -42,13 +43,6 @@ export const FEATURE_COSTS = {
     tokens: 120,
     description:
       'Alternative engine with deeper reasoning — slower and costlier per call.',
-  },
-  textToCadWorker: {
-    id: 'text-to-cad-worker',
-    label: 'STEP CAD worker/export surcharge',
-    tokens: 140,
-    description:
-      'Added for STEP-first CAD generation, worker export, conversion, and retry budget.',
   },
   generatedInputImage: {
     id: 'generated-input-image',
@@ -153,7 +147,7 @@ export function getCadBackendTokenCost(
     case 'openscad':
       return baseCost;
     case 'text-to-cad':
-      return baseCost + FEATURE_COSTS.textToCadWorker.tokens;
+      return baseCost + TEXT_TO_CAD_WORKER_TOKENS;
   }
 }
 

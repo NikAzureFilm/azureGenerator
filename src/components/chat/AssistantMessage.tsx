@@ -11,8 +11,6 @@ import {
   Loader2,
   ImageIcon,
   Sparkles,
-  FileCode2,
-  Download,
 } from 'lucide-react';
 import { Streamdown } from 'streamdown';
 import { StreamingCodeBlock } from '@/components/chat/StreamingCodeBlock';
@@ -169,6 +167,7 @@ export function AssistantMessage({
       message.content.text ? linkParametricMode(message.content.text) : '',
     [message.content.text],
   );
+  const visibleToolCalls = message.content.toolCalls ?? [];
 
   return (
     <div className="flex justify-start">
@@ -213,7 +212,6 @@ export function AssistantMessage({
                   message.content.toolCalls.length === 0) &&
                 !message.content.artifact &&
                 !message.content.mesh &&
-                !message.content.cadJob &&
                 (!message.content.images ||
                   message.content.images.length === 0) && (
                   <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
@@ -232,90 +230,81 @@ export function AssistantMessage({
                   {markdownText}
                 </Streamdown>
               ) : null}
-              {message.content.toolCalls &&
-                message.content.toolCalls.length > 0 && (
-                  <div className="flex w-full flex-col gap-2">
-                    {message.content.toolCalls.map((toolCall) => {
-                      // For a pending parametric build, once code starts
-                      // streaming swap the generic status row for the live
-                      // code. Before the first chunk we keep the original
-                      // status row so the thinking state is clear.
-                      const streamingCode =
-                        message.content.artifact?.code ?? '';
-                      if (
-                        toolCall.name === 'build_parametric_model' &&
-                        toolCall.status === 'pending' &&
-                        streamingCode.length > 0
-                      ) {
-                        return (
-                          <StreamingCodeBlock
-                            key={toolCall.id ?? `${toolCall.name}`}
-                            code={streamingCode}
-                            isStreaming={true}
-                          />
-                        );
-                      }
-
+              {visibleToolCalls.length > 0 && (
+                <div className="flex w-full flex-col gap-2">
+                  {visibleToolCalls.map((toolCall) => {
+                    // For a pending parametric build, once code starts
+                    // streaming swap the generic status row for the live
+                    // code. Before the first chunk we keep the original
+                    // status row so the thinking state is clear.
+                    const streamingCode = message.content.artifact?.code ?? '';
+                    if (
+                      toolCall.name === 'build_parametric_model' &&
+                      toolCall.status === 'pending' &&
+                      streamingCode.length > 0
+                    ) {
                       return (
-                        <div
+                        <StreamingCodeBlock
                           key={toolCall.id ?? `${toolCall.name}`}
-                          className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3 hover:bg-adam-neutral-900"
-                        >
-                          <div className="flex h-full items-center justify-center gap-2">
-                            {toolCall.name === 'create_image' && (
-                              <ImageIcon className="h-4 w-4 text-white" />
-                            )}
-                            {toolCall.name === 'create_mesh' && (
-                              <Box className="h-4 w-4 text-white" />
-                            )}
-                            {toolCall.name === 'create_cad_job' && (
-                              <FileCode2 className="h-4 w-4 text-white" />
-                            )}
-                            {(toolCall.name === 'build_parametric_model' ||
-                              toolCall.name === 'apply_parameter_changes') && (
-                              <Box className="h-4 w-4 text-white" />
-                            )}
-                            {toolCall.status === 'pending' && (
-                              <span>
-                                {toolCall.name === 'create_image'
-                                  ? 'Queuing image...'
-                                  : toolCall.name === 'create_mesh'
-                                    ? 'Queuing mesh...'
-                                    : toolCall.name === 'create_cad_job'
-                                      ? 'Queuing STEP CAD...'
-                                      : toolCall.name ===
-                                            'build_parametric_model' ||
-                                          toolCall.name ===
-                                            'apply_parameter_changes'
-                                        ? 'Generating model...'
-                                        : `${toolCall.name}...`}
-                              </span>
-                            )}
-                            {toolCall.status === 'error' && (
-                              <span>
-                                {toolCall.name === 'create_image'
-                                  ? 'Failed to start image generation'
-                                  : toolCall.name === 'create_mesh'
-                                    ? 'Failed to start mesh generation'
-                                    : toolCall.name === 'create_cad_job'
-                                      ? 'Failed to start STEP CAD'
-                                      : toolCall.name ===
-                                            'build_parametric_model' ||
-                                          toolCall.name ===
-                                            'apply_parameter_changes'
-                                        ? 'Failed to generate model'
-                                        : `${toolCall.name}...`}
-                              </span>
-                            )}
-                          </div>
+                          code={streamingCode}
+                          isStreaming={true}
+                        />
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={toolCall.id ?? `${toolCall.name}`}
+                        className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3 hover:bg-adam-neutral-900"
+                      >
+                        <div className="flex h-full items-center justify-center gap-2">
+                          {toolCall.name === 'create_image' && (
+                            <ImageIcon className="h-4 w-4 text-white" />
+                          )}
+                          {toolCall.name === 'create_mesh' && (
+                            <Box className="h-4 w-4 text-white" />
+                          )}
+                          {(toolCall.name === 'build_parametric_model' ||
+                            toolCall.name === 'apply_parameter_changes') && (
+                            <Box className="h-4 w-4 text-white" />
+                          )}
                           {toolCall.status === 'pending' && (
-                            <Loader2 className="h-4 w-4 animate-spin text-white" />
+                            <span>
+                              {toolCall.name === 'create_image'
+                                ? 'Queuing image...'
+                                : toolCall.name === 'create_mesh'
+                                  ? 'Queuing mesh...'
+                                  : toolCall.name ===
+                                        'build_parametric_model' ||
+                                      toolCall.name ===
+                                        'apply_parameter_changes'
+                                    ? 'Generating model...'
+                                    : `${toolCall.name}...`}
+                            </span>
+                          )}
+                          {toolCall.status === 'error' && (
+                            <span>
+                              {toolCall.name === 'create_image'
+                                ? 'Failed to start image generation'
+                                : toolCall.name === 'create_mesh'
+                                  ? 'Failed to start mesh generation'
+                                  : toolCall.name ===
+                                        'build_parametric_model' ||
+                                      toolCall.name ===
+                                        'apply_parameter_changes'
+                                    ? 'Failed to generate model'
+                                    : `${toolCall.name}...`}
+                            </span>
                           )}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        {toolCall.status === 'pending' && (
+                          <Loader2 className="h-4 w-4 animate-spin text-white" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <AssistantMessageImagesViewer message={message} />
               {message.content.mesh && (
                 <div
@@ -335,11 +324,8 @@ export function AssistantMessage({
                   <MeshImagePreview meshId={message.content.mesh.id} />
                 </div>
               )}
-              {message.content.cadJob && (
-                <CadJobButton cadJob={message.content.cadJob} />
-              )}
               {message.content.artifact &&
-                !message.content.toolCalls?.some(
+                !visibleToolCalls.some(
                   (c) =>
                     c.name === 'build_parametric_model' &&
                     c.status === 'pending',
@@ -518,61 +504,6 @@ export function AssistantMessage({
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function CadJobButton({
-  cadJob,
-}: {
-  cadJob: NonNullable<Message['content']['cadJob']>;
-}) {
-  const artifactLinks = [
-    ['STEP', cadJob.artifacts?.stepPath],
-    ['GLB', cadJob.artifacts?.glbPath],
-    ['STL', cadJob.artifacts?.stlPath],
-    ['3MF', cadJob.artifacts?.threeMfPath],
-    ['Source', cadJob.artifacts?.sourcePath],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
-
-  return (
-    <div className="rounded-md border border-gray-200/20 bg-black p-3 dark:border-gray-700">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <FileCode2 className="h-4 w-4 shrink-0 text-adam-text-primary" />
-          <div className="min-w-0">
-            <div className="truncate font-medium text-adam-text-primary">
-              STEP CAD job
-            </div>
-            <div className="text-xs text-adam-text-secondary">
-              {cadJob.status === 'pending'
-                ? 'Worker is generating a STEP-first CAD model'
-                : cadJob.status === 'success'
-                  ? 'CAD artifacts are ready'
-                  : cadJob.error || 'CAD generation failed'}
-            </div>
-          </div>
-        </div>
-        {cadJob.status === 'pending' && (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white" />
-        )}
-      </div>
-      {artifactLinks.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {artifactLinks.map(([label, path]) => (
-            <a
-              key={label}
-              href={path}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-adam-neutral-700 bg-adam-bg-secondary-dark px-2 text-xs text-adam-text-primary hover:bg-adam-neutral-900"
-            >
-              <Download className="h-3 w-3" />
-              {label}
-            </a>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

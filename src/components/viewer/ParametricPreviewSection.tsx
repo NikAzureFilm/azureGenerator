@@ -4,7 +4,6 @@ import Loader from '@/components/viewer/Loader';
 import { OpenSCADPreview } from './OpenSCADViewer';
 import OpenSCADError from '@/lib/OpenSCADError';
 import { DxfExporter } from '@/utils/downloadUtils';
-import { CadJobPreview } from './CadJobPreview';
 
 interface ParametricPreviewSectionProps {
   isLoading: boolean;
@@ -24,7 +23,6 @@ export function ParametricPreviewSection({
   isMobile,
 }: ParametricPreviewSectionProps) {
   const { currentMessage: message } = useCurrentMessage();
-  const cadJob = message?.content.cadJob;
 
   return (
     <div className="flex h-full w-full items-center justify-center bg-adam-neutral-700">
@@ -39,14 +37,7 @@ export function ParametricPreviewSection({
           {message?.content.images && Array.isArray(message.content.images) && (
             <ImageGallery imageIds={message.content.images} />
           )}
-          {cadJob ? (
-            <CadJobPreview
-              cadJob={cadJob}
-              color={color}
-              onOutputChange={onOutputChange}
-              isMobile={isMobile}
-            />
-          ) : message?.content.artifact?.code ? (
+          {message?.content.artifact?.code ? (
             <OpenSCADPreview
               scadCode={message.content.artifact.code}
               color={color}

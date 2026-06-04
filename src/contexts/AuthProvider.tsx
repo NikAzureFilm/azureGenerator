@@ -151,32 +151,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       )
       .subscribe();
 
-    const cadJobChannel = supabase
-      .channel(`cad-job-updates-${user.id}`)
-      .on(
-        'broadcast',
-        {
-          event: 'cad-job-updated',
-        },
-        ({ payload }) => {
-          if (payload.kind !== 'cadJob') {
-            return;
-          }
-
-          queryClient.invalidateQueries({
-            queryKey: ['messages', payload.conversation_id],
-          });
-          queryClient.invalidateQueries({
-            queryKey: ['conversation', payload.conversation_id],
-          });
-          queryClient.invalidateQueries({ queryKey: ['billing', 'status'] });
-        },
-      )
-      .subscribe();
-
     return () => {
       supabase.removeChannel(meshChannel);
-      supabase.removeChannel(cadJobChannel);
     };
   }, [user, queryClient, navigate, profile?.notifications_enabled]);
 

@@ -11,7 +11,6 @@ const FEATURE_ROWS = [
       FEATURE_COSTS.promptGeneration,
       FEATURE_COSTS.parametric,
       FEATURE_COSTS.parametricCadReasoning,
-      FEATURE_COSTS.textToCadWorker,
     ],
   },
   {

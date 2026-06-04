@@ -10,22 +10,16 @@ const chatSectionSource = readFileSync(
   'utf8',
 );
 
-assert.match(
-  source,
-  /description:\s*'Best for simple CAD parts you want to edit and preview quickly'/,
-  'SCAD backend description should explain when a user should choose it',
-);
-
-assert.match(
-  source,
-  /description:\s*'Best for more complex solid CAD designs and export workflows'/,
-  'STEP backend description should explain when a user should choose it',
-);
-
 assert.doesNotMatch(
   source,
-  /description:\s*'[^']*(?:OpenSCAD|build123d|STEP-first)[^']*'/,
-  'CAD backend descriptions should avoid implementation details in user-facing copy',
+  new RegExp(
+    [
+      `VITE_${'TEXT_TO_'}${'CAD_ENABLED'}`,
+      `text-to-${'cad'}`,
+      'CadBackendSelector',
+    ].join('|'),
+  ),
+  'composer should not expose the removed backend selector',
 );
 
 assert.doesNotMatch(

@@ -71,7 +71,6 @@ assert.deepEqual(
     promptGeneration: 10,
     parametric: 50,
     parametricCadReasoning: 120,
-    textToCadWorker: 140,
     generatedInputImage: 22,
     generatedInputImageNanoBanana: 7,
     multiviewFrontImage: 22,

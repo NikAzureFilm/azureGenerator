@@ -9,7 +9,6 @@ import React, {
 } from 'react';
 import {
   ArrowUp,
-  ChevronDown,
   ImagePlus,
   Images,
   Loader2,
@@ -17,7 +16,6 @@ import {
   CircleX,
   Wand2,
   Box,
-  FileCode2,
   Ruler,
   X,
   Sparkles,
@@ -31,7 +29,6 @@ import {
 import {
   Content,
   CreativeModel,
-  CadBackend,
   DEFAULT_CREATIVE_MODEL,
   MeshFileType,
   Model,
@@ -107,10 +104,6 @@ import {
   shouldShowReferenceImageControl,
 } from '@/utils/inputImageControls';
 import {
-  DEFAULT_CAD_BACKEND,
-  getCadBackendTokenCost,
-} from '@/utils/cadBackendSelection';
-import {
   buildHydratedMultiviewSlots,
   getMultiviewImageEntries,
   multiviewSlotMapsMatchPreviews,
@@ -135,7 +128,6 @@ interface TextAreaChatProps {
     id: string;
     user_id: string;
   };
-  cadBackendHint?: CadBackend;
   composerFocusRequest?: {
     id: number;
     draft?: string;
@@ -488,144 +480,6 @@ const VALID_IMAGE_FORMATS = [
 ];
 
 const DEFAULT_CREATIVE_PROMPT = 'a simple centered 3D object asset';
-const TEXT_TO_CAD_ENABLED =
-  String(import.meta.env.VITE_TEXT_TO_CAD_ENABLED).trim() === 'true';
-
-const CAD_BACKEND_OPTIONS: Array<{
-  id: CadBackend;
-  label: string;
-  description: string;
-  Icon: typeof Ruler;
-}> = [
-  {
-    id: 'openscad',
-    label: 'SCAD',
-    description:
-      'Best for simple CAD parts you want to edit and preview quickly',
-    Icon: Ruler,
-  },
-  {
-    id: 'text-to-cad',
-    label: 'STEP',
-    description: 'Best for more complex solid CAD designs and export workflows',
-    Icon: FileCode2,
-  },
-];
-
-interface CadBackendSelectorProps {
-  cadBackend: CadBackend;
-  model: Model;
-  disabled: boolean;
-  focused: boolean;
-  onCadBackendChange: (backend: CadBackend) => void;
-}
-
-function CadBackendSelector({
-  cadBackend,
-  model,
-  disabled,
-  focused,
-  onCadBackendChange,
-}: CadBackendSelectorProps) {
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const selectedOption =
-    CAD_BACKEND_OPTIONS.find((option) => option.id === cadBackend) ??
-    CAD_BACKEND_OPTIONS[0];
-  const selectedCost = getCadBackendTokenCost(cadBackend, model);
-  const SelectedIcon = selectedOption.Icon;
-
-  return (
-    <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className={cn(
-            'flex h-8 w-auto items-center gap-1.5 rounded-lg px-2.5 text-sm transition-all duration-200 hover:border-[#333333] hover:bg-adam-neutral-800',
-            focused
-              ? 'text-white hover:text-white'
-              : 'text-adam-text-secondary hover:text-adam-text-primary',
-            isDropdownOpen &&
-              (focused
-                ? 'bg-adam-neutral-800 text-white'
-                : 'bg-adam-neutral-800 text-adam-text-primary'),
-          )}
-          disabled={disabled}
-          aria-label="CAD output format"
-        >
-          <SelectedIcon className="h-4 w-4 shrink-0" />
-          <span className="hidden text-xs font-normal sm:inline">
-            {selectedOption.label}
-          </span>
-          <span className="rounded bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
-            {formatTokenCost(selectedCost)}
-          </span>
-          <ChevronDown
-            className={cn(
-              'h-4 w-4 shrink-0 opacity-70 transition-transform duration-200',
-              isDropdownOpen && 'rotate-180',
-            )}
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        side="top"
-        className="flex w-80 flex-col gap-1 rounded-lg bg-adam-neutral-700 p-1"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {CAD_BACKEND_OPTIONS.map((option) => {
-          const Icon = option.Icon;
-          const tokenCost = getCadBackendTokenCost(option.id, model);
-          const isSelected = option.id === cadBackend;
-
-          return (
-            <DropdownMenuItem
-              key={option.id}
-              className={cn(
-                'cursor-pointer rounded-md bg-adam-neutral-700 px-3 py-3 transition-colors duration-150 focus:bg-adam-bg-secondary-dark',
-                isSelected && 'bg-adam-neutral-800',
-              )}
-              onSelect={() => {
-                onCadBackendChange(option.id);
-                setIsDropdownOpen(false);
-              }}
-            >
-              <Icon
-                className={cn(
-                  'mr-2 h-4 w-4 shrink-0',
-                  isSelected ? 'text-adam-blue' : 'text-adam-text-secondary',
-                )}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span
-                    className={cn(
-                      'text-sm font-medium',
-                      focused ? 'text-white' : 'text-adam-text-primary',
-                    )}
-                  >
-                    {option.label}
-                  </span>
-                  <span className="border-adam-neutral-600 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-adam-text-secondary">
-                    {formatTokenCost(tokenCost)}
-                  </span>
-                </div>
-                <p
-                  className={cn(
-                    'mt-0.5 text-xs',
-                    focused ? 'text-white' : 'text-gray-400',
-                  )}
-                >
-                  {option.description}
-                </p>
-              </div>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 const getMeshFileType = (filename: string): MeshFileType => {
   const lowerFilename = filename.toLowerCase();
@@ -672,7 +526,6 @@ function TextAreaChat({
   showFullLabels = false,
   onTypeChange,
   conversation,
-  cadBackendHint,
   composerFocusRequest,
   seedMultiviewImages,
 }: TextAreaChatProps) {
@@ -711,16 +564,6 @@ function TextAreaChat({
     null,
   );
   const [meshFilename, setMeshFilename] = useState<string | null>(null);
-  const [cadBackend, setCadBackend] = useState<CadBackend>(
-    () => cadBackendHint ?? DEFAULT_CAD_BACKEND,
-  );
-
-  useEffect(() => {
-    if (cadBackendHint) {
-      setCadBackend(cadBackendHint);
-    }
-  }, [cadBackendHint]);
-
   useEffect(() => {
     if (!focusRequestId) return;
 
@@ -1100,7 +943,6 @@ function TextAreaChat({
       ...(type === 'creative' && {
         imageGenerationModel: selectedImageGenerationModel,
       }),
-      ...(type === 'parametric' && TEXT_TO_CAD_ENABLED && { cadBackend }),
     };
     if (type === 'creative') {
       content = {
@@ -2275,24 +2117,14 @@ function TextAreaChat({
           </div>
 
           <div className="flex items-center gap-2">
-            {type === 'parametric' && TEXT_TO_CAD_ENABLED ? (
-              <CadBackendSelector
-                cadBackend={cadBackend}
-                model={model}
-                disabled={isLoading}
-                focused={isFocused}
-                onCadBackendChange={setCadBackend}
-              />
-            ) : (
-              <ModelSelector
-                disabled={isLoading || disabled}
-                models={memoizedModels}
-                selectedModel={model}
-                onModelChange={setModel}
-                type={type}
-                focused={isFocused}
-              />
-            )}
+            <ModelSelector
+              disabled={isLoading || disabled}
+              models={memoizedModels}
+              selectedModel={model}
+              onModelChange={setModel}
+              type={type}
+              focused={isFocused}
+            />
             {/* Enhanced submit button */}
             {isLoading && stopGenerating ? (
               <Tooltip>

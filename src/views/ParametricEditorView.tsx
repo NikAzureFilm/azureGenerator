@@ -64,16 +64,9 @@ export function ParametricEditorView() {
   const isSending = useIsMutating({
     mutationKey: ['parametric-chat', conversation.id],
   });
-  const isCadJobStarting = useIsMutating({
-    mutationKey: ['cad-chat', conversation.id],
-  });
 
   const isLoading =
-    !!isSending ||
-    !!isCadJobStarting ||
-    isRetryingMessage ||
-    isSendingMessage ||
-    isEditingMessage;
+    !!isSending || isRetryingMessage || isSendingMessage || isEditingMessage;
 
   const { data: messages = [] } = useMessagesQuery();
 
