@@ -43,12 +43,26 @@ export function ParameterSheetContent({
   // Debounce timer for compilation
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingParametersRef = useRef<Parameter[] | null>(null);
+  const onSubmitRef = useRef(onSubmit);
+  const currentMessageRef = useRef<Message | null>(currentMessage);
 
-  // Cleanup debounce timer on unmount
+  onSubmitRef.current = onSubmit;
+  currentMessageRef.current = currentMessage;
+
+  // Flush pending debounced edits on unmount instead of dropping the last
+  // slider/input change when the sheet closes or the route changes quickly.
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (pendingParametersRef.current) {
+        onSubmitRef.current(
+          currentMessageRef.current,
+          pendingParametersRef.current,
+        );
+        pendingParametersRef.current = null;
       }
     };
   }, []);
