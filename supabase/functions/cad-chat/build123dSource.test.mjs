@@ -29,6 +29,19 @@ def gen_step():
 
 const normalizedPolygon = normalizeBuild123dSource(badPolygonListSource);
 
+const badSlotCenterToCenterSource = `
+from build123d import BuildSketch, SlotCenterToCenter
+
+def gen_step():
+    shoulder_length = 120
+    link_width = 24
+    with BuildSketch() as sketch:
+        SlotCenterToCenter((0, 0), (shoulder_length, 0), link_width)
+    return sketch.sketch
+`;
+
+const normalizedSlot = normalizeBuild123dSource(badSlotCenterToCenterSource);
+
 assert.match(
   normalized,
   /from build123d import Box, Axis, Part/,
@@ -48,6 +61,16 @@ assert.match(
   normalizedPolygon,
   /Polygon\(\*\[points\[0\], points\[1\], points\[2\], points\[3\]\]\)/,
   'normalization must unpack Polygon point lists for build123d varargs',
+);
+assert.match(
+  normalizedSlot,
+  /from build123d import BuildSketch, SlotCenterToCenter, SlotCenterPoint/,
+  'normalization must import SlotCenterPoint when repairing endpoint-based slot calls',
+);
+assert.match(
+  normalizedSlot,
+  /SlotCenterPoint\(\(\(\(0\) \+ \(shoulder_length\)\) \/ 2, \(\(0\) \+ \(0\)\) \/ 2\), \(shoulder_length, 0\), link_width\)/,
+  'normalization must convert endpoint-based SlotCenterToCenter calls to SlotCenterPoint',
 );
 
 assert.equal(
@@ -99,4 +122,9 @@ assert.match(
   buildCadSystemPrompt(),
   /never Polygon\(\[p1, p2, p3\]\)/,
   'prompt must forbid list-wrapped Polygon point arguments',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /never SlotCenterToCenter\(\(x1, y1\), \(x2, y2\), height\)/,
+  'prompt must forbid endpoint tuples for SlotCenterToCenter',
 );
