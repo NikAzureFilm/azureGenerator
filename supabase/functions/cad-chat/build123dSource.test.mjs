@@ -17,6 +17,18 @@ def gen_step():
 
 const normalized = normalizeBuild123dSource(badPrimitiveFilletSource);
 
+const badPolygonListSource = `
+from build123d import *
+
+def gen_step():
+    points = [(0, 0), (10, 0), (10, 6), (0, 6)]
+    with BuildSketch() as sketch:
+        Polygon([points[0], points[1], points[2], points[3]])
+    return extrude(sketch.sketch, amount=4)
+`;
+
+const normalizedPolygon = normalizeBuild123dSource(badPolygonListSource);
+
 assert.match(
   normalized,
   /from build123d import Box, Axis, Part/,
@@ -31,6 +43,11 @@ assert.match(
   normalized,
   /main_body = Part\(main_body\)\.fillet\(6\.0, vertical_edges\)/,
   'normalization must wrap primitive Box before fillet',
+);
+assert.match(
+  normalizedPolygon,
+  /Polygon\(\*\[points\[0\], points\[1\], points\[2\], points\[3\]\]\)/,
+  'normalization must unpack Polygon point lists for build123d varargs',
 );
 
 assert.equal(
@@ -77,4 +94,9 @@ assert.match(
   buildCadSystemPrompt(),
   /Do not use Hull\(\)/,
   'prompt must forbid unsupported hull helpers',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /never Polygon\(\[p1, p2, p3\]\)/,
+  'prompt must forbid list-wrapped Polygon point arguments',
 );

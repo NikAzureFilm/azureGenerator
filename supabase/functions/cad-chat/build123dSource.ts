@@ -21,7 +21,8 @@ export function extractPythonSource(text: string): string {
 
 export function normalizeBuild123dSource(source: string): string {
   const axisNormalized = source.replace(/\bSortBy\.(X|Y|Z)\b/g, 'Axis.$1');
-  return wrapPrimitiveTopologyEdits(axisNormalized);
+  const polygonNormalized = unpackSinglePolygonPointCollection(axisNormalized);
+  return wrapPrimitiveTopologyEdits(polygonNormalized);
 }
 
 export function buildCadSystemPrompt(): string {
@@ -46,6 +47,7 @@ Requirements:
 - Use build123d-safe topology edits: either use BuildPart builder mode, or convert primitives before edits, e.g. body = Part(Box(length, width, height)); body = body.fillet(radius, edges).
 - Do not call .fillet(), .chamfer(), or boolean/topology edit methods directly on primitives like Box(...), Cylinder(...), Cone(...), Sphere(...), Torus(...), or Wedge(...).
 - Do not use Hull(), hull(), make_hull(), convex_hull(), or other hull helpers; approximate link outlines with boxes, cylinders, slots, ribs, fillets, and chamfers.
+- For sketch polygons, pass points as separate arguments or unpack point lists, e.g. Polygon(p1, p2, p3) or Polygon(*points); never Polygon([p1, p2, p3]).
 - For coordinate sorting, use sort_by(Axis.X), sort_by(Axis.Y), or sort_by(Axis.Z). Do not use SortBy.X, SortBy.Y, or SortBy.Z.
 - Do not read files, write files, use network, subprocess, shell, or external services.
 - Do not call export_step; the worker does that.`;
@@ -120,6 +122,261 @@ function assertNoUnsupportedBuild123dHelpers(source: string) {
       );
     }
   }
+}
+
+type TopLevelArgument = {
+  text: string;
+  start: number;
+};
+
+function unpackSinglePolygonPointCollection(source: string): string {
+  const polygonName = 'Polygon';
+  let result = '';
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const polygonIndex = source.indexOf(polygonName, cursor);
+    if (polygonIndex === -1) {
+      result += source.slice(cursor);
+      break;
+    }
+
+    const openParenIndex = getPolygonCallOpenParenIndex(
+      source,
+      polygonIndex,
+      polygonName.length,
+    );
+    if (openParenIndex === -1) {
+      result += source.slice(cursor, polygonIndex + polygonName.length);
+      cursor = polygonIndex + polygonName.length;
+      continue;
+    }
+
+    const closeParenIndex = findMatchingDelimiter(
+      source,
+      openParenIndex,
+      '(',
+      ')',
+    );
+    if (closeParenIndex === -1) {
+      result += source.slice(cursor);
+      break;
+    }
+
+    const args = source.slice(openParenIndex + 1, closeParenIndex);
+    result +=
+      source.slice(cursor, openParenIndex + 1) +
+      unpackSinglePositionalArgument(args) +
+      ')';
+    cursor = closeParenIndex + 1;
+  }
+
+  return result;
+}
+
+function getPolygonCallOpenParenIndex(
+  source: string,
+  polygonIndex: number,
+  polygonNameLength: number,
+): number {
+  const previous = source[polygonIndex - 1];
+  if (previous && isIdentifierCharacter(previous)) {
+    return -1;
+  }
+
+  let index = polygonIndex + polygonNameLength;
+  while (index < source.length && /[ \t]/.test(source[index])) {
+    index += 1;
+  }
+
+  return source[index] === '(' ? index : -1;
+}
+
+function unpackSinglePositionalArgument(args: string): string {
+  const topLevelArgs = splitTopLevelArguments(args);
+  const positionalArgs = topLevelArgs.filter((arg) => {
+    const trimmed = arg.text.trim();
+    return (
+      trimmed &&
+      !trimmed.startsWith('**') &&
+      !isTopLevelKeywordArgument(trimmed)
+    );
+  });
+
+  if (positionalArgs.length !== 1) {
+    return args;
+  }
+
+  const [singleArg] = positionalArgs;
+  const leadingWhitespaceLength = singleArg.text.match(/^\s*/)?.[0].length ?? 0;
+  const insertIndex = singleArg.start + leadingWhitespaceLength;
+  if (args[insertIndex] === '*') {
+    return args;
+  }
+
+  return `${args.slice(0, insertIndex)}*${args.slice(insertIndex)}`;
+}
+
+function splitTopLevelArguments(args: string): TopLevelArgument[] {
+  const topLevelArgs: TopLevelArgument[] = [];
+  let segmentStart = 0;
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  let tripleQuoted = false;
+  let escaped = false;
+  let inComment = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const char = args[index];
+
+    if (inComment) {
+      if (char === '\n') {
+        inComment = false;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (!tripleQuoted && char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (tripleQuoted && args.slice(index, index + 3) === quote.repeat(3)) {
+        quote = null;
+        tripleQuoted = false;
+        index += 2;
+        continue;
+      }
+      if (!tripleQuoted && char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '#') {
+      inComment = true;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      tripleQuoted = args.slice(index, index + 3) === char.repeat(3);
+      if (tripleQuoted) {
+        index += 2;
+      }
+      continue;
+    }
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (char === ',' && depth === 0) {
+      topLevelArgs.push({
+        text: args.slice(segmentStart, index),
+        start: segmentStart,
+      });
+      segmentStart = index + 1;
+    }
+  }
+
+  topLevelArgs.push({
+    text: args.slice(segmentStart),
+    start: segmentStart,
+  });
+
+  return topLevelArgs;
+}
+
+function findMatchingDelimiter(
+  source: string,
+  openIndex: number,
+  openDelimiter: string,
+  closeDelimiter: string,
+): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  let tripleQuoted = false;
+  let escaped = false;
+  let inComment = false;
+
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (inComment) {
+      if (char === '\n') {
+        inComment = false;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (!tripleQuoted && char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (tripleQuoted && source.slice(index, index + 3) === quote.repeat(3)) {
+        quote = null;
+        tripleQuoted = false;
+        index += 2;
+        continue;
+      }
+      if (!tripleQuoted && char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '#') {
+      inComment = true;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      tripleQuoted = source.slice(index, index + 3) === char.repeat(3);
+      if (tripleQuoted) {
+        index += 2;
+      }
+      continue;
+    }
+
+    if (char === openDelimiter) {
+      depth += 1;
+      continue;
+    }
+
+    if (char === closeDelimiter) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function isTopLevelKeywordArgument(arg: string): boolean {
+  return /^[A-Za-z_]\w*\s*=/.test(arg);
+}
+
+function isIdentifierCharacter(char: string): boolean {
+  return /[A-Za-z0-9_]/.test(char);
 }
 
 function ensurePartImport(source: string): string {
