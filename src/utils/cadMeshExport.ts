@@ -184,6 +184,52 @@ export function triangleMeshToFacetedSTEP(
   const pointIds = mesh.vertices.map((vertex) =>
     next(`CARTESIAN_POINT('',${tuple(vertex)})`),
   );
+  const vertexPointIds = pointIds.map((pointId) =>
+    next(`VERTEX_POINT('',#${pointId})`),
+  );
+  const edgeCurves = new Map<
+    string,
+    { edgeCurveId: number; startIndex: number; endIndex: number }
+  >();
+
+  const getEdgeCurve = (fromIndex: number, toIndex: number) => {
+    const startIndex = Math.min(fromIndex, toIndex);
+    const endIndex = Math.max(fromIndex, toIndex);
+    const key = `${startIndex}:${endIndex}`;
+    const existingEdge = edgeCurves.get(key);
+    if (existingEdge) {
+      return {
+        edgeCurveId: existingEdge.edgeCurveId,
+        orientation: fromIndex === existingEdge.startIndex,
+      };
+    }
+
+    const start = mesh.vertices[startIndex];
+    const end = mesh.vertices[endIndex];
+    const edgeVector = subtract(end, start);
+    const edgeLength = vectorLength(edgeVector);
+    if (edgeLength < ZERO_EPSILON) {
+      throw new Error('Cannot export STEP with zero-length edges.');
+    }
+
+    const directionId = next(
+      `DIRECTION('',${tuple(normalizeVector(edgeVector))})`,
+    );
+    const vectorId = next(
+      `VECTOR('',#${directionId},${formatNumber(edgeLength)})`,
+    );
+    const lineId = next(`LINE('',#${pointIds[startIndex]},#${vectorId})`);
+    const edgeCurveId = next(
+      `EDGE_CURVE('',#${vertexPointIds[startIndex]},#${vertexPointIds[endIndex]},#${lineId},.T.)`,
+    );
+
+    edgeCurves.set(key, { edgeCurveId, startIndex, endIndex });
+
+    return {
+      edgeCurveId,
+      orientation: fromIndex === startIndex,
+    };
+  };
 
   const faceIds: number[] = [];
   for (const [aIndex, bIndex, cIndex] of mesh.faces) {
@@ -200,8 +246,18 @@ export function triangleMeshToFacetedSTEP(
       `AXIS2_PLACEMENT_3D('',#${pointIds[aIndex]},#${normalId},#${refDirectionId})`,
     );
     const planeId = next(`PLANE('',#${placementId})`);
+    const orientedEdgeIds = [
+      [aIndex, bIndex],
+      [bIndex, cIndex],
+      [cIndex, aIndex],
+    ].map(([fromIndex, toIndex]) => {
+      const edge = getEdgeCurve(fromIndex, toIndex);
+      return next(
+        `ORIENTED_EDGE('',*,*,#${edge.edgeCurveId},${edge.orientation ? '.T.' : '.F.'})`,
+      );
+    });
     const loopId = next(
-      `POLY_LOOP('',(#${pointIds[aIndex]},#${pointIds[bIndex]},#${pointIds[cIndex]}))`,
+      `EDGE_LOOP('',(${orientedEdgeIds.map((id) => `#${id}`).join(',')}))`,
     );
     const boundId = next(`FACE_OUTER_BOUND('',#${loopId},.T.)`);
     faceIds.push(next(`ADVANCED_FACE('',(#${boundId}),#${planeId},.T.)`));
