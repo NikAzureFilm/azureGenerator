@@ -1,6 +1,9 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
-import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
+import {
+  getAnonSupabaseClient,
+  type SupabaseClient,
+} from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { CadJobArtifact, Content, Model } from '@shared/types.ts';
@@ -13,6 +16,10 @@ import {
 } from './build123dSource.ts';
 
 initSentry();
+
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
@@ -82,7 +89,12 @@ async function generateBuild123dSource(
       continue;
     }
 
-    return extractPythonSource(text);
+    try {
+      return extractPythonSource(text);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      continue;
+    }
   }
 
   throw new Error(lastError);
@@ -193,6 +205,283 @@ function refundTokens(
     referenceId,
     userId,
   });
+}
+
+async function updateAssistantMessageContent({
+  supabaseClient,
+  messageId,
+  content,
+  userId,
+  conversationId,
+}: {
+  supabaseClient: SupabaseClient;
+  messageId: string;
+  content: Content;
+  userId: string;
+  conversationId: string;
+}) {
+  const { error } = await supabaseClient
+    .from('messages')
+    .update({ content })
+    .eq('id', messageId);
+
+  if (error) {
+    logError(error, {
+      functionName: 'cad-chat',
+      statusCode: 500,
+      userId,
+      conversationId,
+      additionalContext: { stage: 'update_assistant_message', messageId },
+    });
+  }
+}
+
+async function broadcastCadJobUpdate({
+  supabaseClient,
+  userId,
+  conversationId,
+  jobId,
+  status,
+}: {
+  supabaseClient: SupabaseClient;
+  userId: string;
+  conversationId: string;
+  jobId: string;
+  status: 'success' | 'failure';
+}) {
+  const channel = supabaseClient.channel(`cad-job-updates-${userId}`);
+  await channel.send({
+    type: 'broadcast',
+    event: 'cad-job-updated',
+    payload: {
+      kind: 'cadJob',
+      id: jobId,
+      status,
+      conversation_id: conversationId,
+    },
+  });
+}
+
+async function persistCadJobContent({
+  supabaseClient,
+  userId,
+  conversationId,
+  messageId,
+  jobId,
+  content,
+  status,
+}: {
+  supabaseClient: SupabaseClient;
+  userId: string;
+  conversationId: string;
+  messageId: string;
+  jobId: string;
+  content: Content;
+  status: 'success' | 'failure';
+}) {
+  await updateAssistantMessageContent({
+    supabaseClient,
+    messageId,
+    content,
+    userId,
+    conversationId,
+  });
+  try {
+    await broadcastCadJobUpdate({
+      supabaseClient,
+      userId,
+      conversationId,
+      jobId,
+      status,
+    });
+  } catch (error) {
+    logError(error, {
+      functionName: 'cad-chat',
+      statusCode: 500,
+      userId,
+      conversationId,
+      additionalContext: { stage: 'broadcast_cad_job_update', jobId, status },
+    });
+  }
+}
+
+async function runTextToCadJob({
+  supabaseClient,
+  email,
+  userId,
+  model,
+  jobId,
+  conversationId,
+  messageId,
+  prompt,
+  pendingContent,
+}: {
+  supabaseClient: SupabaseClient;
+  email: string;
+  userId: string;
+  model: Model;
+  jobId: string;
+  conversationId: string;
+  messageId: string;
+  prompt: Record<string, unknown>;
+  pendingContent: Content;
+}) {
+  let tokensConsumed = false;
+
+  try {
+    const tokenResult = await consumeTokens(email, userId, model, jobId);
+    if (!tokenResult.ok) {
+      const failureContent: Content = {
+        ...pendingContent,
+        error: 'insufficient_tokens',
+        toolCalls: pendingContent.toolCalls?.map((toolCall) => ({
+          ...toolCall,
+          status: 'error',
+        })),
+        cadJob: {
+          id: jobId,
+          status: 'failure',
+          backend: 'text-to-cad',
+          error: 'insufficient_tokens',
+        },
+      };
+      await persistCadJobContent({
+        supabaseClient,
+        userId,
+        conversationId,
+        messageId,
+        jobId,
+        content: failureContent,
+        status: 'failure',
+      });
+      return;
+    }
+
+    tokensConsumed = true;
+
+    let workerBody: Record<string, unknown> | null = null;
+    let previousError: string | undefined;
+    const promptText = typeof prompt.text === 'string' ? prompt.text : '';
+
+    for (let attempt = 1; attempt <= MAX_TEXT_TO_CAD_ATTEMPTS; attempt += 1) {
+      const source = await generateBuild123dSource(
+        promptText,
+        model,
+        previousError,
+      );
+      try {
+        workerBody = await submitTextToCadWorkerJob({
+          jobId,
+          userId,
+          conversationId,
+          messageId,
+          prompt,
+          source,
+        });
+        break;
+      } catch (error) {
+        if (
+          error instanceof TextToCadWorkerError &&
+          error.status === 422 &&
+          attempt < MAX_TEXT_TO_CAD_ATTEMPTS
+        ) {
+          previousError = error.message;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!workerBody) {
+      throw new Error('Worker did not return a response.');
+    }
+
+    const artifacts = asCadArtifacts(workerBody.artifacts);
+    if (!artifacts.stepPath) {
+      throw new Error('Worker did not return a STEP artifact URL.');
+    }
+
+    const successContent: Content = {
+      ...pendingContent,
+      text:
+        typeof workerBody.title === 'string'
+          ? `${workerBody.title} is ready.`
+          : 'STEP CAD model is ready.',
+      toolCalls: pendingContent.toolCalls?.filter(
+        (toolCall) => toolCall.name !== 'create_cad_job',
+      ),
+      cadJob: {
+        id: jobId,
+        status: 'success',
+        backend: 'text-to-cad',
+        artifacts,
+      },
+    };
+
+    await persistCadJobContent({
+      supabaseClient,
+      userId,
+      conversationId,
+      messageId,
+      jobId,
+      content: successContent,
+      status: 'success',
+    });
+  } catch (err) {
+    if (tokensConsumed) {
+      try {
+        await refundTokens(email, userId, model, jobId);
+      } catch (refundError) {
+        logError(refundError, {
+          functionName: 'cad-chat',
+          statusCode: 502,
+          userId,
+          conversationId,
+          additionalContext: { stage: 'refund_after_worker_submit_failure' },
+        });
+      }
+    }
+
+    const error =
+      err instanceof BillingClientError
+        ? 'billing_unavailable'
+        : err instanceof Error
+          ? err.message
+          : String(err);
+
+    logError(err, {
+      functionName: 'cad-chat',
+      statusCode: err instanceof BillingClientError ? err.status : 502,
+      userId,
+      conversationId,
+      additionalContext: { stage: 'run_text_to_cad_job', jobId },
+    });
+
+    const failureContent: Content = {
+      ...pendingContent,
+      text: 'STEP-first CAD failed to start.',
+      toolCalls: pendingContent.toolCalls?.map((toolCall) => ({
+        ...toolCall,
+        status: 'error',
+      })),
+      cadJob: {
+        id: jobId,
+        status: 'failure',
+        backend: 'text-to-cad',
+        error,
+      },
+    };
+
+    await persistCadJobContent({
+      supabaseClient,
+      userId,
+      conversationId,
+      messageId,
+      jobId,
+      content: failureContent,
+      status: 'failure',
+    });
+  }
 }
 
 Deno.serve(async (req) => {
@@ -331,151 +620,19 @@ Deno.serve(async (req) => {
     return jsonResponse({ message: assistantMessage });
   }
 
-  try {
-    const tokenResult = await consumeTokens(
-      userData.user.email,
-      userData.user.id,
+  EdgeRuntime.waitUntil(
+    runTextToCadJob({
+      supabaseClient,
+      email: userData.user.email,
+      userId: userData.user.id,
       model,
       jobId,
-    );
-    if (!tokenResult.ok) {
-      const failureContent: Content = {
-        ...pendingContent,
-        error: 'insufficient_tokens',
-        toolCalls: pendingContent.toolCalls?.map((toolCall) => ({
-          ...toolCall,
-          status: 'error',
-        })),
-        cadJob: {
-          id: jobId,
-          status: 'failure',
-          backend: 'text-to-cad',
-          error: 'insufficient_tokens',
-        },
-      };
-      const { data: updatedMessage } = await supabaseClient
-        .from('messages')
-        .update({ content: failureContent })
-        .eq('id', assistantMessage.id)
-        .select()
-        .single()
-        .overrideTypes<{ content: Content; role: 'assistant' }>();
-      return jsonResponse({ message: updatedMessage ?? assistantMessage });
-    }
-  } catch (err) {
-    const status = err instanceof BillingClientError ? err.status : 502;
-    logError(err, {
-      functionName: 'cad-chat',
-      statusCode: status,
-      userId: userData.user.id,
       conversationId,
-    });
-    return jsonResponse({ error: 'billing_unavailable' }, 502);
-  }
+      messageId: assistantMessage.id,
+      prompt,
+      pendingContent,
+    }),
+  );
 
-  try {
-    let workerBody: Record<string, unknown> | null = null;
-    let previousError: string | undefined;
-
-    for (let attempt = 1; attempt <= MAX_TEXT_TO_CAD_ATTEMPTS; attempt += 1) {
-      const source = await generateBuild123dSource(
-        prompt.text,
-        model,
-        previousError,
-      );
-      try {
-        workerBody = await submitTextToCadWorkerJob({
-          jobId,
-          userId: userData.user.id,
-          conversationId,
-          messageId: assistantMessage.id,
-          prompt,
-          source,
-        });
-        break;
-      } catch (error) {
-        if (
-          error instanceof TextToCadWorkerError &&
-          error.status === 422 &&
-          attempt < MAX_TEXT_TO_CAD_ATTEMPTS
-        ) {
-          previousError = error.message;
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    if (!workerBody) {
-      throw new Error('Worker did not return a response.');
-    }
-
-    const artifacts = asCadArtifacts(workerBody.artifacts);
-    if (!artifacts.stepPath) {
-      throw new Error('Worker did not return a STEP artifact URL.');
-    }
-
-    const successContent: Content = {
-      ...pendingContent,
-      text:
-        typeof workerBody.title === 'string'
-          ? `${workerBody.title} is ready.`
-          : 'STEP CAD model is ready.',
-      toolCalls: pendingContent.toolCalls?.filter(
-        (toolCall) => toolCall.name !== 'create_cad_job',
-      ),
-      cadJob: {
-        id: jobId,
-        status: 'success',
-        backend: 'text-to-cad',
-        artifacts,
-      },
-    };
-
-    const { data: updatedMessage } = await supabaseClient
-      .from('messages')
-      .update({ content: successContent })
-      .eq('id', assistantMessage.id)
-      .select()
-      .single()
-      .overrideTypes<{ content: Content; role: 'assistant' }>();
-
-    return jsonResponse({ message: updatedMessage ?? assistantMessage });
-  } catch (err) {
-    try {
-      await refundTokens(userData.user.email, userData.user.id, model, jobId);
-    } catch (refundError) {
-      logError(refundError, {
-        functionName: 'cad-chat',
-        statusCode: 502,
-        userId: userData.user.id,
-        conversationId,
-        additionalContext: { stage: 'refund_after_worker_submit_failure' },
-      });
-    }
-
-    const error = err instanceof Error ? err.message : String(err);
-    const failureContent: Content = {
-      ...pendingContent,
-      text: 'STEP-first CAD failed to start.',
-      toolCalls: pendingContent.toolCalls?.map((toolCall) => ({
-        ...toolCall,
-        status: 'error',
-      })),
-      cadJob: {
-        id: jobId,
-        status: 'failure',
-        backend: 'text-to-cad',
-        error,
-      },
-    };
-    const { data: updatedMessage } = await supabaseClient
-      .from('messages')
-      .update({ content: failureContent })
-      .eq('id', assistantMessage.id)
-      .select()
-      .single()
-      .overrideTypes<{ content: Content; role: 'assistant' }>();
-    return jsonResponse({ message: updatedMessage ?? assistantMessage });
-  }
+  return jsonResponse({ message: assistantMessage });
 });

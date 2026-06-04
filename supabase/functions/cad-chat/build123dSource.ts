@@ -7,6 +7,7 @@ const PRIMITIVE_PART_CLASSES = [
   'Wedge',
 ];
 const PRIMITIVE_TOPOLOGY_METHODS = ['fillet', 'chamfer'];
+const UNSUPPORTED_HELPERS = ['Hull'];
 
 export function extractPythonSource(text: string): string {
   const fence = text.match(/```(?:python)?\s*([\s\S]*?)```/);
@@ -14,6 +15,7 @@ export function extractPythonSource(text: string): string {
   if (!source.includes('def gen_step')) {
     throw new Error('Generated CAD source did not define gen_step().');
   }
+  assertNoUnsupportedBuild123dHelpers(source);
   return source;
 }
 
@@ -43,6 +45,7 @@ Requirements:
 - Place every separate printable body so its lowest Z is on the build plate, with enough spacing between bodies for slicers to separate or print them cleanly.
 - Use build123d-safe topology edits: either use BuildPart builder mode, or convert primitives before edits, e.g. body = Part(Box(length, width, height)); body = body.fillet(radius, edges).
 - Do not call .fillet(), .chamfer(), or boolean/topology edit methods directly on primitives like Box(...), Cylinder(...), Cone(...), Sphere(...), Torus(...), or Wedge(...).
+- Do not use Hull(), hull(), make_hull(), convex_hull(), or other hull helpers; approximate link outlines with boxes, cylinders, slots, ribs, fillets, and chamfers.
 - For coordinate sorting, use sort_by(Axis.X), sort_by(Axis.Y), or sort_by(Axis.Z). Do not use SortBy.X, SortBy.Y, or SortBy.Z.
 - Do not read files, write files, use network, subprocess, shell, or external services.
 - Do not call export_step; the worker does that.`;
@@ -106,6 +109,17 @@ function wrapPrimitiveTopologyEdits(source: string): string {
   return wrappedPrimitiveTopologyEdit
     ? ensurePartImport(normalized)
     : normalized;
+}
+
+function assertNoUnsupportedBuild123dHelpers(source: string) {
+  for (const helper of UNSUPPORTED_HELPERS) {
+    const helperCall = new RegExp(`\\b(?:build123d\\.)?${helper}\\s*\\(`);
+    if (helperCall.test(source)) {
+      throw new Error(
+        `Unsupported build123d helper "${helper}"; approximate that shape with primitives, booleans, fillets, or chamfers.`,
+      );
+    }
+  }
 }
 
 function ensurePartImport(source: string): string {

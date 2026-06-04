@@ -39,6 +39,20 @@ assert.equal(
   'source extraction must apply build123d normalization after fence stripping',
 );
 
+assert.throws(
+  () =>
+    extractPythonSource(`
+from build123d import *
+
+def gen_step():
+    with BuildPart() as model:
+        Hull()
+        Box(10, 10, 10)
+    return model.part
+`),
+  /Unsupported build123d helper "Hull"/,
+);
+
 assert.match(
   buildCadSystemPrompt(),
   /Do not call \.fillet\(\), \.chamfer\(\), or boolean\/topology edit methods directly on primitives like Box/,
@@ -58,4 +72,9 @@ assert.match(
   buildCadSystemPrompt(),
   /build plate/i,
   'STEP CAD prompt should require bodies to be laid out for printing',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /Do not use Hull\(\)/,
+  'prompt must forbid unsupported hull helpers',
 );
