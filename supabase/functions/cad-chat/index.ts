@@ -161,6 +161,18 @@ class TextToCadWorkerError extends Error {
   }
 }
 
+function isRetryableTextToCadWorkerError(
+  error: unknown,
+): error is TextToCadWorkerError {
+  return (
+    error instanceof TextToCadWorkerError &&
+    (error.status === 422 ||
+      error.status === 408 ||
+      error.status === 504 ||
+      /timed out|timeout/i.test(error.message))
+  );
+}
+
 function asCadArtifacts(value: unknown): CadJobArtifact {
   if (!value || typeof value !== 'object') return {};
   const record = value as Record<string, unknown>;
@@ -381,8 +393,7 @@ async function runTextToCadJob({
         break;
       } catch (error) {
         if (
-          error instanceof TextToCadWorkerError &&
-          error.status === 422 &&
+          isRetryableTextToCadWorkerError(error) &&
           attempt < MAX_TEXT_TO_CAD_ATTEMPTS
         ) {
           previousError = error.message;

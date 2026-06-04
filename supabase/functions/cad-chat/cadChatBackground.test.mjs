@@ -6,6 +6,8 @@ const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 assert.match(source, /declare const EdgeRuntime:\s*\{/);
 assert.match(source, /async function runTextToCadJob\(/);
 assert.match(source, /EdgeRuntime\.waitUntil\(\s*runTextToCadJob\(/);
+assert.match(source, /function isRetryableTextToCadWorkerError\(/);
+assert.match(source, /timed out\|timeout/i);
 
 const waitUntilIndex = source.indexOf('EdgeRuntime.waitUntil(');
 const immediateReturnIndex = source.indexOf(

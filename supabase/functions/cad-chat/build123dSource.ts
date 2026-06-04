@@ -40,7 +40,9 @@ Requirements:
 - gen_step() must return one closed STEP-ready build123d Part, Solid, Compound, or Assembly.
 - Prefer precise mechanical geometry: boxes, cylinders, holes, slots, chamfers, fillets, ribs, bosses, standoffs.
 - Use named parameters near the top.
-- Keep the model robust and simple enough to export.
+- Keep the model robust and simple enough to export in under 60 seconds.
+- Avoid expensive loops, dense fillets/chamfers, repeated boolean operations, and patterned instances above 16.
+- For gears, sprockets, or toothed wheels, do not model every requested gear tooth. Preserve requested tooth counts as named parameters or comments, but use simplified pitch discs, hubs, rims, and at most 16 broad visual tooth markers so STEP export stays fast.
 - Make the result 3D-printable by default: watertight closed solids, no floating parts, no unsupported internal loose bodies, and no paper-thin walls.
 - Use a practical minimum wall thickness of 1.2 mm when dimensions are missing; use thicker walls, ribs, or bosses for load-bearing features.
 - Avoid zero-thickness surfaces, open shells, self-intersections, fragile spikes, and details too small for a 0.4 mm FDM nozzle.
@@ -62,13 +64,19 @@ export function buildCadUserPrompt(
   promptText: string,
   previousError?: string,
 ): string {
+  const timeoutCorrection =
+    previousError && /timed out|timeout/i.test(previousError)
+      ? `
+
+The previous source timed out during STEP export. Return a much simpler low-complexity source: approximate gears with pitch discs and at most 16 broad tooth markers, remove dense fillets or patterns, avoid repeated booleans, and keep export under 60 seconds.`
+      : '';
   const correction = previousError
     ? `
 
 The previous generated source failed with this build123d error:
 ${previousError}
 
-Return corrected Python source that avoids that error.`
+Return corrected Python source that avoids that error.${timeoutCorrection}`
     : '';
 
   return `Create STEP-first build123d CAD source for this request:

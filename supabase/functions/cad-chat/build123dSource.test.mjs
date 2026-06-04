@@ -155,3 +155,13 @@ assert.match(
   /never use Location\(\.\.\.\) as a with-context/,
   'prompt must forbid Location as a context manager',
 );
+assert.match(
+  buildCadSystemPrompt(),
+  /export in under 60 seconds/i,
+  'prompt must require worker-safe export time',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /do not model every requested gear tooth/i,
+  'prompt must avoid timeout-prone full gear tooth modeling',
+);
