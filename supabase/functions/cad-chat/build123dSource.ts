@@ -22,7 +22,9 @@ export function extractPythonSource(text: string): string {
 export function normalizeBuild123dSource(source: string): string {
   const axisNormalized = source.replace(/\bSortBy\.(X|Y|Z)\b/g, 'Axis.$1');
   const slotNormalized = rewriteEndpointSlotCenterToCenterCalls(axisNormalized);
-  const polygonNormalized = unpackSinglePolygonPointCollection(slotNormalized);
+  const locationNormalized = rewriteLocationContextManagers(slotNormalized);
+  const polygonNormalized =
+    unpackSinglePolygonPointCollection(locationNormalized);
   return wrapPrimitiveTopologyEdits(polygonNormalized);
 }
 
@@ -50,6 +52,7 @@ Requirements:
 - Do not use Hull(), hull(), make_hull(), convex_hull(), or other hull helpers; approximate link outlines with boxes, cylinders, slots, ribs, fillets, and chamfers.
 - For sketch polygons, pass points as separate arguments or unpack point lists, e.g. Polygon(p1, p2, p3) or Polygon(*points); never Polygon([p1, p2, p3]).
 - For slots, SlotCenterToCenter takes numeric center separation and height, e.g. SlotCenterToCenter(120, 24). For point-defined slots use SlotCenterPoint(center, point, height); never SlotCenterToCenter((x1, y1), (x2, y2), height).
+- For builder placement contexts, use with Locations(...):; never use Location(...) as a with-context. Location is a transform value, not a context manager.
 - For coordinate sorting, use sort_by(Axis.X), sort_by(Axis.Y), or sort_by(Axis.Z). Do not use SortBy.X, SortBy.Y, or SortBy.Z.
 - Do not read files, write files, use network, subprocess, shell, or external services.
 - Do not call export_step; the worker does that.`;
@@ -130,6 +133,25 @@ type TopLevelArgument = {
   text: string;
   start: number;
 };
+
+function rewriteLocationContextManagers(source: string): string {
+  let rewritten = false;
+  let needsLocationsImport = false;
+  const normalized = source.replace(
+    /^(\s*with\s+)((?:build123d\.)?)Location(\s*\()/gm,
+    (_match, prefix: string, namespace: string, openParen: string) => {
+      rewritten = true;
+      needsLocationsImport ||= !namespace;
+      return `${prefix}${namespace}Locations${openParen}`;
+    },
+  );
+
+  if (!rewritten || !needsLocationsImport) {
+    return normalized;
+  }
+
+  return ensureBuild123dImport(normalized, 'Locations');
+}
 
 function rewriteEndpointSlotCenterToCenterCalls(source: string): string {
   const callName = 'SlotCenterToCenter';

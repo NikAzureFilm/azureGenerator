@@ -42,6 +42,18 @@ def gen_step():
 
 const normalizedSlot = normalizeBuild123dSource(badSlotCenterToCenterSource);
 
+const badLocationContextSource = `
+from build123d import BuildPart, Box, Location
+
+def gen_step():
+    with BuildPart() as model:
+        with Location((-26, 0)):
+            Box(20, 10, 4)
+    return model.part
+`;
+
+const normalizedLocation = normalizeBuild123dSource(badLocationContextSource);
+
 assert.match(
   normalized,
   /from build123d import Box, Axis, Part/,
@@ -71,6 +83,16 @@ assert.match(
   normalizedSlot,
   /SlotCenterPoint\(\(\(\(0\) \+ \(shoulder_length\)\) \/ 2, \(\(0\) \+ \(0\)\) \/ 2\), \(shoulder_length, 0\), link_width\)/,
   'normalization must convert endpoint-based SlotCenterToCenter calls to SlotCenterPoint',
+);
+assert.match(
+  normalizedLocation,
+  /from build123d import BuildPart, Box, Location, Locations/,
+  'normalization must import Locations when repairing Location context managers',
+);
+assert.match(
+  normalizedLocation,
+  /with Locations\(\(-26, 0\)\):/,
+  'normalization must rewrite Location context managers to Locations',
 );
 
 assert.equal(
@@ -127,4 +149,9 @@ assert.match(
   buildCadSystemPrompt(),
   /never SlotCenterToCenter\(\(x1, y1\), \(x2, y2\), height\)/,
   'prompt must forbid endpoint tuples for SlotCenterToCenter',
+);
+assert.match(
+  buildCadSystemPrompt(),
+  /never use Location\(\.\.\.\) as a with-context/,
+  'prompt must forbid Location as a context manager',
 );
