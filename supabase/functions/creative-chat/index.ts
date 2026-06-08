@@ -27,6 +27,7 @@ import {
   formatCreativeUserMessage,
 } from '../_shared/messageUtils.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
@@ -764,6 +765,11 @@ Deno.serve(async (req) => {
           id: string;
           input?: string;
         } | null = null;
+        // Accumulate Anthropic token usage across the stream so we can record
+        // the actual provider cost at message_stop.
+        let usageInputTokens = 0;
+        let usageOutputTokens = 0;
+        let usageCacheReadTokens = 0;
 
         try {
           for await (const chunk of stream) {
@@ -772,7 +778,15 @@ Deno.serve(async (req) => {
               throw new Error('Request cancelled by user');
             }
 
-            if (chunk.type === 'content_block_start') {
+            if (chunk.type === 'message_start') {
+              usageInputTokens = chunk.message.usage.input_tokens ?? 0;
+              usageOutputTokens = chunk.message.usage.output_tokens ?? 0;
+              usageCacheReadTokens =
+                chunk.message.usage.cache_read_input_tokens ?? 0;
+            } else if (chunk.type === 'message_delta') {
+              usageOutputTokens =
+                chunk.usage.output_tokens ?? usageOutputTokens;
+            } else if (chunk.type === 'content_block_start') {
               if (chunk.content_block.type === 'tool_use') {
                 currentToolUse = {
                   name: chunk.content_block.name,
@@ -942,6 +956,20 @@ Deno.serve(async (req) => {
                 currentToolUse = null;
               }
             } else if (chunk.type === 'message_stop') {
+              EdgeRuntime.waitUntil(
+                logLlmUsage({
+                  functionName: 'creative-chat',
+                  operation: 'chat',
+                  provider: 'anthropic',
+                  model: 'claude-sonnet-4-6',
+                  userId: userData.user?.id,
+                  conversationId,
+                  referenceId: newMessageId,
+                  inputTokens: usageInputTokens,
+                  outputTokens: usageOutputTokens,
+                  cachedInputTokens: usageCacheReadTokens,
+                }),
+              );
               // Generate suggestions and create final message
               const finalSuggestions = await generateSuggestions(
                 content,

@@ -1,34 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { FAL_UNIT_PRICES } from '../shared/providerPricing.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
 
-export const FAL_ENDPOINTS = [
-  'fal-ai/meshy/v6-preview/image-to-3d',
-  'fal-ai/sam-3/3d-objects',
-  'tripo3d/tripo/v2.5/image-to-3d',
-  'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
-  'fal-ai/hunyuan3d/v2/mini/turbo',
-  'fal-ai/moondream3-preview/caption',
-  'fal-ai/sam-3/image',
-  'fal-ai/flux-pro/kontext/max/multi',
-  'fal-ai/flux-pro/v1.1',
-];
+// Single source of truth for fal unit prices lives in shared/providerPricing.ts
+// (also consumed by the edge functions to compute real provider cost). Derive
+// the CLI's endpoint list and price map from it so the two never drift.
+export const FAL_ENDPOINTS = Object.keys(FAL_UNIT_PRICES);
 
 const DEFAULT_UNIT_PRICES = new Map(
-  [
-    ['fal-ai/meshy/v6-preview/image-to-3d', 0.06, 'units'],
-    ['fal-ai/sam-3/3d-objects', 0.02, 'units'],
-    ['tripo3d/tripo/v2.5/image-to-3d', 0.00007, 'compute seconds'],
-    ['fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', 0.015, 'units'],
-    ['fal-ai/hunyuan3d/v2/mini/turbo', 0.08, 'generations'],
-    ['fal-ai/moondream3-preview/caption', 1, 'units'],
-    ['fal-ai/sam-3/image', 0.005, 'units'],
-    ['fal-ai/flux-pro/kontext/max/multi', 0.08, 'images'],
-    ['fal-ai/flux-pro/v1.1', 0.04, 'megapixels'],
-  ].map(([endpointId, unitPrice, unit]) => [
+  Object.entries(FAL_UNIT_PRICES).map(([endpointId, { unitPrice, unit }]) => [
     endpointId,
     {
       endpoint_id: endpointId,

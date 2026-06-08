@@ -10,6 +10,7 @@ import 'jsr:@std/dotenv/load';
 import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
 import { Content } from '@shared/types.ts';
 import { formatCreativeUserMessage } from '../_shared/messageUtils.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const TITLE_SYSTEM_PROMPT = `You are a helpful assistant that generates concise, descriptive titles for conversation threads based on the first message in the thread.
 The messages can be text, images, or screenshots of 3d models.
@@ -107,6 +108,20 @@ Deno.serve(async (req) => {
       system: TITLE_SYSTEM_PROMPT,
       messages: [userMessage],
     });
+
+    EdgeRuntime.waitUntil(
+      logLlmUsage({
+        functionName: 'title-generator',
+        operation: 'title',
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5-20251001',
+        userId: userData.user.id,
+        conversationId,
+        inputTokens: response.usage?.input_tokens ?? 0,
+        outputTokens: response.usage?.output_tokens ?? 0,
+        cachedInputTokens: response.usage?.cache_read_input_tokens ?? 0,
+      }),
+    );
 
     // Extract title from response
     let title = 'New Conversation';

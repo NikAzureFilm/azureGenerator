@@ -23,6 +23,7 @@ import {
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
@@ -256,6 +257,9 @@ interface OpenRouterRequest {
   provider?: {
     require_parameters?: boolean;
   };
+  // Ask OpenRouter to emit a terminal usage chunk (token counts + its own
+  // billed cost) in the SSE stream.
+  usage?: { include: boolean };
 }
 
 function applyCompletionTokenLimit(
@@ -832,6 +836,7 @@ Deno.serve(async (req) => {
       ],
       tools,
       stream: true,
+      usage: { include: true },
     };
     applyCompletionTokenLimit(requestBody, model, 16000);
 
@@ -918,6 +923,11 @@ Deno.serve(async (req) => {
 
               let chunk: {
                 error?: { message?: string };
+                usage?: {
+                  prompt_tokens?: number;
+                  completion_tokens?: number;
+                  cost?: number;
+                };
                 choices?: Array<{
                   delta?: {
                     content?: string;
@@ -946,6 +956,26 @@ Deno.serve(async (req) => {
                 throw new Error(
                   chunk.error.message ||
                     `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                );
+              }
+
+              if (chunk.usage) {
+                EdgeRuntime.waitUntil(
+                  logLlmUsage({
+                    functionName: 'parametric-chat',
+                    operation: 'chat',
+                    provider: 'openrouter',
+                    model,
+                    userId: userData.user?.id,
+                    conversationId,
+                    referenceId: newMessageId,
+                    inputTokens: chunk.usage.prompt_tokens ?? 0,
+                    outputTokens: chunk.usage.completion_tokens ?? 0,
+                    costUsdOverride:
+                      typeof chunk.usage.cost === 'number'
+                        ? chunk.usage.cost
+                        : undefined,
+                  }),
                 );
               }
 
@@ -1230,6 +1260,7 @@ Deno.serve(async (req) => {
                   ...codeMessages,
                 ],
                 stream: true,
+                usage: { include: true },
               };
               applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
 
@@ -1306,6 +1337,11 @@ Deno.serve(async (req) => {
 
                     let chunk: {
                       error?: { message?: string };
+                      usage?: {
+                        prompt_tokens?: number;
+                        completion_tokens?: number;
+                        cost?: number;
+                      };
                       choices?: Array<{
                         delta?: { content?: string };
                       }>;
@@ -1324,6 +1360,26 @@ Deno.serve(async (req) => {
                       throw new Error(
                         chunk.error.message ||
                           `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                      );
+                    }
+
+                    if (chunk.usage) {
+                      EdgeRuntime.waitUntil(
+                        logLlmUsage({
+                          functionName: 'parametric-chat',
+                          operation: 'parametric',
+                          provider: 'openrouter',
+                          model: codeModel,
+                          userId: userData.user?.id,
+                          conversationId,
+                          referenceId: newMessageId,
+                          inputTokens: chunk.usage.prompt_tokens ?? 0,
+                          outputTokens: chunk.usage.completion_tokens ?? 0,
+                          costUsdOverride:
+                            typeof chunk.usage.cost === 'number'
+                              ? chunk.usage.cost
+                              : undefined,
+                        }),
                       );
                     }
 

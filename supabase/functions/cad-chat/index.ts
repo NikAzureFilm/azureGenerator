@@ -14,6 +14,7 @@ import {
   buildCadUserPrompt,
   extractPythonSource,
 } from './build123dSource.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 initSentry();
 
@@ -44,6 +45,7 @@ async function generateBuild123dSource(
   promptText: string,
   model: string,
   previousError?: string,
+  ctx?: { userId: string; conversationId: string; referenceId: string },
 ): Promise<string> {
   if (!OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY is not configured.');
@@ -71,6 +73,8 @@ async function generateBuild123dSource(
           },
         ],
         temperature: 0.2,
+        // Return token usage (and OpenRouter's own billed cost).
+        usage: { include: true },
       }),
     });
 
@@ -81,6 +85,33 @@ async function generateBuild123dSource(
           ? body.error.message
           : `OpenRouter returned ${response.status}`;
       continue;
+    }
+
+    if (ctx) {
+      const usage = (
+        body as {
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            cost?: number;
+          };
+        }
+      ).usage;
+      EdgeRuntime.waitUntil(
+        logLlmUsage({
+          functionName: 'cad-chat',
+          operation: 'cad',
+          provider: 'openrouter',
+          model: candidate,
+          userId: ctx.userId,
+          conversationId: ctx.conversationId,
+          referenceId: ctx.referenceId,
+          inputTokens: usage?.prompt_tokens ?? 0,
+          outputTokens: usage?.completion_tokens ?? 0,
+          costUsdOverride:
+            typeof usage?.cost === 'number' ? usage.cost : undefined,
+        }),
+      );
     }
 
     const text = body?.choices?.[0]?.message?.content;
@@ -380,6 +411,7 @@ async function runTextToCadJob({
         promptText,
         model,
         previousError,
+        { userId, conversationId, referenceId: jobId },
       );
       try {
         workerBody = await submitTextToCadWorkerJob({

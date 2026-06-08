@@ -1,0 +1,149 @@
+// Real external-provider $ rates — our cost of goods (COGS) per generation.
+//
+// Used by the Supabase edge functions to compute the actual dollar cost of each
+// paid AI call (Anthropic, OpenRouter, OpenAI images, Gemini, fal.ai) and write
+// it to `provider_usage`, so the admin dashboard can show true cost and margin
+// instead of the flat $0.01/token estimate.
+//
+// Pure data + pure functions: importable from Deno edge functions, the Vite
+// app, and Node scripts run with `--experimental-strip-types`. Do NOT add any
+// Deno- or Node-only APIs here.
+//
+// KEEP IN SYNC with vendor pricing. `FAL_UNIT_PRICES` mirrors the checked-in
+// fallback prices in `scripts/fal-cost-report.mjs` (which imports them from
+// here). The LLM token rates below are best-effort and MUST be verified against
+// each provider's published pricing — token COUNTS we log are measured and
+// exact, but the per-token $ rate is only as good as this table.
+
+export type ProviderKind =
+  | 'anthropic'
+  | 'openai'
+  | 'openrouter'
+  | 'google'
+  | 'fal'
+  | 'worker';
+
+// ---------------------------------------------------------------------------
+// LLM token rates — USD per 1,000,000 tokens.
+// Keyed by the model id exactly as it appears in the edge functions: Anthropic
+// SDK ids (e.g. 'claude-haiku-4-5') and OpenRouter slugs (e.g.
+// 'anthropic/claude-opus-4.7'). Unknown models cost $0 (a visible gap, not a
+// crash) — add the model here when you introduce it.
+// ---------------------------------------------------------------------------
+export type LlmPrice = {
+  inputPerM: number;
+  outputPerM: number;
+  cachedInputPerM?: number; // Anthropic prompt-cache read tier (cheaper)
+};
+
+export const LLM_PRICES: Record<string, LlmPrice> = {
+  // --- Anthropic (direct SDK: creative-chat, title-generator) ---
+  'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cachedInputPerM: 0.1 },
+  'claude-sonnet-4-6': { inputPerM: 3, outputPerM: 15, cachedInputPerM: 0.3 },
+  'claude-opus-4-8': { inputPerM: 5, outputPerM: 25, cachedInputPerM: 0.5 },
+  // --- OpenRouter slugs (parametric-chat, cad-chat, prompt-generator) ---
+  'anthropic/claude-opus-4.7': { inputPerM: 15, outputPerM: 75 },
+  'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
+  'deepseek/deepseek-v4-pro': { inputPerM: 0.5, outputPerM: 1.5 },
+  'openai/gpt-5.5': { inputPerM: 5, outputPerM: 15 },
+};
+
+// ---------------------------------------------------------------------------
+// Image generation — USD per image.
+// gpt-image-2 cost is driven by quality (size is fixed at 1024x1024 in the
+// app). Numbers mirror scripts/fal-cost-report.mjs FEATURE_BREAKDOWNS.
+// ---------------------------------------------------------------------------
+export const OPENAI_IMAGE_PRICES: Record<'low' | 'medium' | 'high', number> = {
+  low: 0.13,
+  medium: 0.18,
+  high: 0.22,
+};
+
+// Gemini "nano banana" reference image.
+export const GEMINI_IMAGE_USD = 0.07;
+
+// ---------------------------------------------------------------------------
+// fal.ai per-endpoint unit prices. fal does NOT return cost in its API
+// responses, so cost is computed from this catalog. Mirrors the checked-in
+// fallback prices in scripts/fal-cost-report.mjs (DEFAULT_UNIT_PRICES); keep
+// the two identical. Some endpoints are priced per ambiguous unit ('compute
+// seconds') that we can't measure per call — for those, callers pass an
+// explicit `costUsd` (see logFalUsage) using the fixed per-call estimate from
+// fal-cost-report.mjs FEATURE_BREAKDOWNS instead of unit_price * units.
+// ---------------------------------------------------------------------------
+export type FalUnitPrice = { unitPrice: number; unit: string };
+
+export const FAL_UNIT_PRICES: Record<string, FalUnitPrice> = {
+  'fal-ai/meshy/v6-preview/image-to-3d': { unitPrice: 0.06, unit: 'units' },
+  'fal-ai/sam-3/3d-objects': { unitPrice: 0.02, unit: 'units' },
+  'tripo3d/tripo/v2.5/image-to-3d': {
+    unitPrice: 0.00007,
+    unit: 'compute seconds',
+  },
+  'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d': { unitPrice: 0.015, unit: 'units' },
+  'fal-ai/hunyuan3d/v2/mini/turbo': { unitPrice: 0.08, unit: 'generations' },
+  'fal-ai/moondream3-preview/caption': { unitPrice: 1, unit: 'units' },
+  'fal-ai/sam-3/image': { unitPrice: 0.005, unit: 'units' },
+  'fal-ai/flux-pro/kontext/max/multi': { unitPrice: 0.08, unit: 'images' },
+  'fal-ai/flux-pro/v1.1': { unitPrice: 0.04, unit: 'megapixels' },
+};
+
+// Fixed per-call fal cost estimates for endpoints whose unit isn't measurable
+// per request (mirrors the fixedCostUsd values in fal-cost-report.mjs). Pass
+// these as the explicit `costUsd` to logFalUsage.
+export const FAL_FIXED_CALL_USD: Record<string, number> = {
+  // Tripo textureless image-to-3D: fal gallery fixed textureless cost.
+  'tripo3d/tripo/v2.5/image-to-3d': 0.2,
+  // Moondream caption: recent historical per-call estimate.
+  'fal-ai/moondream3-preview/caption': 0.001351,
+};
+
+// Hunyuan 3D v3.1 Pro is billed in "units"; multiview and upscale apply a
+// surcharge expressed as a unit multiplier (0.015 * units). Mirrors the
+// multiview fixed 0.525 (=35 units) and upscale 45-unit cost in
+// fal-cost-report.mjs.
+export const HUNYUAN_PRO_MULTIVIEW_UNITS = 35;
+export const HUNYUAN_PRO_UPSCALE_UNITS = 45;
+
+// ---------------------------------------------------------------------------
+// Cost helpers
+// ---------------------------------------------------------------------------
+// Strip a trailing dated snapshot suffix (e.g. '-20251001') so a model id like
+// 'claude-haiku-4-5-20251001' resolves to the 'claude-haiku-4-5' rate.
+function normalizeModelId(model: string): string {
+  return model.replace(/-\d{8}$/, '');
+}
+
+export function llmCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cachedInputTokens = 0,
+): number {
+  const price = LLM_PRICES[model] ?? LLM_PRICES[normalizeModelId(model)];
+  if (!price) return 0;
+  const billedInput = Math.max(0, inputTokens - cachedInputTokens);
+  const cachedRate = price.cachedInputPerM ?? price.inputPerM;
+  return (
+    (billedInput / 1_000_000) * price.inputPerM +
+    (cachedInputTokens / 1_000_000) * cachedRate +
+    (outputTokens / 1_000_000) * price.outputPerM
+  );
+}
+
+export function openaiImageCostUsd(
+  quality: 'low' | 'medium' | 'high',
+  images = 1,
+): number {
+  return (OPENAI_IMAGE_PRICES[quality] ?? OPENAI_IMAGE_PRICES.high) * images;
+}
+
+export function geminiImageCostUsd(images = 1): number {
+  return GEMINI_IMAGE_USD * images;
+}
+
+export function falCostUsd(endpoint: string, units = 1): number {
+  const price = FAL_UNIT_PRICES[endpoint];
+  if (!price) return 0;
+  return price.unitPrice * units;
+}

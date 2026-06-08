@@ -26,6 +26,12 @@ import {
   FEATURE_COSTS,
   getCreativeModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
+import { logFalUsage } from '../_shared/providerUsage.ts';
+import {
+  FAL_FIXED_CALL_USD,
+  HUNYUAN_PRO_MULTIVIEW_UNITS,
+  HUNYUAN_PRO_UPSCALE_UNITS,
+} from '../../../shared/providerPricing.ts';
 import {
   getServiceRoleSupabaseClient,
   SupabaseClient,
@@ -103,11 +109,43 @@ async function withTimeout<T>(
   }
 }
 
+// Records the actual fal $ cost for a mesh generation. Reads the owning
+// user/conversation from the mesh row so callers only need the meshId.
+async function logFalMeshCost(
+  supabaseClient: SupabaseClient,
+  meshId: string,
+  endpoint: string,
+  opts: {
+    operation?: string;
+    units?: number;
+    costUsd?: number;
+    falRequestId?: string;
+  } = {},
+) {
+  const { data: meshRow } = await supabaseClient
+    .from('meshes')
+    .select('user_id, conversation_id')
+    .eq('id', meshId)
+    .maybeSingle();
+  await logFalUsage({
+    functionName: 'mesh',
+    operation: opts.operation ?? 'mesh',
+    endpoint,
+    units: opts.units,
+    costUsd: opts.costUsd,
+    falRequestId: opts.falRequestId,
+    userId: meshRow?.user_id ?? null,
+    conversationId: meshRow?.conversation_id ?? null,
+    referenceId: meshId,
+  });
+}
+
 async function recordFalQueueRequest(
   supabaseClient: SupabaseClient,
   meshId: string,
   endpoint: string,
   submission: unknown,
+  units = 1,
 ) {
   const requestId =
     submission &&
@@ -116,6 +154,13 @@ async function recordFalQueueRequest(
     typeof submission.request_id === 'string'
       ? submission.request_id
       : null;
+
+  // Always record the actual fal $ cost for this generation, independent of
+  // the request_id bookkeeping below.
+  await logFalMeshCost(supabaseClient, meshId, endpoint, {
+    units,
+    falRequestId: requestId ?? undefined,
+  });
 
   if (!requestId) {
     debugLog('FAL submit response did not include request_id', {
@@ -305,6 +350,13 @@ async function generateMeshImage(
     selectedImageGenerationModel,
   );
 
+  const imageUsageCtx = {
+    functionName: 'mesh',
+    operation: 'image',
+    userId,
+    conversationId,
+  };
+
   let provider: 'gpt-image-2' | 'nano-banana-pro' | 'flux';
   let result: {
     imageBytes: Buffer;
@@ -323,6 +375,7 @@ async function generateMeshImage(
         gptImageReferenceImages,
         priorImageCallId,
         QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
+        imageUsageCtx,
       );
       provider = 'gpt-image-2';
     } catch (gptImageError) {
@@ -344,6 +397,7 @@ async function generateMeshImage(
           conversationId,
           prompt,
           gptImageReferenceImages,
+          imageUsageCtx,
         );
         // Gemini Multi-Turn returns png.
         result = { imageBytes, imageCallId: null, contentType: 'image/png' };
@@ -366,6 +420,7 @@ async function generateMeshImage(
             conversationId,
             prompt,
             gptImageReferenceImages,
+            imageUsageCtx,
           );
           // Flux returns png per its output_format config.
           result = { imageBytes, imageCallId: null, contentType: 'image/png' };
@@ -394,6 +449,7 @@ async function generateMeshImage(
         conversationId,
         prompt,
         gptImageReferenceImages,
+        imageUsageCtx,
       );
       result = { imageBytes, imageCallId: null, contentType: 'image/png' };
       provider = 'nano-banana-pro';
@@ -418,6 +474,7 @@ async function generateMeshImage(
           gptImageReferenceImages,
           priorImageCallId,
           QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
+          imageUsageCtx,
         );
         provider = 'gpt-image-2';
       } catch (gptImageError) {
@@ -963,6 +1020,12 @@ Deno.serve(async (req) => {
                 input: hunyuanInput,
                 webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${newMeshData.id}`,
               });
+              await logFalMeshCost(
+                supabaseClient,
+                newMeshData.id,
+                'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
+                { units: HUNYUAN_PRO_UPSCALE_UNITS },
+              );
               debugLog(
                 'Successfully submitted to Hunyuan3D v3.1 Pro for upscaling',
               );
@@ -1270,6 +1333,7 @@ async function submitMeshJob(
         meshId,
         HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT,
         hunyuanSubmission,
+        HUNYUAN_PRO_MULTIVIEW_UNITS,
       );
 
       await createHunyuanPreview(
@@ -1963,6 +2027,12 @@ Output:`;
           input: tripoInput,
           webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
         });
+        await logFalMeshCost(
+          supabaseClient,
+          meshId,
+          'tripo3d/tripo/v2.5/image-to-3d',
+          { costUsd: FAL_FIXED_CALL_USD['tripo3d/tripo/v2.5/image-to-3d'] },
+        );
         debugLog(
           'Successfully submitted to Tripo v2.5 textureless with conversational context',
         );
@@ -2212,6 +2282,14 @@ async function submitPreviewJob(
       },
       webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${previewId}&mode=preview`,
     });
+    await logFalMeshCost(
+      supabaseClient,
+      meshId,
+      'fal-ai/hunyuan3d/v2/mini/turbo',
+      {
+        operation: 'preview',
+      },
+    );
   } catch (error) {
     logApiError(error, {
       functionName: 'mesh',
@@ -2265,6 +2343,14 @@ async function createHunyuanPreview(
         },
         webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${previewData.id}&mode=preview`,
       });
+      await logFalMeshCost(
+        supabaseClient,
+        meshId,
+        'fal-ai/hunyuan3d/v2/mini/turbo',
+        {
+          operation: 'preview',
+        },
+      );
       debugLog(`Successfully submitted ${description} to Hunyuan3D Mini Turbo`);
     }
   } catch (error) {

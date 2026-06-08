@@ -159,6 +159,12 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
+    const imageUsageCtx = {
+      functionName: 'generate-view',
+      operation: 'image',
+      userId,
+      conversationId,
+    };
     const shouldUseOpenAi = provider === 'openai';
     const builtPrompt = buildImageGenerationPrompt({
       view,
@@ -251,10 +257,15 @@ Deno.serve(async (req) => {
           googleGenAI,
           builtPrompt,
           signedRefUrls,
+          imageUsageCtx,
         );
       }
 
-      return await generateImageWithGeminiFlash(googleGenAI, builtPrompt);
+      return await generateImageWithGeminiFlash(
+        googleGenAI,
+        builtPrompt,
+        imageUsageCtx,
+      );
     };
 
     let imageBytes: Buffer;
@@ -272,6 +283,7 @@ Deno.serve(async (req) => {
           // Supabase Edge Functions have a 150s idle timeout. High quality
           // gpt-image-2 calls can exceed that for synchronous view generation.
           'low',
+          imageUsageCtx,
         );
         imageBytes = result.imageBytes;
         contentType = result.contentType;

@@ -11,6 +11,10 @@ import {
   TOKEN_INTERNAL_USD_COST as SHARED_TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE as SHARED_TOKEN_USD_VALUE,
 } from '../shared/tokenCosts.ts';
+import { FAL_UNIT_PRICES } from '../shared/providerPricing.ts';
+
+// The CLI's endpoint list must come from the shared price source of truth.
+assert.deepEqual(FAL_ENDPOINTS, Object.keys(FAL_UNIT_PRICES));
 
 assert.equal(TOKEN_INTERNAL_USD_COST, SHARED_TOKEN_INTERNAL_USD_COST);
 assert.equal(TOKEN_USD_VALUE, SHARED_TOKEN_USD_VALUE);
