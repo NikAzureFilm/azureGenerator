@@ -22,7 +22,11 @@ const FEATURE_ROWS = [
   },
   {
     group: '3D generation',
-    rows: [FEATURE_COSTS.ultraMesh, FEATURE_COSTS.upscaleMesh],
+    rows: [
+      FEATURE_COSTS.ultraMesh,
+      FEATURE_COSTS.multiviewMesh,
+      FEATURE_COSTS.upscaleMesh,
+    ],
   },
 ];
 

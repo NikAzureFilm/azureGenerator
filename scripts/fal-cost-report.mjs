@@ -34,8 +34,8 @@ const CONFIGURED_TOKENS = {
   multiviewNanoBananaView: 7,
   fastMesh: 41,
   qualityMesh: 34,
-  ultraMesh: 60,
-  multiviewMesh: 60,
+  ultraMesh: 110,
+  multiviewMesh: 61,
   upscaleMesh: 76,
 };
 

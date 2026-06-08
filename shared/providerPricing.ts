@@ -37,15 +37,18 @@ export type LlmPrice = {
 };
 
 export const LLM_PRICES: Record<string, LlmPrice> = {
-  // --- Anthropic (direct SDK: creative-chat, title-generator) ---
-  'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cachedInputPerM: 0.1 },
+  // --- Anthropic (direct SDK) ---
+  // creative-chat main turn — verified $3 / $15 per MTok.
   'claude-sonnet-4-6': { inputPerM: 3, outputPerM: 15, cachedInputPerM: 0.3 },
-  'claude-opus-4-8': { inputPerM: 5, outputPerM: 25, cachedInputPerM: 0.5 },
-  // --- OpenRouter slugs (parametric-chat, cad-chat, prompt-generator) ---
-  'anthropic/claude-opus-4.7': { inputPerM: 15, outputPerM: 75 },
+  // title-generator + creative-chat suggestions (Haiku-class; estimate).
+  'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cachedInputPerM: 0.1 },
+  // --- OpenRouter slugs ---
+  // parametric-chat agent + parametric/cad code-gen — verified $1.50 / $9.
+  'google/gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9 },
+  // prompt-generator + code-gen fallback — verified $5 / $30.
+  'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
+  // prompt-generator fallback (Haiku-class; estimate).
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
-  'deepseek/deepseek-v4-pro': { inputPerM: 0.5, outputPerM: 1.5 },
-  'openai/gpt-5.5': { inputPerM: 5, outputPerM: 15 },
 };
 
 // ---------------------------------------------------------------------------
@@ -59,8 +62,9 @@ export const OPENAI_IMAGE_PRICES: Record<'low' | 'medium' | 'high', number> = {
   high: 0.22,
 };
 
-// Gemini "nano banana" reference image.
-export const GEMINI_IMAGE_USD = 0.07;
+// Gemini "nano banana 2" (gemini-3.1-flash-image-preview) reference image —
+// verified $0.067/image.
+export const GEMINI_IMAGE_USD = 0.067;
 
 // ---------------------------------------------------------------------------
 // fal.ai per-endpoint unit prices. fal does NOT return cost in its API
@@ -74,7 +78,9 @@ export const GEMINI_IMAGE_USD = 0.07;
 export type FalUnitPrice = { unitPrice: number; unit: string };
 
 export const FAL_UNIT_PRICES: Record<string, FalUnitPrice> = {
-  'fal-ai/meshy/v6-preview/image-to-3d': { unitPrice: 0.06, unit: 'units' },
+  // Verified against live fal Platform Pricing ($0.80/unit) — the old $0.06
+  // fallback was stale and under-counted Max Quality mesh cost ~13x.
+  'fal-ai/meshy/v6-preview/image-to-3d': { unitPrice: 0.8, unit: 'units' },
   'fal-ai/sam-3/3d-objects': { unitPrice: 0.02, unit: 'units' },
   'tripo3d/tripo/v2.5/image-to-3d': {
     unitPrice: 0.00007,
