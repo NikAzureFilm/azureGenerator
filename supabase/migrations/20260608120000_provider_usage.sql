@@ -8,12 +8,16 @@
 -- never read it; the admin dashboard reads aggregates through SECURITY DEFINER
 -- functions granted only to service_role.
 
-create type "public"."provider_kind" as enum (
-  'anthropic', 'openai', 'openrouter', 'google', 'fal', 'worker'
-);
+do $$ begin
+  create type "public"."provider_kind" as enum (
+    'anthropic', 'openai', 'openrouter', 'google', 'fal', 'worker'
+  );
+exception
+  when duplicate_object then null;
+end $$;
 
 
-  create table "public"."provider_usage" (
+  create table if not exists "public"."provider_usage" (
     "id" bigint generated always as identity not null,
     "created_at" timestamp with time zone not null default now(),
     "user_id" uuid,
@@ -40,12 +44,12 @@ alter table "public"."provider_usage" enable row level security;
 
 -- Reporting indexes (admin aggregations filter by time / provider / operation /
 -- model, and join per-user).
-create index "provider_usage_created_at_idx" on "public"."provider_usage" ("created_at" desc);
-create index "provider_usage_provider_idx"   on "public"."provider_usage" ("provider", "created_at" desc);
-create index "provider_usage_operation_idx"  on "public"."provider_usage" ("operation", "created_at" desc);
-create index "provider_usage_model_idx"      on "public"."provider_usage" ("model");
-create index "provider_usage_user_idx"       on "public"."provider_usage" ("user_id", "created_at" desc);
-create index "provider_usage_reference_idx"  on "public"."provider_usage" ("reference_id");
+create index if not exists "provider_usage_created_at_idx" on "public"."provider_usage" ("created_at" desc);
+create index if not exists "provider_usage_provider_idx"   on "public"."provider_usage" ("provider", "created_at" desc);
+create index if not exists "provider_usage_operation_idx"  on "public"."provider_usage" ("operation", "created_at" desc);
+create index if not exists "provider_usage_model_idx"      on "public"."provider_usage" ("model");
+create index if not exists "provider_usage_user_idx"       on "public"."provider_usage" ("user_id", "created_at" desc);
+create index if not exists "provider_usage_reference_idx"  on "public"."provider_usage" ("reference_id");
 
 -- service_role bypasses RLS; explicitly lock the PostgREST app roles out so the
 -- table is never exposed to the browser even if a policy is added later.
