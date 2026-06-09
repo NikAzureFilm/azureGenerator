@@ -6,8 +6,10 @@ import Link from 'next/link';
 const LINKS: { key: string; href: string; label: string }[] = [
   { key: 'overview', href: '/', label: 'Overview' },
   { key: 'users', href: '/users', label: 'Users' },
+  { key: 'generations', href: '/generations', label: 'Generations' },
   { key: 'costs', href: '/costs', label: 'Costs' },
   { key: 'retention', href: '/retention', label: 'Retention' },
+  { key: 'resources', href: '/resources', label: 'Resources' },
 ];
 
 export default function Nav({

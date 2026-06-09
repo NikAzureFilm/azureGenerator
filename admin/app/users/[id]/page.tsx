@@ -3,12 +3,15 @@ import { notFound } from 'next/navigation';
 import { requireAdmin } from '@/lib/auth';
 import {
   fetchUserDetail,
+  fetchUserConversations,
   fetchUserGenerations,
   fetchUserTransactions,
   tokenCostUsd,
 } from '@/lib/metrics';
+import { generationKindLabel } from '@/lib/content';
 import { PLAN_DISPLAY } from '@/lib/pricing';
 import { usd, usdFromDollars, num, relativeTime } from '@/lib/format';
+import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import Nav from '@/app/components/Nav';
 import Kpi from '@/app/components/Kpi';
 import StatusBadge from '@/app/components/StatusBadge';
@@ -24,9 +27,10 @@ export default async function UserDetailPage({
   const admin = await requireAdmin();
   const { id } = await params;
 
-  const [detail, generations, transactions] = await Promise.all([
+  const [detail, generations, conversations, transactions] = await Promise.all([
     fetchUserDetail(id),
     fetchUserGenerations(id, 50),
+    fetchUserConversations(id, 50),
     fetchUserTransactions(id, 50),
   ]);
 
@@ -121,7 +125,7 @@ export default async function UserDetailPage({
         />
         <Kpi
           label="Generations"
-          value={num(gens.cad_jobs + gens.meshes)}
+          value={num(gens.cad_jobs + gens.meshes + gens.images)}
           sub={
             <>
               {num(gens.cad_jobs)} CAD · {num(gens.meshes)} mesh ·{' '}
@@ -213,13 +217,14 @@ export default async function UserDetailPage({
       </div>
 
       {/* Recent generations */}
-      <div className="section-title">Recent generations</div>
-      <div className="card" style={{ padding: 6 }}>
+      <div className="section-title">Generated content</div>
+      <div className="card table-card">
         <table>
           <thead>
             <tr>
               <th>Type</th>
-              <th>Title</th>
+              <th>Conversation</th>
+              <th>Prompt</th>
               <th>Status</th>
               <th>Format</th>
               <th className="right">When</th>
@@ -228,7 +233,7 @@ export default async function UserDetailPage({
           <tbody>
             {generations.length === 0 ? (
               <tr>
-                <td colSpan={5} className="muted">
+                <td colSpan={6} className="muted">
                   No generations yet.
                 </td>
               </tr>
@@ -236,16 +241,75 @@ export default async function UserDetailPage({
               generations.map((g) => (
                 <tr key={`${g.kind}-${g.id}`}>
                   <td>
-                    <span className="badge">
-                      {g.kind === 'cad' ? 'CAD' : 'Mesh'}
-                    </span>
+                    <span className="badge">{generationKindLabel(g.kind)}</span>
                   </td>
-                  <td className="ellip muted">{g.title ?? '—'}</td>
+                  <td className="ellip">
+                    <Link href={`/conversations/${g.conversation_id}`}>
+                      {g.title ?? g.conversation_id}
+                    </Link>
+                  </td>
+                  <td className="prompt-cell">
+                    <PromptPreview value={g.prompt} />
+                    <JsonBlock value={g.prompt} summary="Prompt JSON" />
+                    {g.error && <div className="error-inline">{g.error}</div>}
+                  </td>
                   <td>
                     <StatusBadge status={g.status} />
                   </td>
                   <td className="muted">{g.file_type ?? '—'}</td>
                   <td className="right muted">{relativeTime(g.created_at)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Conversations */}
+      <div className="section-title">Conversations & prompts</div>
+      <div className="card table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Conversation</th>
+              <th>Latest user prompt</th>
+              <th className="right">Messages</th>
+              <th className="right">CAD</th>
+              <th className="right">Mesh</th>
+              <th className="right">Image</th>
+              <th className="right">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {conversations.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="muted">
+                  No conversations yet.
+                </td>
+              </tr>
+            ) : (
+              conversations.map((c) => (
+                <tr key={c.id}>
+                  <td className="ellip">
+                    <Link href={`/conversations/${c.id}`}>{c.title}</Link>
+                    <div className="muted tiny">
+                      {c.type} / {c.privacy}
+                    </div>
+                  </td>
+                  <td className="prompt-cell">
+                    <PromptPreview value={c.latest_user_prompt} />
+                    <JsonBlock
+                      value={c.latest_user_prompt}
+                      summary="Prompt JSON"
+                    />
+                  </td>
+                  <td className="right mono">{num(c.message_count)}</td>
+                  <td className="right mono">{num(c.cad_jobs)}</td>
+                  <td className="right mono">{num(c.meshes)}</td>
+                  <td className="right mono">{num(c.images)}</td>
+                  <td className="right muted">
+                    {relativeTime(c.updated_at ?? c.created_at)}
+                  </td>
                 </tr>
               ))
             )}

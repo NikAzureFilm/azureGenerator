@@ -12,6 +12,7 @@ import {
 import { getStripeMetrics } from '@/lib/stripe';
 import { PLAN_DISPLAY } from '@/lib/pricing';
 import { usd, usdFromDollars, num, pct, relativeTime } from '@/lib/format';
+import { generationKindLabel } from '@/lib/content';
 import ActivityChart from './components/ActivityChart';
 import Nav from './components/Nav';
 import Kpi from './components/Kpi';
@@ -79,6 +80,14 @@ export default async function DashboardPage() {
 
       {/* ---------------- Headline KPIs ---------------- */}
       <div className="section-title">Overview</div>
+      <div className="quick-links">
+        <Link className="btn" href="/generations">
+          View generated content
+        </Link>
+        <Link className="btn" href="/resources">
+          API / Supabase / Vercel links
+        </Link>
+      </div>
       <div className="kpi grid">
         <Kpi
           label="Total users"
@@ -309,9 +318,7 @@ export default async function DashboardPage() {
               recent.map((g) => (
                 <tr key={`${g.kind}-${g.id}`}>
                   <td>
-                    <span className="badge">
-                      {g.kind === 'cad' ? 'CAD' : 'Mesh'}
-                    </span>
+                    <span className="badge">{generationKindLabel(g.kind)}</span>
                   </td>
                   <td className="ellip">{g.user_email ?? '—'}</td>
                   <td className="ellip muted">{g.title ?? '—'}</td>

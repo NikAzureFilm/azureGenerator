@@ -214,6 +214,10 @@ export type UserGeneration = {
   created_at: string;
   title: string | null;
   file_type: string | null;
+  conversation_id: string;
+  prompt: unknown;
+  message_id: string | null;
+  error: string | null;
 };
 
 export async function fetchUserGenerations(
@@ -221,12 +225,546 @@ export async function fetchUserGenerations(
   limit = 50,
 ): Promise<UserGeneration[]> {
   const supa = getAdminClient();
-  const { data, error } = await supa.rpc('admin_user_generations', {
+  const { data, error } = await supa.rpc('admin_user_generation_details', {
     p_user_id: userId,
     p_limit: limit,
   });
-  if (error) throw new Error(`admin_user_generations: ${error.message}`);
+  if (error) {
+    return fetchUserGenerationsDirect(userId, limit);
+  }
   return (data ?? []) as UserGeneration[];
+}
+
+export type UserConversation = {
+  id: string;
+  title: string;
+  type: string;
+  privacy: string;
+  created_at: string;
+  updated_at: string | null;
+  message_count: number;
+  cad_jobs: number;
+  meshes: number;
+  images: number;
+  latest_message_at: string | null;
+  latest_user_prompt: unknown;
+};
+
+export async function fetchUserConversations(
+  userId: string,
+  limit = 50,
+): Promise<UserConversation[]> {
+  const supa = getAdminClient();
+  const { data, error } = await supa.rpc('admin_user_conversations', {
+    p_user_id: userId,
+    p_limit: limit,
+  });
+  if (error) return fetchUserConversationsDirect(userId, limit);
+  return (data ?? []) as UserConversation[];
+}
+
+export type GenerationRow = {
+  kind: string;
+  id: string;
+  status: string;
+  created_at: string;
+  user_id: string;
+  email: string | null;
+  conversation_id: string;
+  conversation_title: string | null;
+  conversation_type: string | null;
+  prompt: unknown;
+  file_type: string | null;
+  message_id: string | null;
+  error: string | null;
+  total_count: number;
+};
+
+export type GenerationsPage = { rows: GenerationRow[]; total: number };
+
+export async function fetchGenerationsPage({
+  search = null,
+  kind = null,
+  limit = 50,
+  offset = 0,
+}: {
+  search?: string | null;
+  kind?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<GenerationsPage> {
+  const supa = getAdminClient();
+  const { data, error } = await supa.rpc('admin_generations_page', {
+    p_search: search,
+    p_kind: kind,
+    p_limit: limit,
+    p_offset: offset,
+  });
+  if (error) {
+    return fetchGenerationsPageDirect({ search, kind, limit, offset });
+  }
+  const rows = (data ?? []) as GenerationRow[];
+  return { rows, total: rows[0]?.total_count ?? 0 };
+}
+
+export type ConversationMessage = {
+  id: string;
+  created_at: string;
+  role: string;
+  content: unknown;
+  rating: number;
+  parent_message_id: string | null;
+};
+
+export type ConversationGeneration = {
+  kind: string;
+  id: string;
+  status: string;
+  created_at: string;
+  prompt: unknown;
+  file_type: string | null;
+  message_id: string | null;
+  error: string | null;
+};
+
+export type ConversationDetail = {
+  conversation: {
+    id: string;
+    title: string;
+    type: string;
+    privacy: string;
+    created_at: string | null;
+    updated_at: string | null;
+    user_id: string;
+    user_email: string | null;
+    settings: unknown;
+  } | null;
+  messages: ConversationMessage[];
+  generations: {
+    cad_jobs: ConversationGeneration[];
+    meshes: ConversationGeneration[];
+    images: ConversationGeneration[];
+  };
+};
+
+export async function fetchConversationDetail(
+  conversationId: string,
+): Promise<ConversationDetail> {
+  const supa = getAdminClient();
+  const { data, error } = await supa.rpc('admin_conversation_detail', {
+    p_conversation_id: conversationId,
+  });
+  if (error) return fetchConversationDetailDirect(conversationId);
+  return data as ConversationDetail;
+}
+
+type JoinedConversation =
+  | { title?: string | null; type?: string | null }
+  | { title?: string | null; type?: string | null }[]
+  | null;
+
+function normalizeJoinedConversation(value: JoinedConversation) {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value;
+}
+
+async function fetchUserEmailMap(
+  userIds: Array<string | null | undefined>,
+): Promise<Map<string, string | null>> {
+  const supa = getAdminClient();
+  const unique = [...new Set(userIds.filter(Boolean) as string[])];
+  const entries = await Promise.all(
+    unique.map(async (userId) => {
+      const { data, error } = await supa.auth.admin.getUserById(userId);
+      return [userId, error ? null : (data.user?.email ?? null)] as const;
+    }),
+  );
+  return new Map(entries);
+}
+
+function matchesGenerationSearch(row: GenerationRow, search?: string | null) {
+  const q = search?.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    row.id,
+    row.user_id,
+    row.email,
+    row.conversation_id,
+    row.conversation_title,
+    row.conversation_type,
+    JSON.stringify(row.prompt ?? {}),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+async function fetchGenerationsPageDirect({
+  search = null,
+  kind = null,
+  limit = 50,
+  offset = 0,
+}: {
+  search?: string | null;
+  kind?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<GenerationsPage> {
+  const supa = getAdminClient();
+  const requestedKind = kind?.toLowerCase();
+  const queryLimit = Math.min(Math.max(limit + offset, 100), 500);
+  const jobs: Promise<GenerationRow[]>[] = [];
+
+  if (!requestedKind || requestedKind === 'cad') {
+    jobs.push(fetchCadRowsDirect(supa, queryLimit));
+  }
+  if (!requestedKind || requestedKind === 'mesh') {
+    jobs.push(fetchMeshRowsDirect(supa, queryLimit));
+  }
+  if (!requestedKind || requestedKind === 'image') {
+    jobs.push(fetchImageRowsDirect(supa, queryLimit));
+  }
+
+  const rowsWithoutEmails = (await Promise.all(jobs)).flat();
+  const emailMap = await fetchUserEmailMap(
+    rowsWithoutEmails.map((row) => row.user_id),
+  );
+  const filtered = rowsWithoutEmails
+    .map((row) => ({ ...row, email: emailMap.get(row.user_id) ?? null }))
+    .filter((row) => matchesGenerationSearch(row, search))
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+
+  return {
+    rows: filtered.slice(offset, offset + limit).map((row) => ({
+      ...row,
+      total_count: filtered.length,
+    })),
+    total: filtered.length,
+  };
+}
+
+async function fetchCadRowsDirect(
+  supa: ReturnType<typeof getAdminClient>,
+  limit: number,
+  userId?: string,
+): Promise<GenerationRow[]> {
+  let query = supa
+    .from('cad_jobs')
+    .select(
+      'id,status,created_at,user_id,conversation_id,prompt,message_id,error,conversations(title,type)',
+    )
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (userId) query = query.eq('user_id', userId);
+  const { data, error } = await query;
+  if (error) throw new Error(`cad_jobs fallback: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const conversation = normalizeJoinedConversation(
+      row.conversations as JoinedConversation,
+    );
+    return {
+      kind: 'cad',
+      id: row.id as string,
+      status: row.status as string,
+      created_at: row.created_at as string,
+      user_id: row.user_id as string,
+      email: null,
+      conversation_id: row.conversation_id as string,
+      conversation_title: conversation?.title ?? null,
+      conversation_type: conversation?.type ?? null,
+      prompt: row.prompt,
+      file_type: null,
+      message_id: (row.message_id as string | null) ?? null,
+      error: (row.error as string | null) ?? null,
+      total_count: 0,
+    };
+  });
+}
+
+async function fetchMeshRowsDirect(
+  supa: ReturnType<typeof getAdminClient>,
+  limit: number,
+  userId?: string,
+): Promise<GenerationRow[]> {
+  let query = supa
+    .from('meshes')
+    .select(
+      'id,status,created_at,user_id,conversation_id,prompt,file_type,conversations(title,type)',
+    )
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (userId) query = query.eq('user_id', userId);
+  const { data, error } = await query;
+  if (error) throw new Error(`meshes fallback: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const conversation = normalizeJoinedConversation(
+      row.conversations as JoinedConversation,
+    );
+    return {
+      kind: 'mesh',
+      id: row.id as string,
+      status: row.status as string,
+      created_at: row.created_at as string,
+      user_id: row.user_id as string,
+      email: null,
+      conversation_id: row.conversation_id as string,
+      conversation_title: conversation?.title ?? null,
+      conversation_type: conversation?.type ?? null,
+      prompt: row.prompt,
+      file_type: (row.file_type as string | null) ?? null,
+      message_id: null,
+      error: null,
+      total_count: 0,
+    };
+  });
+}
+
+async function fetchImageRowsDirect(
+  supa: ReturnType<typeof getAdminClient>,
+  limit: number,
+  userId?: string,
+): Promise<GenerationRow[]> {
+  let query = supa
+    .from('images')
+    .select(
+      'id,status,created_at,user_id,conversation_id,prompt,conversations(title,type)',
+    )
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (userId) query = query.eq('user_id', userId);
+  const { data, error } = await query;
+  if (error) throw new Error(`images fallback: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const conversation = normalizeJoinedConversation(
+      row.conversations as JoinedConversation,
+    );
+    return {
+      kind: 'image',
+      id: row.id as string,
+      status: row.status as string,
+      created_at: row.created_at as string,
+      user_id: row.user_id as string,
+      email: null,
+      conversation_id: row.conversation_id as string,
+      conversation_title: conversation?.title ?? null,
+      conversation_type: conversation?.type ?? null,
+      prompt: row.prompt,
+      file_type: null,
+      message_id: null,
+      error: null,
+      total_count: 0,
+    };
+  });
+}
+
+async function fetchUserGenerationsDirect(
+  userId: string,
+  limit: number,
+): Promise<UserGeneration[]> {
+  const supa = getAdminClient();
+  const rows = (
+    await Promise.all([
+      fetchCadRowsDirect(supa, limit, userId),
+      fetchMeshRowsDirect(supa, limit, userId),
+      fetchImageRowsDirect(supa, limit, userId),
+    ])
+  )
+    .flat()
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )
+    .slice(0, limit);
+
+  return rows.map((row) => ({
+    kind: row.kind,
+    id: row.id,
+    status: row.status,
+    created_at: row.created_at,
+    title: row.conversation_title,
+    file_type: row.file_type,
+    conversation_id: row.conversation_id,
+    prompt: row.prompt,
+    message_id: row.message_id,
+    error: row.error,
+  }));
+}
+
+async function fetchUserConversationsDirect(
+  userId: string,
+  limit: number,
+): Promise<UserConversation[]> {
+  const supa = getAdminClient();
+  const { data, error } = await supa
+    .from('conversations')
+    .select('id,title,type,privacy,created_at,updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`conversations fallback: ${error.message}`);
+
+  return Promise.all(
+    ((data ?? []) as Array<Record<string, string | null>>).map(async (row) => {
+      const conversationId = row.id as string;
+      const [messages, cadJobs, meshes, images, latestPrompt] =
+        await Promise.all([
+          supa
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId),
+          supa
+            .from('cad_jobs')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId),
+          supa
+            .from('meshes')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId),
+          supa
+            .from('images')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId),
+          supa
+            .from('messages')
+            .select('content,created_at')
+            .eq('conversation_id', conversationId)
+            .eq('role', 'user')
+            .order('created_at', { ascending: false })
+            .limit(1),
+        ]);
+
+      return {
+        id: conversationId,
+        title: row.title ?? '',
+        type: row.type ?? '',
+        privacy: row.privacy ?? '',
+        created_at: row.created_at ?? '',
+        updated_at: row.updated_at,
+        message_count: messages.count ?? 0,
+        cad_jobs: cadJobs.count ?? 0,
+        meshes: meshes.count ?? 0,
+        images: images.count ?? 0,
+        latest_message_at:
+          ((latestPrompt.data?.[0] as Record<string, unknown> | undefined)
+            ?.created_at as string | undefined) ?? null,
+        latest_user_prompt:
+          ((latestPrompt.data?.[0] as Record<string, unknown> | undefined)
+            ?.content as unknown) ?? null,
+      };
+    }),
+  );
+}
+
+async function fetchConversationDetailDirect(
+  conversationId: string,
+): Promise<ConversationDetail> {
+  const supa = getAdminClient();
+  const { data: conversationRow, error: conversationError } = await supa
+    .from('conversations')
+    .select('id,title,type,privacy,created_at,updated_at,user_id,settings')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (conversationError) {
+    throw new Error(`conversation fallback: ${conversationError.message}`);
+  }
+  if (!conversationRow) {
+    return {
+      conversation: null,
+      messages: [],
+      generations: { cad_jobs: [], meshes: [], images: [] },
+    };
+  }
+
+  const row = conversationRow as Record<string, unknown>;
+  const [emailMap, messages, cadJobs, meshes, images] = await Promise.all([
+    fetchUserEmailMap([row.user_id as string]),
+    supa
+      .from('messages')
+      .select('id,created_at,role,content,rating,parent_message_id')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true }),
+    supa
+      .from('cad_jobs')
+      .select('id,status,created_at,prompt,message_id,error')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false }),
+    supa
+      .from('meshes')
+      .select('id,status,created_at,prompt,file_type')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false }),
+    supa
+      .from('images')
+      .select('id,status,created_at,prompt')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false }),
+  ]);
+
+  return {
+    conversation: {
+      id: row.id as string,
+      title: row.title as string,
+      type: row.type as string,
+      privacy: row.privacy as string,
+      created_at: (row.created_at as string | null) ?? null,
+      updated_at: (row.updated_at as string | null) ?? null,
+      user_id: row.user_id as string,
+      user_email: emailMap.get(row.user_id as string) ?? null,
+      settings: row.settings,
+    },
+    messages: ((messages.data ?? []) as Array<Record<string, unknown>>).map(
+      (message) => ({
+        id: message.id as string,
+        created_at: message.created_at as string,
+        role: message.role as string,
+        content: message.content,
+        rating: message.rating as number,
+        parent_message_id: (message.parent_message_id as string | null) ?? null,
+      }),
+    ),
+    generations: {
+      cad_jobs: ((cadJobs.data ?? []) as Array<Record<string, unknown>>).map(
+        (item) => ({
+          kind: 'cad',
+          id: item.id as string,
+          status: item.status as string,
+          created_at: item.created_at as string,
+          prompt: item.prompt,
+          file_type: null,
+          message_id: (item.message_id as string | null) ?? null,
+          error: (item.error as string | null) ?? null,
+        }),
+      ),
+      meshes: ((meshes.data ?? []) as Array<Record<string, unknown>>).map(
+        (item) => ({
+          kind: 'mesh',
+          id: item.id as string,
+          status: item.status as string,
+          created_at: item.created_at as string,
+          prompt: item.prompt,
+          file_type: (item.file_type as string | null) ?? null,
+          message_id: null,
+          error: null,
+        }),
+      ),
+      images: ((images.data ?? []) as Array<Record<string, unknown>>).map(
+        (item) => ({
+          kind: 'image',
+          id: item.id as string,
+          status: item.status as string,
+          created_at: item.created_at as string,
+          prompt: item.prompt,
+          file_type: null,
+          message_id: null,
+          error: null,
+        }),
+      ),
+    },
+  };
 }
 
 export type UserTransaction = {

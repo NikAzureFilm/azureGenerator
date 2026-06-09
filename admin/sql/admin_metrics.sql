@@ -155,9 +155,16 @@ as $$
        left join conversations conv on conv.id = m.conversation_id
       order by m.created_at desc
       limit p_limit)
+    union all
+    (select 'image'::text as kind, i.id, i.status::text, i.created_at, u.email, conv.title
+       from images i
+       join auth.users u on u.id = i.user_id
+       left join conversations conv on conv.id = i.conversation_id
+      order by i.created_at desc
+      limit p_limit)
   ) feed
   order by created_at desc
-  limit p_limit;
+  limit least(greatest(coalesce(p_limit, 30), 1), 200);
 $$;
 
 -- Top users by tokens consumed ----------------------------------------------

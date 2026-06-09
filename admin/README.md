@@ -20,6 +20,11 @@ Deploy it as its **own Vercel project**.
   conversations, messages, prompt-helper runs, a 30-day activity chart, a live
   feed of recent generations, and top users by token usage.
 
+- **Generation explorer** - searchable CAD, mesh and image rows with stored
+  prompt JSON, conversation links, and per-conversation message drilldowns.
+- **Operations links** - live shortcuts for Supabase, Vercel, API providers,
+  Stripe, Sentry, PostHog and production apps.
+
 ## 1. Install the database functions (one time)
 
 The dashboard reads aggregates through a handful of `SECURITY DEFINER`
