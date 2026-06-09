@@ -66,6 +66,7 @@ export function UpdatePasswordView() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="new-password"
                 placeholder="Enter your new password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -81,6 +82,7 @@ export function UpdatePasswordView() {
               <Input
                 id="confirmPassword"
                 type="password"
+                autoComplete="new-password"
                 placeholder="Confirm your new password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

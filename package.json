@@ -34,6 +34,7 @@
     "vercel-build": "npm run build",
     "test:3mf": "node --experimental-strip-types src/utils/threeMfExport.test.mjs",
     "test:3mf:visual": "node --experimental-strip-types scripts/three-mf-visual-report.mjs --self-test --out tmp/3mf-visual-report.html",
+    "test:static-shell": "node scripts/static-shell-smoke.mjs",
     "lint": "eslint . --ignore-pattern 'supabase/**'",
     "typecheck": "tsc -b --noEmit",
     "lint:supabase": "deno lint supabase",

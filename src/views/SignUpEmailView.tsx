@@ -143,6 +143,7 @@ export function SignUpEmailView() {
               <Input
                 id="name"
                 type="text"
+                autoComplete="name"
                 placeholder="Enter your full name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -158,6 +159,7 @@ export function SignUpEmailView() {
               <Input
                 id="email"
                 type="email"
+                autoComplete="email"
                 placeholder="Enter your email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -173,6 +175,7 @@ export function SignUpEmailView() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="new-password"
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -189,6 +192,7 @@ export function SignUpEmailView() {
               <Input
                 id="confirmPassword"
                 type="password"
+                autoComplete="new-password"
                 placeholder="Confirm your password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

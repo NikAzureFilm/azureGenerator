@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react';
-import { StartClient } from '@tanstack/react-start/client';
+import { Await, RouterProvider } from '@tanstack/react-router';
+import { hydrate } from '@tanstack/react-router/ssr/client';
 import { StrictMode, startTransition } from 'react';
 import { hydrateRoot } from 'react-dom/client';
 
@@ -19,6 +20,7 @@ function getSentryTracesSampleRate() {
 }
 
 const router = getRouter();
+let hydrationPromise: Promise<typeof router> | undefined;
 
 Sentry.init({
   dsn: import.meta.env.VITE_SENTRY_DSN ?? '',
@@ -27,11 +29,43 @@ Sentry.init({
   tracesSampleRate: getSentryTracesSampleRate(),
 });
 
-startTransition(() => {
-  hydrateRoot(
-    document,
-    <StrictMode>
-      <StartClient />
-    </StrictMode>,
+function renderStaticShellClient() {
+  hydrationPromise ??= hydrateStaticShellRouter();
+
+  return (
+    <Await
+      promise={hydrationPromise}
+      children={(hydratedRouter) => <RouterProvider router={hydratedRouter} />}
+    />
   );
+}
+
+async function hydrateStaticShellRouter() {
+  const serializationAdapters = router.options.serializationAdapters ?? [];
+  const startWindow = window as typeof window & {
+    __TSS_START_OPTIONS__?: {
+      serializationAdapters: typeof serializationAdapters;
+    };
+  };
+
+  startWindow.__TSS_START_OPTIONS__ = { serializationAdapters };
+
+  const routerOptions = {
+    basepath: import.meta.env.TSS_ROUTER_BASEPATH,
+    serializationAdapters,
+  } as unknown as Parameters<typeof router.update>[0];
+
+  router.update(routerOptions);
+
+  if (window.$_TSR?.router) {
+    await hydrate(router);
+  } else {
+    await router.load();
+  }
+
+  return router;
+}
+
+startTransition(() => {
+  hydrateRoot(document, <StrictMode>{renderStaticShellClient()}</StrictMode>);
 });
