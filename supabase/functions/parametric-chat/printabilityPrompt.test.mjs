@@ -23,3 +23,23 @@ assert.match(
   /build plate/i,
   'OpenSCAD code-generation prompt should require print-bed layout',
 );
+assert.match(
+  source,
+  /BOSL2\/screws\.scad/,
+  'OpenSCAD code-generation prompt should prefer BOSL2 screw helpers for threaded parts',
+);
+assert.match(
+  source,
+  /BOSL2\/threading\.scad/,
+  'OpenSCAD code-generation prompt should prefer BOSL2 threading helpers for custom threads',
+);
+assert.match(
+  source,
+  /BOSL2\/skin\.scad/,
+  'OpenSCAD code-generation prompt should prefer BOSL2 swept and lofted geometry helpers',
+);
+assert.match(
+  source,
+  /path_sweep\(\)/,
+  'OpenSCAD code-generation prompt should mention path_sweep for curved shapes',
+);
