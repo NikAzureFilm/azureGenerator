@@ -324,8 +324,8 @@ export async function fetchRetentionCohorts(weeks = 12): Promise<CohortRow[]> {
 
 export type Funnel = {
   signed_up: number;
-  generated: number;
-  subscribed: number;
+  generated_anything: number;
+  currently_subscribed: number;
   ever_subscribed: number;
   canceled: number;
 };
