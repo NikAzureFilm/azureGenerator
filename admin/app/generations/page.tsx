@@ -95,12 +95,13 @@ export default async function GenerationsPage({
               <th>Status</th>
               <th>Format</th>
               <th className="right">When</th>
+              <th className="right">Output</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="muted">
+                <td colSpan={8} className="muted">
                   No generated content matches.
                 </td>
               </tr>
@@ -133,6 +134,14 @@ export default async function GenerationsPage({
                   </td>
                   <td className="muted">{g.file_type ?? '-'}</td>
                   <td className="right muted">{relativeTime(g.created_at)}</td>
+                  <td className="right">
+                    <Link
+                      className="view-link"
+                      href={`/generations/${g.kind}/${g.id}`}
+                    >
+                      View
+                    </Link>
+                  </td>
                 </tr>
               ))
             )}

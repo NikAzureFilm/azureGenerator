@@ -50,5 +50,13 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   // run on dashboard routes, not on static assets or the login/api endpoints
-  matcher: ['/', '/users/:path*', '/costs', '/retention'],
+  matcher: [
+    '/',
+    '/users/:path*',
+    '/costs',
+    '/retention',
+    '/generations/:path*',
+    '/conversations/:path*',
+    '/resources',
+  ],
 };
