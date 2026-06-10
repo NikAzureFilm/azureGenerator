@@ -51,6 +51,7 @@ const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 1024;
 const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
+const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 8000;
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -139,6 +140,10 @@ function getReasoningCompletionTokenLimit(
   defaultLimit: number,
 ): number {
   return isClaudeFable5(model) ? FABLE_COMPLETION_TOKEN_LIMIT : defaultLimit;
+}
+
+function isGeminiCodeGenerationModel(model: string): boolean {
+  return model === 'google/gemini-3.5-flash';
 }
 
 // Helper to stream updated assistant message rows.
@@ -324,7 +329,9 @@ interface OpenRouterRequest {
   max_completion_tokens?: number;
   reasoning?: {
     max_tokens?: number;
-    effort?: 'high' | 'medium' | 'low';
+    effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+    exclude?: boolean;
+    enabled?: boolean;
   };
   // OpenRouter provider routing controls. `require_parameters: true` filters
   // out providers that don't support every parameter we send (e.g. `tools`).
@@ -1359,8 +1366,19 @@ Deno.serve(async (req) => {
               };
               applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
 
-              // Also apply thinking to code generation if enabled
-              if (reasoningEnabled) {
+              const codeReasoningEnabled =
+                thinking || usesAutomaticReasoning(codeModel);
+              if (isGeminiCodeGenerationModel(codeModel)) {
+                codeRequestBody.reasoning = {
+                  effort: 'minimal',
+                  exclude: true,
+                };
+                applyCompletionTokenLimit(
+                  codeRequestBody,
+                  codeModel,
+                  GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+                );
+              } else if (codeReasoningEnabled) {
                 codeRequestBody.reasoning = {
                   max_tokens: getReasoningTokenLimit(codeModel),
                 };

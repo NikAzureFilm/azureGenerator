@@ -9,3 +9,8 @@ assert.deepEqual(getCodeGenerationModelCandidates('google/gemini-3.5-flash'), [
 assert.deepEqual(getCodeGenerationModelCandidates('openai/gpt-5.5'), [
   'openai/gpt-5.5',
 ]);
+
+assert.deepEqual(
+  getCodeGenerationModelCandidates('anthropic/claude-fable-5'),
+  ['google/gemini-3.5-flash', 'openai/gpt-5.5'],
+);

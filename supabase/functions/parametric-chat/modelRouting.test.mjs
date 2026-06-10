@@ -25,8 +25,13 @@ assert.match(
 );
 assert.match(
   source,
-  /if \(reasoningEnabled\) \{\s+codeRequestBody\.reasoning/s,
-  'parametric chat code-generation call should use the effective reasoning flag',
+  /const codeReasoningEnabled =\s+thinking \|\| usesAutomaticReasoning\(codeModel\)/s,
+  'parametric chat code-generation reasoning should be based on the actual code model',
+);
+assert.match(
+  source,
+  /if \(codeReasoningEnabled\) \{\s+codeRequestBody\.reasoning/s,
+  'parametric chat code-generation call should use the code-model reasoning flag',
 );
 assert.match(
   source,
@@ -40,13 +45,23 @@ assert.match(
 );
 assert.match(
   source,
+  /const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 8000/,
+  'Gemini code generation should use a bounded token budget that still emits complete OpenSCAD',
+);
+assert.match(
+  source,
+  /isGeminiCodeGenerationModel\(codeModel\)[\s\S]*effort: 'minimal'[\s\S]*exclude: true/,
+  'Gemini code generation should request minimal hidden reasoning and exclude it from the response',
+);
+assert.match(
+  source,
   /requestBody,\s+model,\s+getReasoningCompletionTokenLimit\(model, 20000\)/s,
   'parametric chat agent call should cap Fable completion tokens through the budget helper',
 );
 assert.match(
   source,
   /codeRequestBody,\s+codeModel,\s+getReasoningCompletionTokenLimit\(codeModel, 60000\)/s,
-  'parametric chat code-generation call should cap Fable completion tokens through the budget helper',
+  'parametric chat code-generation call should cap reasoning completion tokens through the budget helper',
 );
 assert.match(
   source,
