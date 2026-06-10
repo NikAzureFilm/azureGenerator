@@ -29,7 +29,7 @@ export default function Nav({
             <Link
               key={l.key}
               href={l.href}
-              className={`navlink${l.key === active ? 'active' : ''}`}
+              className={l.key === active ? 'navlink active' : 'navlink'}
             >
               {l.label}
             </Link>
