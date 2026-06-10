@@ -89,7 +89,7 @@ export default async function CostsPage({
         {WINDOWS.map((w) => (
           <Link
             key={w.key}
-            className={`pill${w.key === windowChoice.key ? 'active' : ''}`}
+            className={w.key === windowChoice.key ? 'pill active' : 'pill'}
             href={w.key === '30' ? '/costs' : `/costs?days=${w.key}`}
           >
             {w.label}
