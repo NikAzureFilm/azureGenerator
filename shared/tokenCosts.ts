@@ -130,6 +130,7 @@ export function getCreativeModelCost(model: CreativeModel): PublicFeatureCost {
 
 export function getParametricModelTokenCost(model: string): number {
   switch (model) {
+    case 'anthropic/claude-fable-5':
     case 'anthropic/claude-opus-4.7':
       return FEATURE_COSTS.parametricCadReasoning.tokens;
     default:

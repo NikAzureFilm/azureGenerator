@@ -77,8 +77,8 @@ assert.deepEqual(
     multiviewNanoBananaView: 7,
     fastMesh: 41,
     qualityMesh: 34,
-    ultraMesh: 60,
-    multiviewMesh: 60,
+    ultraMesh: 110,
+    multiviewMesh: 61,
     upscaleMesh: 76,
   },
 );
@@ -93,6 +93,7 @@ assert.ok(
 );
 
 assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 50);
+assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 120);
 assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 50);
 assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 50);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
@@ -104,5 +105,9 @@ assert.equal(
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
+  270,
+);
+assert.equal(
+  getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
   270,
 );

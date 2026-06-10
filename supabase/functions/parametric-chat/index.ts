@@ -65,6 +65,20 @@ const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([]);
 // is not derived from the client to avoid stale-client/direct-API bypass.
 const TEXT_ONLY_MODELS = new Set<string>([]);
 
+function bareAnthropicModelId(model: string): string {
+  const id = model.startsWith('anthropic/')
+    ? model.slice('anthropic/'.length)
+    : model;
+  return id.replace(/\./g, '-');
+}
+
+function usesAutomaticReasoning(model: string): boolean {
+  const id = bareAnthropicModelId(model);
+  if (/^claude-[a-z]+-5\b/.test(id)) return true;
+  const match = /^claude-(?:opus|sonnet)-4-(\d+)/.exec(id);
+  return match ? Number(match[1]) >= 6 : false;
+}
+
 // Helper to stream updated assistant message rows.
 // Silently noop if the controller is already closed (e.g. the client
 // disconnected mid-stream). Without this guard the enqueue throws
@@ -693,6 +707,7 @@ Deno.serve(async (req) => {
 
   // Authoritative server-side capability: don't trust the client to self-report.
   const supportsVision = !TEXT_ONLY_MODELS.has(model);
+  const reasoningEnabled = thinking || usesAutomaticReasoning(model);
 
   const { data: messages, error: messagesError } = await supabaseClient
     .from('messages')
@@ -850,7 +865,7 @@ Deno.serve(async (req) => {
 
     // Add reasoning/thinking parameter if requested and supported
     // OpenRouter uses a unified 'reasoning' parameter
-    if (thinking) {
+    if (reasoningEnabled) {
       requestBody.reasoning = {
         max_tokens: 12000,
       };
@@ -1267,7 +1282,7 @@ Deno.serve(async (req) => {
               applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
 
               // Also apply thinking to code generation if enabled
-              if (thinking) {
+              if (reasoningEnabled) {
                 codeRequestBody.reasoning = {
                   max_tokens: 12000,
                 };

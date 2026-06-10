@@ -45,6 +45,8 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   // --- OpenRouter slugs ---
   // parametric-chat agent + parametric/cad code-gen — verified $1.50 / $9.
   'google/gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9 },
+  // Claude Fable 5 via OpenRouter / Anthropic — verified $10 / $50.
+  'anthropic/claude-fable-5': { inputPerM: 10, outputPerM: 50 },
   // prompt-generator + code-gen fallback — verified $5 / $30.
   'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
   // prompt-generator fallback (Haiku-class; estimate).
