@@ -48,6 +48,9 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
+const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
+const FABLE_REASONING_TOKEN_LIMIT = 1024;
+const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -77,6 +80,23 @@ function usesAutomaticReasoning(model: string): boolean {
   if (/^claude-[a-z]+-5\b/.test(id)) return true;
   const match = /^claude-(?:opus|sonnet)-4-(\d+)/.exec(id);
   return match ? Number(match[1]) >= 6 : false;
+}
+
+function isClaudeFable5(model: string): boolean {
+  return bareAnthropicModelId(model) === 'claude-fable-5';
+}
+
+function getReasoningTokenLimit(model: string): number {
+  return isClaudeFable5(model)
+    ? FABLE_REASONING_TOKEN_LIMIT
+    : DEFAULT_REASONING_TOKEN_LIMIT;
+}
+
+function getReasoningCompletionTokenLimit(
+  model: string,
+  defaultLimit: number,
+): number {
+  return isClaudeFable5(model) ? FABLE_COMPLETION_TOKEN_LIMIT : defaultLimit;
 }
 
 // Helper to stream updated assistant message rows.
@@ -867,10 +887,14 @@ Deno.serve(async (req) => {
     // OpenRouter uses a unified 'reasoning' parameter
     if (reasoningEnabled) {
       requestBody.reasoning = {
-        max_tokens: 12000,
+        max_tokens: getReasoningTokenLimit(model),
       };
       // Ensure total token limit is high enough to accommodate reasoning + output
-      applyCompletionTokenLimit(requestBody, model, 20000);
+      applyCompletionTokenLimit(
+        requestBody,
+        model,
+        getReasoningCompletionTokenLimit(model, 20000),
+      );
     }
 
     // Shares the request-scoped deadline with code-gen below so the two
@@ -1284,9 +1308,13 @@ Deno.serve(async (req) => {
               // Also apply thinking to code generation if enabled
               if (reasoningEnabled) {
                 codeRequestBody.reasoning = {
-                  max_tokens: 12000,
+                  max_tokens: getReasoningTokenLimit(codeModel),
                 };
-                applyCompletionTokenLimit(codeRequestBody, codeModel, 60000);
+                applyCompletionTokenLimit(
+                  codeRequestBody,
+                  codeModel,
+                  getReasoningCompletionTokenLimit(codeModel, 60000),
+                );
               }
 
               // Kick off title generation alongside the streamed code.
