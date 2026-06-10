@@ -354,9 +354,14 @@ $$;
 -- =============================================================================
 -- 4b. Generation, prompt, and conversation detail explorers.
 -- =============================================================================
+-- The original signature had no p_status; drop it so the new definition does
+-- not become an ambiguous overload (PostgREST refuses ambiguous RPC calls).
+drop function if exists public.admin_generations_page(text, text, int, int);
+
 create or replace function public.admin_generations_page(
   p_search text default null,
   p_kind   text default null,
+  p_status text default null,
   p_limit  int  default 50,
   p_offset int  default 0
 )
@@ -449,6 +454,12 @@ as $$
       or f.kind = lower(p_kind)
     )
     and (
+      p_status is null
+      or btrim(p_status) = ''
+      or lower(p_status) = 'all'
+      or f.status = lower(p_status)
+    )
+    and (
       p_search is null
       or btrim(p_search) = ''
       or f.email ilike '%' || p_search || '%'
@@ -456,6 +467,7 @@ as $$
       or f.prompt::text ilike '%' || p_search || '%'
       or f.id::text ilike '%' || p_search || '%'
       or f.conversation_id::text ilike '%' || p_search || '%'
+      or f.user_id::text ilike '%' || p_search || '%'
     )
   )
   select
@@ -985,7 +997,7 @@ $$;
 revoke all on function public.admin_users_page(text, int, int, text, text) from public;
 revoke all on function public.admin_user_detail(uuid)                       from public;
 revoke all on function public.admin_user_generations(uuid, int)             from public;
-revoke all on function public.admin_generations_page(text, text, int, int)  from public;
+revoke all on function public.admin_generations_page(text, text, text, int, int) from public;
 revoke all on function public.admin_user_generation_details(uuid, int)      from public;
 revoke all on function public.admin_user_conversations(uuid, int)           from public;
 revoke all on function public.admin_conversation_detail(uuid)               from public;
@@ -999,7 +1011,7 @@ revoke all on function public.admin_funnel()                                from
 grant execute on function public.admin_users_page(text, int, int, text, text) to service_role;
 grant execute on function public.admin_user_detail(uuid)                       to service_role;
 grant execute on function public.admin_user_generations(uuid, int)             to service_role;
-grant execute on function public.admin_generations_page(text, text, int, int)  to service_role;
+grant execute on function public.admin_generations_page(text, text, text, int, int) to service_role;
 grant execute on function public.admin_user_generation_details(uuid, int)      to service_role;
 grant execute on function public.admin_user_conversations(uuid, int)           to service_role;
 grant execute on function public.admin_conversation_detail(uuid)               to service_role;

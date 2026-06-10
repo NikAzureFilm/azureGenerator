@@ -8,7 +8,7 @@ import {
   isGenerationKind,
   pickViewerAsset,
 } from '@/lib/generations';
-import { relativeTime } from '@/lib/format';
+import { absoluteTime, relativeTime } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import ModelViewer from '@/app/components/ModelViewer';
 import Nav from '@/app/components/Nav';
@@ -82,10 +82,14 @@ export default async function GenerationDetailPage({
               <StatusBadge status={detail.status} />
             </div>
             <div style={{ marginTop: 8 }}>
-              Created {relativeTime(detail.created_at)}
+              Created {relativeTime(detail.created_at)} (
+              {absoluteTime(detail.created_at)})
             </div>
             {detail.updated_at && (
-              <div>Updated {relativeTime(detail.updated_at)}</div>
+              <div>
+                Updated {relativeTime(detail.updated_at)} (
+                {absoluteTime(detail.updated_at)})
+              </div>
             )}
           </div>
         </div>

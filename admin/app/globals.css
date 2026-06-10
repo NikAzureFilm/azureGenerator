@@ -347,6 +347,27 @@ tr:last-child td {
   line-height: 1.45;
   white-space: normal;
 }
+.prompt-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.prompt-body {
+  flex: 1;
+  min-width: 0;
+}
+.thumb-link {
+  flex: none;
+}
+.gen-thumb {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  object-fit: cover;
+}
 .json-details {
   margin-top: 8px;
   color: var(--muted);

@@ -285,23 +285,30 @@ export type GenerationsPage = { rows: GenerationRow[]; total: number };
 export async function fetchGenerationsPage({
   search = null,
   kind = null,
+  status = null,
   limit = 50,
   offset = 0,
 }: {
   search?: string | null;
   kind?: string | null;
+  status?: string | null;
   limit?: number;
   offset?: number;
 }): Promise<GenerationsPage> {
   const supa = getAdminClient();
-  const { data, error } = await supa.rpc('admin_generations_page', {
+  // Only send p_status when filtering: databases still on the 4-arg version
+  // of admin_generations_page keep matching for the common unfiltered path
+  // (a status-filtered call errors there and uses the direct fallback).
+  const args: Record<string, unknown> = {
     p_search: search,
     p_kind: kind,
     p_limit: limit,
     p_offset: offset,
-  });
+  };
+  if (status) args.p_status = status;
+  const { data, error } = await supa.rpc('admin_generations_page', args);
   if (error) {
-    return fetchGenerationsPageDirect({ search, kind, limit, offset });
+    return fetchGenerationsPageDirect({ search, kind, status, limit, offset });
   }
   const rows = (data ?? []) as GenerationRow[];
   return { rows, total: rows[0]?.total_count ?? 0 };
@@ -403,27 +410,34 @@ function matchesGenerationSearch(row: GenerationRow, search?: string | null) {
 async function fetchGenerationsPageDirect({
   search = null,
   kind = null,
+  status = null,
   limit = 50,
   offset = 0,
 }: {
   search?: string | null;
   kind?: string | null;
+  status?: string | null;
   limit?: number;
   offset?: number;
 }): Promise<GenerationsPage> {
   const supa = getAdminClient();
   const requestedKind = kind?.toLowerCase();
+  const requestedStatus = status?.toLowerCase() || undefined;
   const queryLimit = Math.min(Math.max(limit + offset, 100), 500);
   const jobs: Promise<GenerationRow[]>[] = [];
 
   if (!requestedKind || requestedKind === 'cad') {
-    jobs.push(fetchCadRowsDirect(supa, queryLimit));
+    jobs.push(fetchCadRowsDirect(supa, queryLimit, undefined, requestedStatus));
   }
   if (!requestedKind || requestedKind === 'mesh') {
-    jobs.push(fetchMeshRowsDirect(supa, queryLimit));
+    jobs.push(
+      fetchMeshRowsDirect(supa, queryLimit, undefined, requestedStatus),
+    );
   }
   if (!requestedKind || requestedKind === 'image') {
-    jobs.push(fetchImageRowsDirect(supa, queryLimit));
+    jobs.push(
+      fetchImageRowsDirect(supa, queryLimit, undefined, requestedStatus),
+    );
   }
 
   const rowsWithoutEmails = (await Promise.all(jobs)).flat();
@@ -451,6 +465,7 @@ async function fetchCadRowsDirect(
   supa: ReturnType<typeof getAdminClient>,
   limit: number,
   userId?: string,
+  status?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('cad_jobs')
@@ -460,6 +475,7 @@ async function fetchCadRowsDirect(
     .order('created_at', { ascending: false })
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
+  if (status) query = query.eq('status', status);
   const { data, error } = await query;
   if (error) throw new Error(`cad_jobs fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -489,6 +505,7 @@ async function fetchMeshRowsDirect(
   supa: ReturnType<typeof getAdminClient>,
   limit: number,
   userId?: string,
+  status?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('meshes')
@@ -498,6 +515,7 @@ async function fetchMeshRowsDirect(
     .order('created_at', { ascending: false })
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
+  if (status) query = query.eq('status', status);
   const { data, error } = await query;
   if (error) throw new Error(`meshes fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -527,6 +545,7 @@ async function fetchImageRowsDirect(
   supa: ReturnType<typeof getAdminClient>,
   limit: number,
   userId?: string,
+  status?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('images')
@@ -536,6 +555,7 @@ async function fetchImageRowsDirect(
     .order('created_at', { ascending: false })
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
+  if (status) query = query.eq('status', status);
   const { data, error } = await query;
   if (error) throw new Error(`images fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {

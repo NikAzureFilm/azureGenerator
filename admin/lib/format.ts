@@ -22,6 +22,12 @@ export function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+// Absolute timestamp in UTC, for correlating with logs (server-rendered, so
+// a fixed timezone beats the server's locale).
+export function absoluteTime(iso: string): string {
+  return `${new Date(iso).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+}
+
 export function relativeTime(iso: string): string {
   const d = new Date(iso).getTime();
   const diff = Date.now() - d;
