@@ -68,6 +68,48 @@ const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([]);
 // is not derived from the client to avoid stale-client/direct-API bypass.
 const TEXT_ONLY_MODELS = new Set<string>([]);
 
+class UserFacingGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserFacingGenerationError';
+  }
+}
+
+function extractOpenRouterErrorMessage(errorText: string): string {
+  try {
+    const parsed = JSON.parse(errorText) as {
+      error?: { message?: unknown };
+    };
+    if (typeof parsed.error?.message === 'string') {
+      return parsed.error.message;
+    }
+  } catch {
+    // Fall back to the raw upstream text below.
+  }
+  return errorText;
+}
+
+function getUserFacingOpenRouterMessage(
+  errorText: string,
+  status?: number,
+): string | null {
+  const message = extractOpenRouterErrorMessage(errorText);
+  const normalized = message.toLowerCase();
+  if (
+    status === 402 ||
+    normalized.includes('requires more credits') ||
+    normalized.includes('monthly limit') ||
+    normalized.includes('can only afford')
+  ) {
+    return 'CAD Reasoning could not start because the configured OpenRouter API key has reached its monthly spend limit. Increase the key limit in OpenRouter or switch to the standard CAD model, then retry.';
+  }
+  return null;
+}
+
+function asUserFacingGenerationMessage(error: unknown): string | null {
+  return error instanceof UserFacingGenerationError ? error.message : null;
+}
+
 function bareAnthropicModelId(model: string): string {
   const id = model.startsWith('anthropic/')
     ? model.slice('anthropic/'.length)
@@ -914,6 +956,13 @@ Deno.serve(async (req) => {
       clearTimeout(agentTimeout);
       const errorText = await response.text();
       console.error(`OpenRouter API Error: ${response.status} - ${errorText}`);
+      const userFacingMessage = getUserFacingOpenRouterMessage(
+        errorText,
+        response.status,
+      );
+      if (userFacingMessage) {
+        throw new UserFacingGenerationError(userFacingMessage);
+      }
       throw new Error(
         `OpenRouter API error: ${response.statusText} (${response.status})`,
       );
@@ -994,10 +1043,15 @@ Deno.serve(async (req) => {
               // — never swallow them in the parse-tolerance block above.
               if (chunk.error) {
                 console.error('OpenRouter stream error:', chunk.error);
-                throw new Error(
+                const upstreamMessage =
                   chunk.error.message ||
-                    `OpenRouter error: ${JSON.stringify(chunk.error)}`,
-                );
+                  `OpenRouter error: ${JSON.stringify(chunk.error)}`;
+                const userFacingMessage =
+                  getUserFacingOpenRouterMessage(upstreamMessage);
+                if (userFacingMessage) {
+                  throw new UserFacingGenerationError(userFacingMessage);
+                }
+                throw new Error(upstreamMessage);
               }
 
               if (chunk.usage) {
@@ -1348,6 +1402,13 @@ Deno.serve(async (req) => {
 
                 if (!codeResponse.ok) {
                   const t = await codeResponse.text();
+                  const userFacingMessage = getUserFacingOpenRouterMessage(
+                    t,
+                    codeResponse.status,
+                  );
+                  if (userFacingMessage) {
+                    throw new UserFacingGenerationError(userFacingMessage);
+                  }
                   throw new Error(
                     `Code gen error for ${codeModel}: ${codeResponse.status} - ${t}`,
                   );
@@ -1402,10 +1463,15 @@ Deno.serve(async (req) => {
                     // Surfaced API errors must abort code-gen so the outer
                     // catch can mark the tool call as failed — never swallow.
                     if (chunk.error) {
-                      throw new Error(
+                      const upstreamMessage =
                         chunk.error.message ||
-                          `OpenRouter error: ${JSON.stringify(chunk.error)}`,
-                      );
+                        `OpenRouter error: ${JSON.stringify(chunk.error)}`;
+                      const userFacingMessage =
+                        getUserFacingOpenRouterMessage(upstreamMessage);
+                      if (userFacingMessage) {
+                        throw new UserFacingGenerationError(userFacingMessage);
+                      }
+                      throw new Error(upstreamMessage);
                     }
 
                     if (chunk.usage) {
@@ -1458,6 +1524,13 @@ Deno.serve(async (req) => {
                 }
               } catch (e) {
                 console.error('Code generation failed:', e);
+                const userFacingMessage = asUserFacingGenerationMessage(e);
+                if (userFacingMessage && !content.artifact) {
+                  content = {
+                    ...content,
+                    text: userFacingMessage,
+                  };
+                }
                 codeGenFailed = true;
               } finally {
                 clearTimeout(codeGenTimeout);
@@ -1626,7 +1699,9 @@ Deno.serve(async (req) => {
     if (!hasUsefulContent) {
       content = {
         ...content,
-        text: 'An error occurred while processing your request.',
+        text:
+          asUserFacingGenerationMessage(error) ??
+          'An error occurred while processing your request.',
       };
     }
     // Symmetric to the stream's inner finally: if we bail before/around

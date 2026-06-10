@@ -48,3 +48,18 @@ assert.match(
   /codeRequestBody,\s+codeModel,\s+getReasoningCompletionTokenLimit\(codeModel, 60000\)/s,
   'parametric chat code-generation call should cap Fable completion tokens through the budget helper',
 );
+assert.match(
+  source,
+  /function getUserFacingOpenRouterMessage/,
+  'parametric chat should convert actionable OpenRouter failures into user-facing messages',
+);
+assert.match(
+  source,
+  /OpenRouter API key has reached its monthly spend limit/,
+  'OpenRouter key spend-limit failures should not render as the generic request error',
+);
+assert.match(
+  source,
+  /asUserFacingGenerationMessage\(error\) \?\?/,
+  'outer failures before streaming should preserve user-facing OpenRouter diagnostics',
+);
