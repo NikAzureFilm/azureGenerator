@@ -22,6 +22,14 @@ export function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+// USD with enough precision for sub-cent unit costs (e.g. cost per call).
+export function usdSmall(dollars: number): string {
+  if (!dollars) return '$0';
+  if (Math.abs(dollars) >= 1) return usdFromDollars(dollars);
+  const text = dollars.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  return `$${text}`;
+}
+
 // Absolute timestamp in UTC, for correlating with logs (server-rendered, so
 // a fixed timezone beats the server's locale).
 export function absoluteTime(iso: string): string {

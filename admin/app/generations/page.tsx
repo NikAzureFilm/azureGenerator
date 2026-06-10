@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const PAGE_SIZE = 50;
-const KIND_OPTIONS = new Set(['all', 'cad', 'mesh', 'image']);
+const KIND_OPTIONS = new Set(['all', 'cad', 'parametric', 'mesh', 'image']);
 const STATUS_OPTIONS = new Set(['all', 'success', 'failure', 'pending']);
 
 function generationsHref({
@@ -80,6 +80,7 @@ export default async function GenerationsPage({
         <select className="select" name="kind" defaultValue={kind}>
           <option value="all">All types</option>
           <option value="cad">CAD</option>
+          <option value="parametric">Parametric</option>
           <option value="mesh">Mesh</option>
           <option value="image">Image</option>
         </select>

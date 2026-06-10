@@ -13,9 +13,14 @@ import { getAdminClient } from './supabaseAdmin';
 //                       sourcePath
 // ===========================================================================
 
-export type GenerationKind = 'cad' | 'mesh' | 'image';
+export type GenerationKind = 'cad' | 'parametric' | 'mesh' | 'image';
 
-export const GENERATION_KINDS: GenerationKind[] = ['cad', 'mesh', 'image'];
+export const GENERATION_KINDS: GenerationKind[] = [
+  'cad',
+  'parametric',
+  'mesh',
+  'image',
+];
 
 export function isGenerationKind(value: string): value is GenerationKind {
   return (GENERATION_KINDS as string[]).includes(value);
@@ -27,6 +32,24 @@ export type CadArtifacts = {
   stlPath?: string;
   threeMfPath?: string;
   sourcePath?: string;
+};
+
+// OpenSCAD artifact embedded in an assistant message (parametric mode).
+export type ParametricParameter = {
+  name: string;
+  displayName?: string;
+  value: unknown;
+  defaultValue?: unknown;
+  type?: string;
+  description?: string;
+  group?: string;
+};
+
+export type ParametricArtifact = {
+  title: string;
+  version: string | null;
+  code: string;
+  parameters: ParametricParameter[];
 };
 
 // One downloadable/viewable file attached to a generation. `type` is the
@@ -54,6 +77,7 @@ export type GenerationDetail = {
   file_type: string | null;
   message_id: string | null;
   artifacts: CadArtifacts | null;
+  parametric: ParametricArtifact | null;
   assets: GenerationAsset[];
 };
 
@@ -169,7 +193,73 @@ export async function fetchGenerationDetail(
       file_type: null,
       message_id: (row.message_id as string | null) ?? null,
       artifacts,
+      parametric: null,
       assets: cadAssets(artifacts),
+    };
+  }
+
+  if (kind === 'parametric') {
+    const { data, error } = await supa
+      .from('messages')
+      .select(
+        'id,created_at,conversation_id,content,conversations!inner(title,type,user_id)',
+      )
+      .eq('id', id)
+      .eq('role', 'assistant')
+      .maybeSingle();
+    if (error) throw new Error(`parametric detail: ${error.message}`);
+    if (!data) return null;
+    const row = data as Record<string, unknown>;
+    const conversation = joinedConversation(
+      row.conversations as JoinedConversation,
+    ) as {
+      title?: string | null;
+      type?: string | null;
+      user_id?: string;
+    } | null;
+    const content = (row.content ?? {}) as Record<string, unknown>;
+    const artifact = content.artifact as Record<string, unknown> | undefined;
+    if (!artifact || typeof artifact.code !== 'string') return null;
+    const userId = conversation?.user_id ?? '';
+    const parametric: ParametricArtifact = {
+      title:
+        typeof artifact.title === 'string' && artifact.title.trim()
+          ? artifact.title
+          : 'OpenSCAD model',
+      version: typeof artifact.version === 'string' ? artifact.version : null,
+      code: artifact.code,
+      parameters: Array.isArray(artifact.parameters)
+        ? (artifact.parameters as ParametricParameter[])
+        : [],
+    };
+    return {
+      kind: 'parametric',
+      id: row.id as string,
+      status: 'success',
+      created_at: row.created_at as string,
+      updated_at: null,
+      user_id: userId,
+      email: userId ? await fetchEmail(userId) : null,
+      conversation_id: row.conversation_id as string,
+      conversation_title: conversation?.title ?? null,
+      conversation_type: conversation?.type ?? null,
+      prompt: {
+        text: typeof content.text === 'string' ? content.text : undefined,
+        model: typeof content.model === 'string' ? content.model : undefined,
+      },
+      error: null,
+      file_type: 'scad',
+      message_id: row.id as string,
+      artifacts: null,
+      parametric,
+      assets: [
+        {
+          type: 'scad',
+          label: 'OpenSCAD source',
+          format: 'scad',
+          viewable: false,
+        },
+      ],
     };
   }
 
@@ -204,6 +294,7 @@ export async function fetchGenerationDetail(
       file_type: fileType,
       message_id: null,
       artifacts: null,
+      parametric: null,
       assets: [
         {
           type: 'model',
@@ -244,6 +335,7 @@ export async function fetchGenerationDetail(
     file_type: null,
     message_id: null,
     artifacts: null,
+    parametric: null,
     assets: [{ type: 'image', label: 'Image', format: 'png', viewable: false }],
   };
 }
@@ -280,6 +372,15 @@ const CONTENT_TYPES: Record<string, string> = {
 
 function contentTypeFor(format: string): string {
   return CONTENT_TYPES[format.toLowerCase()] ?? 'application/octet-stream';
+}
+
+function slugify(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || 'model';
 }
 
 async function signedBucketUrl(
@@ -331,6 +432,19 @@ export async function resolveGenerationAsset(
     const urlExt = value.match(/\.([a-z0-9]+)(?:\?|$)/i)?.[1];
     const ext = entry.type === 'source' ? (urlExt ?? 'py') : entry.format;
     return resolveCadArtifact(value, ext, `cad-${detail.id}.${ext}`, download);
+  }
+
+  if (detail.kind === 'parametric' && type === 'scad') {
+    if (!detail.parametric) return null;
+    const blob = new Blob([detail.parametric.code], {
+      type: contentTypeFor('scad'),
+    });
+    return {
+      kind: 'stream',
+      body: blob,
+      contentType: contentTypeFor('scad'),
+      filename: `${slugify(detail.parametric.title)}-${detail.id.slice(0, 8)}.scad`,
+    };
   }
 
   if (detail.kind === 'mesh' && type === 'model') {

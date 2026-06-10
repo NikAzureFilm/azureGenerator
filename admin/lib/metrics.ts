@@ -232,7 +232,31 @@ export async function fetchUserGenerations(
   if (error) {
     return fetchUserGenerationsDirect(userId, limit);
   }
-  return (data ?? []) as UserGeneration[];
+  const rows = (data ?? []) as UserGeneration[];
+  // The RPC doesn't know about parametric artifacts; merge them in.
+  const parametric = await fetchParametricRowsDirect(supa, limit, userId).catch(
+    () => [],
+  );
+  return [
+    ...rows,
+    ...parametric.map((row) => ({
+      kind: row.kind,
+      id: row.id,
+      status: row.status,
+      created_at: row.created_at,
+      title: row.conversation_title,
+      file_type: row.file_type,
+      conversation_id: row.conversation_id,
+      prompt: row.prompt,
+      message_id: row.message_id,
+      error: row.error,
+    })),
+  ]
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )
+    .slice(0, limit);
 }
 
 export type UserConversation = {
@@ -296,6 +320,13 @@ export async function fetchGenerationsPage({
   offset?: number;
 }): Promise<GenerationsPage> {
   const supa = getAdminClient();
+
+  // Parametric (OpenSCAD) artifacts live in message content, which the
+  // admin_generations_page RPC doesn't know about — always served directly.
+  if (kind?.toLowerCase() === 'parametric') {
+    return fetchGenerationsPageDirect({ search, kind, status, limit, offset });
+  }
+
   // Only send p_status when filtering: databases still on the 4-arg version
   // of admin_generations_page keep matching for the common unfiltered path
   // (a status-filtered call errors there and uses the direct fallback).
@@ -306,12 +337,49 @@ export async function fetchGenerationsPage({
     p_offset: offset,
   };
   if (status) args.p_status = status;
+
+  // For the "all kinds" view, over-fetch the RPC page so parametric rows can
+  // be merged into the correct sort positions before slicing.
+  const mergeParametric = !kind;
+  const window = Math.min(offset + limit, 500);
+  if (mergeParametric) {
+    args.p_limit = window;
+    args.p_offset = 0;
+  }
+
   const { data, error } = await supa.rpc('admin_generations_page', args);
   if (error) {
     return fetchGenerationsPageDirect({ search, kind, status, limit, offset });
   }
   const rows = (data ?? []) as GenerationRow[];
-  return { rows, total: rows[0]?.total_count ?? 0 };
+  if (!mergeParametric) {
+    return { rows, total: rows[0]?.total_count ?? 0 };
+  }
+
+  const rpcTotal = rows[0]?.total_count ?? 0;
+  const parametric = await fetchParametricRowsDirect(
+    supa,
+    window,
+    undefined,
+    status?.toLowerCase() || undefined,
+  );
+  const emailMap = await fetchUserEmailMap(parametric.map((r) => r.user_id));
+  const merged = [
+    ...rows,
+    ...parametric
+      .map((row) => ({ ...row, email: emailMap.get(row.user_id) ?? null }))
+      .filter((row) => matchesGenerationSearch(row, search)),
+  ].sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
+  const total = rpcTotal + (await countParametricArtifacts(supa, status));
+  return {
+    rows: merged
+      .slice(offset, offset + limit)
+      .map((row) => ({ ...row, total_count: total })),
+    total,
+  };
 }
 
 export type ConversationMessage = {
@@ -437,6 +505,11 @@ async function fetchGenerationsPageDirect({
   if (!requestedKind || requestedKind === 'image') {
     jobs.push(
       fetchImageRowsDirect(supa, queryLimit, undefined, requestedStatus),
+    );
+  }
+  if (!requestedKind || requestedKind === 'parametric') {
+    jobs.push(
+      fetchParametricRowsDirect(supa, queryLimit, undefined, requestedStatus),
     );
   }
 
@@ -581,6 +654,79 @@ async function fetchImageRowsDirect(
   });
 }
 
+// Parametric (OpenSCAD) generations are assistant messages carrying a
+// `content.artifact` payload — there is no dedicated table. The conversation
+// join is `!inner` so user filters apply and user_id is always present. The
+// artifact code is stripped from list rows to keep pages light; the detail
+// view loads the full message.
+async function fetchParametricRowsDirect(
+  supa: ReturnType<typeof getAdminClient>,
+  limit: number,
+  userId?: string,
+  status?: string,
+): Promise<GenerationRow[]> {
+  // An artifact only exists once generation succeeded.
+  if (status && status !== 'success') return [];
+  let query = supa
+    .from('messages')
+    .select(
+      'id,created_at,conversation_id,content,conversations!inner(title,type,user_id)',
+    )
+    .eq('role', 'assistant')
+    .not('content->artifact', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (userId) query = query.eq('conversations.user_id', userId);
+  const { data, error } = await query;
+  if (error) throw new Error(`parametric fallback: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const conversation = normalizeJoinedConversation(
+      row.conversations as JoinedConversation,
+    ) as { title?: string | null; type?: string | null; user_id?: string };
+    const content = (row.content ?? {}) as Record<string, unknown>;
+    const artifact = (content.artifact ?? {}) as Record<string, unknown>;
+    return {
+      kind: 'parametric',
+      id: row.id as string,
+      status: 'success',
+      created_at: row.created_at as string,
+      user_id: conversation?.user_id ?? '',
+      email: null,
+      conversation_id: row.conversation_id as string,
+      conversation_title: conversation?.title ?? null,
+      conversation_type: conversation?.type ?? null,
+      prompt: {
+        text: typeof content.text === 'string' ? content.text : undefined,
+        artifact: {
+          title: artifact.title,
+          version: artifact.version,
+          parameters: Array.isArray(artifact.parameters)
+            ? artifact.parameters.length
+            : 0,
+        },
+      },
+      file_type: 'scad',
+      message_id: row.id as string,
+      error: null,
+      total_count: 0,
+    };
+  });
+}
+
+async function countParametricArtifacts(
+  supa: ReturnType<typeof getAdminClient>,
+  status?: string | null,
+): Promise<number> {
+  if (status && status.toLowerCase() !== 'success') return 0;
+  const { count, error } = await supa
+    .from('messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('role', 'assistant')
+    .not('content->artifact', 'is', null);
+  if (error) return 0;
+  return count ?? 0;
+}
+
 async function fetchUserGenerationsDirect(
   userId: string,
   limit: number,
@@ -591,6 +737,7 @@ async function fetchUserGenerationsDirect(
       fetchCadRowsDirect(supa, limit, userId),
       fetchMeshRowsDirect(supa, limit, userId),
       fetchImageRowsDirect(supa, limit, userId),
+      fetchParametricRowsDirect(supa, limit, userId),
     ])
   )
     .flat()

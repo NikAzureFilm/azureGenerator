@@ -99,6 +99,8 @@ export function generationKindLabel(kind: string): string {
   switch (kind) {
     case 'cad':
       return 'CAD';
+    case 'parametric':
+      return 'Parametric';
     case 'mesh':
       return 'Mesh';
     case 'image':

@@ -12,10 +12,17 @@ import { absoluteTime, relativeTime } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import ModelViewer from '@/app/components/ModelViewer';
 import Nav from '@/app/components/Nav';
+import OpenScadViewer from '@/app/components/OpenScadViewer';
 import StatusBadge from '@/app/components/StatusBadge';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+function formatParamValue(value: unknown): string {
+  if (value == null) return '-';
+  if (Array.isArray(value)) return `[${value.join(', ')}]`;
+  return String(value);
+}
 
 function assetUrl(
   kind: string,
@@ -62,8 +69,11 @@ export default async function GenerationDetailPage({
         <div className="detail-head">
           <div>
             <div className="value detail-title">
-              {generationKindLabel(detail.kind)} generation
-              {detail.file_type ? ` (${detail.file_type})` : ''}
+              {detail.parametric
+                ? detail.parametric.title
+                : `${generationKindLabel(detail.kind)} generation${
+                    detail.file_type ? ` (${detail.file_type})` : ''
+                  }`}
             </div>
             <div className="sub">
               <Link href={`/users/${detail.user_id}`}>
@@ -97,7 +107,14 @@ export default async function GenerationDetailPage({
       </div>
 
       <div className="section-title">Output</div>
-      {viewerAsset ? (
+      {detail.parametric ? (
+        <div className="card viewer-card">
+          <OpenScadViewer
+            code={detail.parametric.code}
+            parameters={detail.parametric.parameters}
+          />
+        </div>
+      ) : viewerAsset ? (
         <div className="card viewer-card">
           <ModelViewer
             src={assetUrl(detail.kind, detail.id, viewerAsset.type)}
@@ -150,6 +167,43 @@ export default async function GenerationDetailPage({
         )}
       </div>
 
+      {detail.parametric && detail.parametric.parameters.length > 0 && (
+        <>
+          <div className="section-title">Parameters</div>
+          <div className="card table-card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Group</th>
+                  <th>Type</th>
+                  <th>Value</th>
+                  <th>Default</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.parametric.parameters.map((p, i) => (
+                  <tr key={`${p.name}-${i}`}>
+                    <td>
+                      {p.displayName || p.name}
+                      {p.description && (
+                        <div className="muted tiny">{p.description}</div>
+                      )}
+                    </td>
+                    <td className="muted">{p.group ?? '-'}</td>
+                    <td className="muted">{p.type ?? '-'}</td>
+                    <td className="mono">{formatParamValue(p.value)}</td>
+                    <td className="mono muted">
+                      {formatParamValue(p.defaultValue)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       {detail.kind === 'cad' && (
         <>
           <div className="section-title">Generated code</div>
@@ -163,6 +217,20 @@ export default async function GenerationDetailPage({
                   : 'No source code was recorded for this CAD job.'}
               </span>
             )}
+          </div>
+        </>
+      )}
+
+      {detail.parametric && (
+        <>
+          <div className="section-title">
+            OpenSCAD code
+            {detail.parametric.version
+              ? ` (v${detail.parametric.version})`
+              : ''}
+          </div>
+          <div className="card">
+            <pre className="code-block">{detail.parametric.code}</pre>
           </div>
         </>
       )}

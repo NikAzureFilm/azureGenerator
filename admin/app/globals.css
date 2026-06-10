@@ -516,6 +516,20 @@ tr:last-child td {
   max-height: 560px;
   border-radius: 10px;
 }
+.svg-canvas {
+  display: grid;
+  place-items: center;
+  background: #f4f5f8;
+}
+.svg-canvas img {
+  max-width: 92%;
+  max-height: 92%;
+}
+.compile-log {
+  max-height: 160px;
+  margin-top: 10px;
+  text-align: left;
+}
 .download-row {
   display: flex;
   flex-wrap: wrap;
@@ -669,6 +683,33 @@ tr:last-child td {
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--border);
+}
+
+/* time-window selector pills (costs page) */
+.window-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.pill {
+  display: inline-block;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.pill:hover {
+  border-color: #39404f;
+  color: var(--text);
+}
+.pill.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: #121a30;
 }
 
 /* search bar */
