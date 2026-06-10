@@ -357,12 +357,14 @@ export async function fetchGenerationsPage({
   }
 
   const rpcTotal = rows[0]?.total_count ?? 0;
+  // Degrade to the RPC rows alone if the parametric merge fails; the explicit
+  // kind=parametric filter still surfaces such errors.
   const parametric = await fetchParametricRowsDirect(
     supa,
     window,
     undefined,
     status?.toLowerCase() || undefined,
-  );
+  ).catch(() => [] as GenerationRow[]);
   const emailMap = await fetchUserEmailMap(parametric.map((r) => r.user_id));
   const merged = [
     ...rows,
@@ -507,9 +509,19 @@ async function fetchGenerationsPageDirect({
       fetchImageRowsDirect(supa, queryLimit, undefined, requestedStatus),
     );
   }
-  if (!requestedKind || requestedKind === 'parametric') {
+  if (requestedKind === 'parametric') {
     jobs.push(
       fetchParametricRowsDirect(supa, queryLimit, undefined, requestedStatus),
+    );
+  } else if (!requestedKind) {
+    // Merged view: a parametric failure shouldn't blank the other kinds.
+    jobs.push(
+      fetchParametricRowsDirect(
+        supa,
+        queryLimit,
+        undefined,
+        requestedStatus,
+      ).catch(() => [] as GenerationRow[]),
     );
   }
 
