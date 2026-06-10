@@ -301,6 +301,7 @@ export type GenerationRow = {
   file_type: string | null;
   message_id: string | null;
   error: string | null;
+  actual_cost_usd: number | null;
   total_count: number;
 };
 
@@ -353,7 +354,10 @@ export async function fetchGenerationsPage({
   }
   const rows = (data ?? []) as GenerationRow[];
   if (!mergeParametric) {
-    return { rows, total: rows[0]?.total_count ?? 0 };
+    return {
+      rows: await addGenerationCosts(supa, rows),
+      total: rows[0]?.total_count ?? 0,
+    };
   }
 
   const rpcTotal = rows[0]?.total_count ?? 0;
@@ -377,9 +381,12 @@ export async function fetchGenerationsPage({
   );
   const total = rpcTotal + (await countParametricArtifacts(supa, status));
   return {
-    rows: merged
-      .slice(offset, offset + limit)
-      .map((row) => ({ ...row, total_count: total })),
+    rows: await addGenerationCosts(
+      supa,
+      merged
+        .slice(offset, offset + limit)
+        .map((row) => ({ ...row, total_count: total })),
+    ),
     total,
   };
 }
@@ -538,12 +545,50 @@ async function fetchGenerationsPageDirect({
     );
 
   return {
-    rows: filtered.slice(offset, offset + limit).map((row) => ({
-      ...row,
-      total_count: filtered.length,
-    })),
+    rows: await addGenerationCosts(
+      supa,
+      filtered.slice(offset, offset + limit).map((row) => ({
+        ...row,
+        total_count: filtered.length,
+      })),
+    ),
     total: filtered.length,
   };
+}
+
+async function addGenerationCosts(
+  supa: ReturnType<typeof getAdminClient>,
+  rows: GenerationRow[],
+): Promise<GenerationRow[]> {
+  const withEmptyCosts = () =>
+    rows.map((row) => ({
+      ...row,
+      actual_cost_usd: row.actual_cost_usd ?? null,
+    }));
+  const ids = [...new Set(rows.map((row) => row.id).filter(Boolean))];
+  if (ids.length === 0) return withEmptyCosts();
+
+  const { data, error } = await supa
+    .from('provider_usage')
+    .select('reference_id,cost_usd')
+    .in('reference_id', ids);
+  if (error) return withEmptyCosts();
+
+  const costs = new Map<string, number>();
+  for (const row of (data ?? []) as Array<{
+    reference_id: string | null;
+    cost_usd: number | string | null;
+  }>) {
+    if (!row.reference_id) continue;
+    const cost = Number(row.cost_usd ?? 0);
+    if (!Number.isFinite(cost)) continue;
+    costs.set(row.reference_id, (costs.get(row.reference_id) ?? 0) + cost);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    actual_cost_usd: costs.has(row.id) ? (costs.get(row.id) ?? 0) : null,
+  }));
 }
 
 async function fetchCadRowsDirect(
@@ -581,6 +626,7 @@ async function fetchCadRowsDirect(
       file_type: null,
       message_id: (row.message_id as string | null) ?? null,
       error: (row.error as string | null) ?? null,
+      actual_cost_usd: null,
       total_count: 0,
     };
   });
@@ -621,6 +667,7 @@ async function fetchMeshRowsDirect(
       file_type: (row.file_type as string | null) ?? null,
       message_id: null,
       error: null,
+      actual_cost_usd: null,
       total_count: 0,
     };
   });
@@ -661,6 +708,7 @@ async function fetchImageRowsDirect(
       file_type: null,
       message_id: null,
       error: null,
+      actual_cost_usd: null,
       total_count: 0,
     };
   });
@@ -720,6 +768,7 @@ async function fetchParametricRowsDirect(
       file_type: 'scad',
       message_id: row.id as string,
       error: null,
+      actual_cost_usd: null,
       total_count: 0,
     };
   });

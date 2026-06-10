@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { requireAdmin } from '@/lib/auth';
 import { generationKindLabel, truncateText } from '@/lib/content';
 import { fetchGenerationsPage } from '@/lib/metrics';
-import { absoluteTime, num, relativeTime } from '@/lib/format';
+import { absoluteTime, num, relativeTime, usdSmall } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import Nav from '@/app/components/Nav';
 import StatusBadge from '@/app/components/StatusBadge';
@@ -110,6 +110,7 @@ export default async function GenerationsPage({
               <th>Prompt</th>
               <th>Status</th>
               <th>Format</th>
+              <th className="right">Cost</th>
               <th className="right">When</th>
               <th className="right">Output</th>
             </tr>
@@ -117,7 +118,7 @@ export default async function GenerationsPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="muted">
+                <td colSpan={9} className="muted">
                   No generated content matches.
                 </td>
               </tr>
@@ -172,6 +173,11 @@ export default async function GenerationsPage({
                   </td>
                   <td className="muted">
                     {g.file_type ?? (g.kind === 'image' ? 'png' : '-')}
+                  </td>
+                  <td className="right mono">
+                    {g.actual_cost_usd == null
+                      ? '-'
+                      : usdSmall(g.actual_cost_usd)}
                   </td>
                   <td
                     className="right muted"
