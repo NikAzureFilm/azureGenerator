@@ -7,6 +7,7 @@ services:
       TEXT_TO_CAD_WORKER_TOKEN: '${TEXT_TO_CAD_WORKER_TOKEN:?set TEXT_TO_CAD_WORKER_TOKEN}'
       PUBLIC_BASE_URL: '${PUBLIC_BASE_URL:-}'
       WORKER_TIMEOUT_SECONDS: '${WORKER_TIMEOUT_SECONDS:-120}'
+      MAX_CONCURRENT_JOBS: '${MAX_CONCURRENT_JOBS:-2}'
     volumes:
       - text_to_cad_artifacts:/data/artifacts
     restart: unless-stopped
