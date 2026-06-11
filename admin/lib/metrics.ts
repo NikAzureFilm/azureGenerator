@@ -302,6 +302,7 @@ export type GenerationRow = {
   message_id: string | null;
   error: string | null;
   actual_cost_usd: number | null;
+  tokens_used: number | null;
   total_count: number;
 };
 
@@ -355,7 +356,7 @@ export async function fetchGenerationsPage({
   const rows = (data ?? []) as GenerationRow[];
   if (!mergeParametric) {
     return {
-      rows: await addGenerationCosts(supa, rows),
+      rows: await addGenerationEconomics(supa, rows),
       total: rows[0]?.total_count ?? 0,
     };
   }
@@ -381,7 +382,7 @@ export async function fetchGenerationsPage({
   );
   const total = rpcTotal + (await countParametricArtifacts(supa, status));
   return {
-    rows: await addGenerationCosts(
+    rows: await addGenerationEconomics(
       supa,
       merged
         .slice(offset, offset + limit)
@@ -545,7 +546,7 @@ async function fetchGenerationsPageDirect({
     );
 
   return {
-    rows: await addGenerationCosts(
+    rows: await addGenerationEconomics(
       supa,
       filtered.slice(offset, offset + limit).map((row) => ({
         ...row,
@@ -556,38 +557,149 @@ async function fetchGenerationsPageDirect({
   };
 }
 
-async function addGenerationCosts(
+async function addGenerationEconomics(
   supa: ReturnType<typeof getAdminClient>,
   rows: GenerationRow[],
 ): Promise<GenerationRow[]> {
-  const withEmptyCosts = () =>
+  const withEmptyEconomics = () =>
     rows.map((row) => ({
       ...row,
       actual_cost_usd: row.actual_cost_usd ?? null,
+      tokens_used: row.tokens_used ?? null,
     }));
   const ids = [...new Set(rows.map((row) => row.id).filter(Boolean))];
-  if (ids.length === 0) return withEmptyCosts();
+  if (ids.length === 0) return withEmptyEconomics();
 
-  const { data, error } = await supa
-    .from('provider_usage')
-    .select('reference_id,cost_usd')
-    .in('reference_id', ids);
-  if (error) return withEmptyCosts();
+  const [usageResult, tokenResult] = await Promise.all([
+    supa
+      .from('provider_usage')
+      .select('reference_id,cost_usd')
+      .in('reference_id', ids),
+    supa
+      .from('token_transactions')
+      .select('reference_id,amount')
+      .in('reference_id', ids),
+  ]);
 
   const costs = new Map<string, number>();
-  for (const row of (data ?? []) as Array<{
-    reference_id: string | null;
-    cost_usd: number | string | null;
-  }>) {
-    if (!row.reference_id) continue;
-    const cost = Number(row.cost_usd ?? 0);
-    if (!Number.isFinite(cost)) continue;
-    costs.set(row.reference_id, (costs.get(row.reference_id) ?? 0) + cost);
+  if (!usageResult.error) {
+    for (const row of (usageResult.data ?? []) as Array<{
+      reference_id: string | null;
+      cost_usd: number | string | null;
+    }>) {
+      if (!row.reference_id) continue;
+      const cost = Number(row.cost_usd ?? 0);
+      if (!Number.isFinite(cost)) continue;
+      costs.set(row.reference_id, (costs.get(row.reference_id) ?? 0) + cost);
+    }
+  }
+
+  const exactTokens = new Map<string, number>();
+  if (!tokenResult.error) {
+    for (const row of (tokenResult.data ?? []) as Array<{
+      reference_id: string | null;
+      amount: number | string | null;
+    }>) {
+      if (!row.reference_id) continue;
+      const amount = Number(row.amount ?? 0);
+      if (!Number.isFinite(amount) || amount >= 0) continue;
+      exactTokens.set(
+        row.reference_id,
+        (exactTokens.get(row.reference_id) ?? 0) - amount,
+      );
+    }
+  }
+
+  const enriched = rows.map((row) => ({
+    ...row,
+    actual_cost_usd: costs.has(row.id) ? (costs.get(row.id) ?? 0) : null,
+    tokens_used: exactTokens.has(row.id)
+      ? (exactTokens.get(row.id) ?? 0)
+      : null,
+  }));
+
+  return addLegacyTokenMatches(supa, enriched);
+}
+
+async function addLegacyTokenMatches(
+  supa: ReturnType<typeof getAdminClient>,
+  rows: GenerationRow[],
+): Promise<GenerationRow[]> {
+  const missing = rows.filter(
+    (row) =>
+      row.tokens_used == null &&
+      (row.kind === 'mesh' || row.kind === 'parametric'),
+  );
+  if (missing.length === 0) return rows;
+
+  const userIds = [
+    ...new Set(missing.map((row) => row.user_id).filter(Boolean)),
+  ];
+  if (userIds.length === 0) return rows;
+
+  const times = missing.map((row) => new Date(row.created_at).getTime());
+  const minCreated = Math.min(...times);
+  const maxCreated = Math.max(...times);
+  const { data, error } = await supa
+    .from('token_transactions')
+    .select('user_id,operation,amount,reference_id,created_at')
+    .in('user_id', userIds)
+    .in('operation', ['mesh', 'parametric'])
+    .lt('amount', 0)
+    .gte('created_at', new Date(minCreated - 10 * 60_000).toISOString())
+    .lte('created_at', new Date(maxCreated + 10 * 60_000).toISOString())
+    .order('created_at', { ascending: true });
+  if (error) return rows;
+
+  const candidates = (
+    (data ?? []) as Array<{
+      user_id: string | null;
+      operation: string | null;
+      amount: number | string | null;
+      reference_id: string | null;
+      created_at: string;
+    }>
+  ).filter(
+    (candidate) => !rows.some((row) => row.id === candidate.reference_id),
+  );
+  const used = new Set<number>();
+  const inferredTokens = new Map<string, number>();
+
+  for (const row of missing) {
+    const operation = row.kind === 'mesh' ? 'mesh' : 'parametric';
+    const rowTime = new Date(row.created_at).getTime();
+    const maxDistanceMs = row.kind === 'mesh' ? 2 * 60_000 : 5 * 60_000;
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((candidate, index) => {
+      if (used.has(index)) return;
+      if (
+        candidate.user_id !== row.user_id ||
+        candidate.operation !== operation
+      ) {
+        return;
+      }
+      const amount = Number(candidate.amount ?? 0);
+      if (!Number.isFinite(amount) || amount >= 0) return;
+      const distance = Math.abs(
+        new Date(candidate.created_at).getTime() - rowTime,
+      );
+      if (distance <= maxDistanceMs && distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex >= 0) {
+      used.add(bestIndex);
+      inferredTokens.set(row.id, -Number(candidates[bestIndex].amount ?? 0));
+    }
   }
 
   return rows.map((row) => ({
     ...row,
-    actual_cost_usd: costs.has(row.id) ? (costs.get(row.id) ?? 0) : null,
+    tokens_used: row.tokens_used ?? inferredTokens.get(row.id) ?? null,
   }));
 }
 
@@ -627,6 +739,7 @@ async function fetchCadRowsDirect(
       message_id: (row.message_id as string | null) ?? null,
       error: (row.error as string | null) ?? null,
       actual_cost_usd: null,
+      tokens_used: null,
       total_count: 0,
     };
   });
@@ -668,6 +781,7 @@ async function fetchMeshRowsDirect(
       message_id: null,
       error: null,
       actual_cost_usd: null,
+      tokens_used: null,
       total_count: 0,
     };
   });
@@ -709,6 +823,7 @@ async function fetchImageRowsDirect(
       message_id: null,
       error: null,
       actual_cost_usd: null,
+      tokens_used: null,
       total_count: 0,
     };
   });
@@ -769,6 +884,7 @@ async function fetchParametricRowsDirect(
       message_id: row.id as string,
       error: null,
       actual_cost_usd: null,
+      tokens_used: null,
       total_count: 0,
     };
   });

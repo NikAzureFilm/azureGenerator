@@ -303,6 +303,7 @@ async function generateMeshImage(
   priorMeshId: string | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
   sentryStage: { meshModel: 'fast' | 'quality' | 'ultra'; subStage?: string },
+  generatedImageId?: string,
 ): Promise<{
   imageBytes: Buffer;
   imageCallId: string | null;
@@ -355,6 +356,7 @@ async function generateMeshImage(
     operation: 'image',
     userId,
     conversationId,
+    referenceId: generatedImageId,
   };
 
   let provider: 'gpt-image-2' | 'nano-banana-pro' | 'flux';
@@ -897,6 +899,7 @@ Deno.serve(async (req) => {
       const { data: newMeshData, error: newMeshError } = await supabaseClient
         .from('meshes')
         .insert({
+          id: meshReferenceId,
           user_id: userData.user.id,
           images: originalMesh.images,
           conversation_id: conversationId,
@@ -1108,6 +1111,7 @@ Deno.serve(async (req) => {
     const { data: meshData, error: meshError } = await supabaseClient
       .from('meshes')
       .insert({
+        id: meshReferenceId,
         user_id: userData.user.id,
         images: meshImageIds.length > 0 ? meshImageIds : null,
         conversation_id: conversationId,
@@ -1457,6 +1461,7 @@ async function submitMeshJob(
             mesh,
             imageGenerationModel,
             { meshModel: 'quality' },
+            imageData.id,
           );
 
         const { error: imageUploadError } = await supabaseClient.storage
@@ -1534,6 +1539,7 @@ async function submitMeshJob(
             mesh,
             imageGenerationModel,
             { meshModel: 'fast' },
+            imageData.id,
           );
 
         const { error: imageUploadError } = await supabaseClient.storage
@@ -1701,6 +1707,7 @@ async function submitMeshJob(
         mesh,
         imageGenerationModel,
         { meshModel: 'ultra', subStage: ultraSubStage },
+        imageData.id,
       );
 
       // Upload the generated base image

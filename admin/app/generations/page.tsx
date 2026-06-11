@@ -111,6 +111,7 @@ export default async function GenerationsPage({
               <th>Status</th>
               <th>Format</th>
               <th className="right">Cost</th>
+              <th className="right">Tokens</th>
               <th className="right">When</th>
               <th className="right">Output</th>
             </tr>
@@ -118,7 +119,7 @@ export default async function GenerationsPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="muted">
+                <td colSpan={10} className="muted">
                   No generated content matches.
                 </td>
               </tr>
@@ -178,6 +179,9 @@ export default async function GenerationsPage({
                     {g.actual_cost_usd == null
                       ? '-'
                       : usdSmall(g.actual_cost_usd)}
+                  </td>
+                  <td className="right mono">
+                    {g.tokens_used == null ? '-' : num(g.tokens_used)}
                   </td>
                   <td
                     className="right muted"
