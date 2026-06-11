@@ -12,21 +12,23 @@ import {
   Loader2,
   ChevronDown,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { GLTF, GLTFLoader, GLTFParser } from 'three-stdlib';
-import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTF } from 'three-stdlib';
 import { Button } from '@/components/ui/button';
 
 import { CreativeLoadingBar } from './CreativeLoadingBar';
 import { LightingControls } from './LightingControls';
+import { ModelWithControls } from './ModelWithControls';
 
 import posthog from 'posthog-js';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 import { useMeshData } from '@/hooks/useMeshData';
+import {
+  loadMeshBlobAsGltf,
+  type DetectedPbrMaps,
+} from '@/utils/loadMeshAsGltf';
 import { DownloadMenu } from './DownloadMenu';
 import { ViewGizmo } from './ViewGizmo';
 import { WireframeIcon } from '@/components/icons/ui/WireframeIcon';
@@ -41,378 +43,13 @@ import {
 } from '@/constants/meshConstants';
 import { CreativeModel } from '@shared/types';
 
-/**
- * ModelWithControls - Renders a 3D model with adjustable material properties.
- *
- * This component applies visual adjustments to the model's materials:
- * - Brightness: Controls overall lighting intensity and material brightness
- * - Roughness: Controls surface shininess and material roughness
- * - Normal Intensity: Controls normal map bump strength
- * - Wireframe: Shows mesh structure in wireframe mode
- *
- * The component stores original material properties when first mounted to allow
- * non-destructive adjustments. Material changes are applied using the stored originals
- * to prevent cumulative changes that could distort the model's appearance.
- */
-function ModelWithControls({
-  gltf,
-  brightness,
-  roughness,
-  normalIntensity,
-  showTexture,
-  wireframe,
-  isUpscaled = false,
-}: {
-  gltf: GLTF;
-  brightness: number;
-  roughness: number;
-  normalIntensity: number;
-  showTexture: boolean;
-  wireframe: boolean;
-  isUpscaled?: boolean;
-}) {
-  // Reference to the scene to update materials
-  const modelRef = useRef<THREE.Group>(null);
-  // Store original material properties including all PBR maps
-  const originalMaterials = useRef<
-    Map<
-      THREE.Material,
-      {
-        color?: THREE.Color;
-        emissive?: THREE.Color;
-        map?: THREE.Texture | null;
-        normalMap?: THREE.Texture | null;
-        roughnessMap?: THREE.Texture | null;
-        metalnessMap?: THREE.Texture | null;
-        aoMap?: THREE.Texture | null;
-        wireframe?: boolean;
-        vertexColors?: boolean;
-      }
-    >
-  >(new Map());
-
-  // Track if initial material processing is complete
-  const [materialsInitialized, setMaterialsInitialized] = useState(false);
-
-  // Map brightness from 0-100 to 0-2 range (allows for brightening)
-  const actualBrightness = brightness / 50;
-  // Map roughness from 0-100 to 0.0-1.0 range
-  const actualRoughness = roughness / 100;
-  // Map normal intensity from 0-100 to 0.0-1.0 range
-  const actualNormalIntensity = normalIntensity / 100;
-
-  // Reset materials map when component is remounted with a different model
-  useEffect(() => {
-    // Clear the materials map when the component mounts
-    originalMaterials.current = new Map();
-    setMaterialsInitialized(false);
-  }, [gltf]);
-
-  // Function to apply material adjustments
-  const applyMaterialAdjustments = useCallback(() => {
-    if (!modelRef.current) return;
-
-    modelRef.current.traverse((child: THREE.Object3D) => {
-      if (child instanceof THREE.Mesh && child.material) {
-        const applyToMaterial = (mat: THREE.Material) => {
-          const original = originalMaterials.current.get(mat);
-          if (!original) return;
-
-          // Handle wireframe mode first since it affects color
-          if ('wireframe' in mat && 'color' in mat) {
-            const wireframeMat = mat as THREE.MeshStandardMaterial;
-            wireframeMat.wireframe = wireframe;
-
-            if (wireframe) {
-              // Set wireframe color to white
-              wireframeMat.color.setHex(0xffffff); // White wireframe
-
-              // Add emissive glow for brightness
-              if ('emissive' in wireframeMat) {
-                const emissive = wireframeMat.emissive;
-                if (emissive) {
-                  emissive.setHex(0xffffff); // White emissive glow
-                }
-              }
-
-              // Set line width for thicker lines (where supported)
-              if ('wireframeLinewidth' in wireframeMat) {
-                wireframeMat.wireframeLinewidth = 3;
-              }
-
-              // Increase opacity for better visibility
-              if ('opacity' in wireframeMat) {
-                wireframeMat.opacity = 1.0;
-              }
-            } else {
-              // Restore original color when wireframe is disabled
-              if (original.color) {
-                wireframeMat.color.copy(original.color);
-              }
-
-              // Reset emissive
-              if ('emissive' in wireframeMat && original.emissive) {
-                const emissive = wireframeMat.emissive;
-                if (emissive) {
-                  emissive.copy(original.emissive);
-                }
-              } else if ('emissive' in wireframeMat) {
-                const emissive = wireframeMat.emissive;
-                if (emissive) {
-                  emissive.setHex(0x000000);
-                }
-              }
-
-              // Reset wireframe line width
-              if ('wireframeLinewidth' in wireframeMat) {
-                wireframeMat.wireframeLinewidth = 1;
-              }
-            }
-          }
-
-          // Only apply brightness adjustments if not in wireframe mode
-          if (!wireframe) {
-            // Apply to color property if it exists
-            if ('color' in mat && original.color) {
-              const colorMat = mat as THREE.MeshStandardMaterial;
-
-              // Check if model uses texture maps or vertex colors
-              const hasTextureMap =
-                original.map !== null && original.map !== undefined;
-              const hasVertexColors = original.vertexColors === true;
-
-              // In textureless mode for models with baked base colors (like upscaled models),
-              // use neutral gray as the base instead of original color
-              const useGrayBase =
-                !showTexture && !hasTextureMap && !hasVertexColors;
-              const baseColor = useGrayBase
-                ? { r: 0.533, g: 0.533, b: 0.533 } // 0x888888 in normalized RGB
-                : original.color;
-
-              // Apply brightness
-              const r = Math.min(
-                1,
-                Math.max(0, baseColor.r * actualBrightness),
-              );
-              const g = Math.min(
-                1,
-                Math.max(0, baseColor.g * actualBrightness),
-              );
-              const b = Math.min(
-                1,
-                Math.max(0, baseColor.b * actualBrightness),
-              );
-
-              colorMat.color.setRGB(r, g, b);
-            }
-
-            // Apply to emissive property if it exists (affects brightness)
-            if ('emissive' in mat && original.emissive) {
-              const emissiveMat = mat as THREE.MeshStandardMaterial;
-              // Use brightness for emissive intensity
-              // Upscaled models with textures need much stronger emissive to appear correctly lit
-              const baseIntensity = Math.max(0, (actualBrightness - 1) * 0.2);
-              const intensity = isUpscaled ? baseIntensity * 3 : baseIntensity;
-              emissiveMat.emissive.setRGB(intensity, intensity, intensity);
-            }
-          }
-
-          // Handle PBR material properties
-          if ('roughness' in mat || 'normalMap' in mat || 'map' in mat) {
-            const pbrMat = mat as THREE.MeshStandardMaterial;
-
-            // Handle albedo/diffuse map (show/hide based on showTexture)
-            // Only modify the map when toggling textures - don't clear if we have no stored original
-            if ('map' in pbrMat) {
-              if (!showTexture) {
-                // Explicitly textureless mode - clear the map
-                pbrMat.map = null;
-              } else if (original.map) {
-                // Restore original map if we have one stored
-                pbrMat.map = original.map;
-              }
-              // If showTexture is true and no original.map, leave the current map alone
-            }
-
-            // Handle vertex colors (SAM-3D models use vertex colors instead of textures)
-            if ('vertexColors' in pbrMat) {
-              if (!showTexture) {
-                // Explicitly textureless mode - disable vertex colors
-                pbrMat.vertexColors = false;
-              } else if (original.vertexColors !== undefined) {
-                // Restore original vertex colors setting
-                pbrMat.vertexColors = original.vertexColors;
-              }
-              // If showTexture is true and no original setting, leave it alone
-            }
-
-            if ('aoMap' in pbrMat) {
-              pbrMat.aoMap = null;
-            }
-
-            // Handle roughness - use slider value
-            if ('roughness' in pbrMat) {
-              pbrMat.roughness = actualRoughness;
-            }
-
-            // Apply normal map intensity (only if provided)
-            if (
-              actualNormalIntensity !== undefined &&
-              'normalMap' in pbrMat &&
-              'normalScale' in pbrMat
-            ) {
-              pbrMat.normalScale = new THREE.Vector2(
-                actualNormalIntensity,
-                actualNormalIntensity,
-              );
-            }
-
-            // Ensure material knows it needs to update
-            pbrMat.needsUpdate = true;
-          }
-        };
-
-        if (Array.isArray(child.material)) {
-          child.material.forEach(applyToMaterial);
-        } else {
-          applyToMaterial(child.material);
-        }
-      }
-    });
-  }, [
-    actualBrightness,
-    actualRoughness,
-    actualNormalIntensity,
-    showTexture,
-    wireframe,
-    originalMaterials,
-    isUpscaled,
-  ]);
-
-  // When component mounts, store original material properties including PBR maps
-  useEffect(() => {
-    if (modelRef.current && originalMaterials.current.size === 0) {
-      // Force refresh to ensure refs are current
-      const scene = modelRef.current;
-
-      scene.traverse((child: THREE.Object3D) => {
-        if (child instanceof THREE.Mesh && child.material) {
-          const storeMaterial = (mat: THREE.MeshStandardMaterial) => {
-            // Skip if we've already stored this material
-            if (originalMaterials.current.has(mat)) return;
-
-            const originalProps: {
-              color?: THREE.Color;
-              emissive?: THREE.Color;
-              map?: THREE.Texture | null;
-              normalMap?: THREE.Texture | null;
-              roughnessMap?: THREE.Texture | null;
-              metalnessMap?: THREE.Texture | null;
-              aoMap?: THREE.Texture | null;
-              wireframe?: boolean;
-              vertexColors?: boolean;
-            } = {};
-
-            // Save color if material has it
-            if ('color' in mat && mat.color instanceof THREE.Color) {
-              originalProps.color = mat.color.clone();
-            }
-
-            // Save emissive if material has it
-            if ('emissive' in mat && mat.emissive instanceof THREE.Color) {
-              originalProps.emissive = mat.emissive.clone();
-            }
-
-            // Save all PBR texture maps if material has them
-            if ('map' in mat) {
-              originalProps.map = mat.map || null;
-            }
-
-            if ('normalMap' in mat) {
-              originalProps.normalMap = mat.normalMap || null;
-            }
-
-            if ('roughnessMap' in mat) {
-              originalProps.roughnessMap = mat.roughnessMap || null;
-            }
-
-            if ('metalnessMap' in mat) {
-              originalProps.metalnessMap = mat.metalnessMap || null;
-            }
-
-            if ('aoMap' in mat) {
-              originalProps.aoMap = mat.aoMap || null;
-            }
-
-            // Save vertexColors if material has it (SAM-3D uses vertex colors)
-            if ('vertexColors' in mat) {
-              originalProps.vertexColors = mat.vertexColors;
-            }
-
-            // Save wireframe if material has it
-            if ('wireframe' in mat) {
-              originalProps.wireframe = mat.wireframe || false;
-            }
-
-            originalMaterials.current.set(mat, originalProps);
-          };
-
-          if (Array.isArray(child.material)) {
-            child.material.forEach(storeMaterial);
-          } else {
-            storeMaterial(child.material);
-          }
-        }
-      });
-
-      // Mark materials as initialized so we can apply settings immediately
-      setMaterialsInitialized(true);
-
-      // Schedule an immediate application of material adjustments
-      requestAnimationFrame(() => {
-        applyMaterialAdjustments();
-      });
-    }
-  }, [gltf, applyMaterialAdjustments]);
-
-  // Apply settings whenever they change
-  useEffect(() => {
-    if (materialsInitialized) {
-      applyMaterialAdjustments();
-    }
-  }, [materialsInitialized, applyMaterialAdjustments]);
-
-  // Force an update on each render to ensure proper application of settings
-  useEffect(() => {
-    return () => {
-      // Clean up function to handle any potential memory leaks
-      originalMaterials.current.clear();
-    };
-  }, []);
-
-  return <primitive ref={modelRef} object={gltf.scene} />;
-}
-
-// Function to calculate polygon count from a 3D model
-function calculatePolygonCount(gltfModel: GLTF): number {
-  let totalPolygons = 0;
-
-  gltfModel.scene.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.geometry) {
-      const geometry = child.geometry;
-
-      if (geometry.index) {
-        // If geometry has an index, count triangles from index
-        totalPolygons += geometry.index.count / 3;
-      } else if (geometry.attributes.position) {
-        // If no index, count triangles from position attribute
-        totalPolygons += geometry.attributes.position.count / 3;
-      }
-    }
-  });
-
-  return Math.floor(totalPolygons);
-}
+const NO_PBR_MAPS: DetectedPbrMaps = {
+  albedo: false,
+  normal: false,
+  roughness: false,
+  metallic: false,
+  ao: false,
+};
 
 /**
  * MeshPreview - Displays a 3D model with interactive controls for visual adjustments.
@@ -463,13 +100,7 @@ export function MeshPreview({ meshId }: { meshId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   // Check if model has PBR maps available
-  const [hasPBRMaps, setHasPBRMaps] = useState({
-    albedo: false,
-    normal: false,
-    roughness: false,
-    metallic: false,
-    ao: false,
-  });
+  const [hasPBRMaps, setHasPBRMaps] = useState<DetectedPbrMaps>(NO_PBR_MAPS);
 
   // Fetch mesh data and blob early so it can be used by effects below
   const {
@@ -508,244 +139,42 @@ export function MeshPreview({ meshId }: { meshId: string }) {
     setGltf(null);
     setPolygonCount(undefined);
     setError(null);
-    setHasPBRMaps({
-      albedo: false,
-      normal: false,
-      roughness: false,
-      metallic: false,
-      ao: false,
-    });
+    setHasPBRMaps(NO_PBR_MAPS);
   }, [meshId, isUpscaled, meshData?.prompt.model]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadMesh = async (meshBlob: Blob) => {
       try {
-        const fileType = meshData?.file_type || 'glb';
-        const arrayBuffer = await meshBlob.arrayBuffer();
+        const loaded = await loadMeshBlobAsGltf(
+          meshBlob,
+          meshData?.file_type || 'glb',
+        );
+        if (cancelled) return;
 
-        if (fileType === 'stl') {
-          // Handle STL files
-          const loader = new STLLoader();
-          const geometry = loader.parse(arrayBuffer);
-
-          // Center the geometry
-          geometry.center();
-          geometry.computeVertexNormals();
-
-          // Create a mesh with the STL geometry
-          const material = new THREE.MeshStandardMaterial({
-            color: 0x888888,
-            metalness: 0.6,
-            roughness: 0.3,
-          });
-          const stlMesh = new THREE.Mesh(geometry, material);
-
-          // Create a GLTF-like structure for compatibility
-          const scene = new THREE.Group();
-          scene.add(stlMesh);
-
-          const mockGltf: GLTF = {
-            scene: scene,
-            scenes: [scene],
-            cameras: [],
-            animations: [],
-            asset: {},
-            parser: {} as GLTFParser,
-            userData: {},
-          };
-
-          setGltf(mockGltf);
-          setPolygonCount(calculatePolygonCount(mockGltf));
-        } else if (fileType === 'obj') {
-          // Handle OBJ files
-          try {
-            const loader = new OBJLoader();
-            const objText = new TextDecoder().decode(arrayBuffer);
-            const objGroup = loader.parse(objText);
-
-            // Create a GLTF-like structure for compatibility
-            const mockGltf: GLTF = {
-              scene: objGroup,
-              scenes: [objGroup],
-              cameras: [],
-              animations: [],
-              asset: {},
-              parser: {} as GLTFParser,
-              userData: {},
-            };
-
-            setGltf(mockGltf);
-            setPolygonCount(calculatePolygonCount(mockGltf));
-          } catch {
-            // Fallback to GLB loading if OBJ fails
-            await loadAsGLB(arrayBuffer);
-          }
-        } else if (fileType === 'fbx') {
-          // Handle FBX files (binary format from Tripo API)
-          try {
-            const loader = new FBXLoader();
-            // FBX files from Tripo are binary format, not text
-            // Use the binary data directly
-            const fbxGroup = loader.parse(arrayBuffer, '');
-
-            // Scale down FBX models (they tend to be very large)
-            fbxGroup.scale.setScalar(0.01); // Scale to 1% of original size
-
-            // Center the model
-            const box = new THREE.Box3().setFromObject(fbxGroup);
-            const center = box.getCenter(new THREE.Vector3());
-            fbxGroup.position.sub(center);
-
-            // Convert FBX materials to MeshStandardMaterial for PBR support
-            fbxGroup.traverse((child) => {
-              if (child instanceof THREE.Mesh && child.material) {
-                const materials = Array.isArray(child.material)
-                  ? child.material
-                  : [child.material];
-
-                const convertedMaterials = materials.map((mat) => {
-                  // If it's already MeshStandardMaterial, keep it
-                  if (mat instanceof THREE.MeshStandardMaterial) {
-                    return mat;
-                  }
-
-                  // Convert other material types to MeshStandardMaterial
-                  const standardMat = new THREE.MeshStandardMaterial();
-
-                  // Copy common properties
-                  if ('color' in mat && mat.color) {
-                    standardMat.color = mat.color.clone();
-                  }
-                  if ('map' in mat && mat.map) {
-                    standardMat.map = mat.map;
-                  }
-                  if ('normalMap' in mat && mat.normalMap) {
-                    standardMat.normalMap = mat.normalMap;
-                  }
-                  if ('emissive' in mat && mat.emissive) {
-                    standardMat.emissive = mat.emissive.clone();
-                  }
-                  if ('emissiveMap' in mat && mat.emissiveMap) {
-                    standardMat.emissiveMap = mat.emissiveMap;
-                  }
-
-                  // Set default PBR values for converted materials
-                  standardMat.roughness = 0.5; // Default roughness
-                  standardMat.metalness = 0.0; // Default metalness
-
-                  // Copy other common properties
-                  standardMat.transparent = mat.transparent;
-                  standardMat.opacity = mat.opacity;
-                  standardMat.side = mat.side;
-
-                  // Dispose of the original material to free WebGL resources
-                  mat.dispose();
-
-                  return standardMat;
-                });
-
-                // Apply the converted materials
-                if (Array.isArray(child.material)) {
-                  child.material = convertedMaterials;
-                } else {
-                  child.material = convertedMaterials[0];
-                }
-              }
-            });
-
-            // Create a GLTF-like structure for compatibility
-            const mockGltf: GLTF = {
-              scene: fbxGroup,
-              scenes: [fbxGroup],
-              cameras: [],
-              animations: [],
-              asset: {},
-              parser: {} as GLTFParser,
-              userData: {},
-            };
-
-            setGltf(mockGltf);
-            setPolygonCount(calculatePolygonCount(mockGltf));
-          } catch {
-            // Fallback to GLB loading if FBX fails
-            await loadAsGLB(arrayBuffer);
-          }
-        } else {
-          await loadAsGLB(arrayBuffer);
-        }
-
-        // Helper function to load as GLB
-        async function loadAsGLB(buffer: ArrayBuffer) {
-          const loader = new GLTFLoader();
-          return new Promise<void>((resolve, reject) => {
-            loader.parse(
-              buffer,
-              '',
-              (parsedGltf) => {
-                // Center the model
-                const box = new THREE.Box3().setFromObject(parsedGltf.scene);
-                const center = box.getCenter(new THREE.Vector3());
-                parsedGltf.scene.position.sub(center);
-
-                setGltf(parsedGltf);
-                setPolygonCount(calculatePolygonCount(parsedGltf));
-
-                // Analyze the loaded model to detect available PBR maps
-                const detectedMaps = {
-                  albedo: false,
-                  normal: false,
-                  roughness: false,
-                  metallic: false,
-                  ao: false,
-                };
-
-                parsedGltf.scene.traverse((child) => {
-                  if (child instanceof THREE.Mesh && child.material) {
-                    const materials = Array.isArray(child.material)
-                      ? child.material
-                      : [child.material];
-
-                    materials.forEach((mat) => {
-                      if ('map' in mat && mat.map) {
-                        detectedMaps.albedo = true;
-                      }
-                      if ('normalMap' in mat && mat.normalMap) {
-                        detectedMaps.normal = true;
-                      }
-                      if ('roughnessMap' in mat && mat.roughnessMap) {
-                        detectedMaps.roughness = true;
-                      }
-                      if ('metalnessMap' in mat && mat.metalnessMap) {
-                        detectedMaps.metallic = true;
-                      }
-                      if ('aoMap' in mat && mat.aoMap) {
-                        detectedMaps.ao = true;
-                      }
-                    });
-                  }
-                });
-
-                setHasPBRMaps(detectedMaps);
-                resolve();
-              },
-              (error) => {
-                setError('Failed to load GLB mesh');
-                reject(error);
-              },
-            );
-          });
-        }
-
+        setGltf(loaded.gltf);
+        setPolygonCount(loaded.polygonCount);
+        setHasPBRMaps(loaded.pbrMaps);
         // Note: Default values are set by useEffect when meshId changes
         setViewMode('textured');
-      } catch {
-        setError('Failed to process mesh');
+      } catch (loadError) {
+        if (cancelled) return;
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : 'Failed to process mesh',
+        );
       }
     };
 
     if (mesh && meshData) {
       loadMesh(mesh);
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [mesh, meshData]);
 
   const handleViewModeChange = (mode: ViewMode) => {
@@ -792,7 +221,10 @@ export function MeshPreview({ meshId }: { meshId: string }) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-adam-text-primary">
         <HeartCrack className="h-10 w-10" />
-        <span>3D Object failed to generate</span>
+        <span>{error ?? '3D Object failed to generate'}</span>
+        <span className="text-sm text-adam-neutral-400">
+          Use Retry on the message in the chat to try again
+        </span>
       </div>
     );
   }
@@ -801,7 +233,7 @@ export function MeshPreview({ meshId }: { meshId: string }) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-adam-text-primary">
         <Frown className="h-10 w-10" />
-        <span>3D Object not found</span>
+        <span>This 3D object's file is no longer available</span>
       </div>
     );
   }
