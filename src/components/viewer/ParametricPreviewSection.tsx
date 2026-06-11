@@ -1,7 +1,7 @@
 import { ImageGallery } from '@/components/viewer/ImageGallery';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import Loader from '@/components/viewer/Loader';
-import { OpenSCADPreview } from './OpenSCADViewer';
+import { LazyOpenSCADPreview } from './LazyOpenSCADPreview';
 import OpenSCADError from '@/lib/OpenSCADError';
 import { DxfExporter } from '@/utils/downloadUtils';
 
@@ -38,7 +38,7 @@ export function ParametricPreviewSection({
             <ImageGallery imageIds={message.content.images} />
           )}
           {message?.content.artifact?.code ? (
-            <OpenSCADPreview
+            <LazyOpenSCADPreview
               scadCode={message.content.artifact.code}
               color={color}
               onOutputChange={onOutputChange}

@@ -1,4 +1,4 @@
-import { MeshPreview } from './MeshPreview';
+import { LazyMeshPreview } from './LazyMeshPreview';
 import { ImageGallery } from './ImageGallery';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import { useConversation } from '@/contexts/ConversationContext';
@@ -31,7 +31,7 @@ export function CreativePreviewSection({
             <ImageGallery imageIds={message.content.images} />
           )}
           {message?.content.mesh && (
-            <MeshPreview meshId={message.content.mesh.id} />
+            <LazyMeshPreview meshId={message.content.mesh.id} />
           )}
         </div>
       )}
