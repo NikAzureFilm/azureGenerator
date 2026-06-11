@@ -15,6 +15,7 @@ import {
   extractPythonSource,
 } from './build123dSource.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
+import { checkRateLimit } from '../_shared/rateLimit.ts';
 
 initSentry();
 
@@ -29,6 +30,10 @@ const TEXT_TO_CAD_WORKER_TOKEN = Deno.env
   .get('TEXT_TO_CAD_WORKER_TOKEN')
   ?.trim();
 const MAX_TEXT_TO_CAD_ATTEMPTS = 2;
+const RATE_LIMIT_MAX_REQUESTS = Number(
+  Deno.env.get('CAD_CHAT_RATE_LIMIT') ?? '10',
+);
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -564,6 +569,17 @@ Deno.serve(async (req) => {
 
   if (!userData.user.email) {
     return jsonResponse({ error: 'User email missing' }, 400);
+  }
+
+  const rate = checkRateLimit(`cad-chat:${userData.user.id}`, {
+    limit: RATE_LIMIT_MAX_REQUESTS,
+    windowMs: RATE_LIMIT_WINDOW_MS,
+  });
+  if (!rate.allowed) {
+    return jsonResponse(
+      { error: 'rate_limited', retryAfterSeconds: rate.retryAfterSeconds },
+      429,
+    );
   }
 
   const {

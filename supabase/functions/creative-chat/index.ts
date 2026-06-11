@@ -28,8 +28,13 @@ import {
 } from '../_shared/messageUtils.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
+import { checkRateLimit } from '../_shared/rateLimit.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
+const RATE_LIMIT_MAX_REQUESTS = Number(
+  Deno.env.get('CREATIVE_CHAT_RATE_LIMIT') ?? '20',
+);
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 // Initialize Sentry for error logging
 initSentry();
@@ -421,6 +426,23 @@ Deno.serve(async (req) => {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+  }
+
+  const rate = checkRateLimit(`creative-chat:${userData.user.id}`, {
+    limit: RATE_LIMIT_MAX_REQUESTS,
+    windowMs: RATE_LIMIT_WINDOW_MS,
+  });
+  if (!rate.allowed) {
+    return new Response(
+      JSON.stringify({
+        error: 'rate_limited',
+        retryAfterSeconds: rate.retryAfterSeconds,
+      }),
+      {
+        status: 429,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    );
   }
 
   const tokenLedger = new RefundableTokenLedger(billing);
