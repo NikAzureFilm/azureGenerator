@@ -14,21 +14,36 @@ const PAGE_SIZE = 50;
 const KIND_OPTIONS = new Set(['all', 'cad', 'parametric', 'mesh', 'image']);
 const STATUS_OPTIONS = new Set(['all', 'success', 'failure', 'pending']);
 
+// Accepts only the YYYY-MM-DD strings produced by <input type="date">.
+function parseDateParam(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return undefined;
+  return Number.isNaN(new Date(`${trimmed}T00:00:00Z`).getTime())
+    ? undefined
+    : trimmed;
+}
+
 function generationsHref({
   q,
   kind,
   status,
+  from,
+  to,
   page,
 }: {
   q?: string;
   kind: string;
   status: string;
+  from?: string;
+  to?: string;
   page: number;
 }): string {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (kind !== 'all') params.set('kind', kind);
   if (status !== 'all') params.set('status', status);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
   if (page > 1) params.set('page', String(page));
   const qs = params.toString();
   return qs ? `/generations?${qs}` : '/generations';
@@ -50,12 +65,18 @@ export default async function GenerationsPage({
     sp.status && STATUS_OPTIONS.has(sp.status.toLowerCase())
       ? sp.status.toLowerCase()
       : 'all';
+  const fromDate = parseDateParam(sp.from);
+  const toDate = parseDateParam(sp.to);
   const page = Math.max(1, Number.parseInt(sp.page ?? '1', 10) || 1);
 
   const { rows, total } = await fetchGenerationsPage({
     search: q ?? null,
     kind: kind === 'all' ? null : kind,
     status: status === 'all' ? null : status,
+    // Calendar dates become inclusive UTC day bounds (timestamps in the
+    // table are timestamptz; the dashboard reports in UTC throughout).
+    from: fromDate ? `${fromDate}T00:00:00.000Z` : null,
+    to: toDate ? `${toDate}T23:59:59.999Z` : null,
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
   });
@@ -90,10 +111,24 @@ export default async function GenerationsPage({
           <option value="failure">Failure</option>
           <option value="pending">Pending</option>
         </select>
+        <input
+          type="date"
+          name="from"
+          defaultValue={fromDate ?? ''}
+          title="From date (UTC, inclusive)"
+          aria-label="From date"
+        />
+        <input
+          type="date"
+          name="to"
+          defaultValue={toDate ?? ''}
+          title="To date (UTC, inclusive)"
+          aria-label="To date"
+        />
         <button className="btn" type="submit">
           Search
         </button>
-        {(q || kind !== 'all' || status !== 'all') && (
+        {(q || kind !== 'all' || status !== 'all' || fromDate || toDate) && (
           <Link className="btn" href="/generations">
             Clear
           </Link>
@@ -206,7 +241,16 @@ export default async function GenerationsPage({
 
       <div className="pager">
         {page > 1 ? (
-          <Link href={generationsHref({ q, kind, status, page: page - 1 })}>
+          <Link
+            href={generationsHref({
+              q,
+              kind,
+              status,
+              from: fromDate,
+              to: toDate,
+              page: page - 1,
+            })}
+          >
             Prev
           </Link>
         ) : (
@@ -216,7 +260,16 @@ export default async function GenerationsPage({
           Page {num(page)} of {num(pageCount)}
         </span>
         {page < pageCount ? (
-          <Link href={generationsHref({ q, kind, status, page: page + 1 })}>
+          <Link
+            href={generationsHref({
+              q,
+              kind,
+              status,
+              from: fromDate,
+              to: toDate,
+              page: page + 1,
+            })}
+          >
             Next
           </Link>
         ) : (

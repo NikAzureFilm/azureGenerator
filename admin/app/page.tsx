@@ -6,6 +6,7 @@ import {
   fetchRecentGenerations,
   fetchTopUsers,
   fetchCostBreakdown,
+  fetchCadFailureBreakdown,
   tokenCostUsd,
   tokenValueUsd,
 } from '@/lib/metrics';
@@ -25,15 +26,18 @@ export const revalidate = 0;
 export default async function DashboardPage() {
   const admin = await requireAdmin();
 
-  const [overview, daily, recent, topUsers, stripe, cost] = await Promise.all([
-    fetchOverview(),
-    fetchDailyActivity(30),
-    fetchRecentGenerations(30),
-    fetchTopUsers(10),
-    getStripeMetrics(),
-    // Resilient: the Overview still renders if admin_explorer.sql isn't applied.
-    fetchCostBreakdown().catch(() => null),
-  ]);
+  const [overview, daily, recent, topUsers, stripe, cost, cadFailures] =
+    await Promise.all([
+      fetchOverview(),
+      fetchDailyActivity(30),
+      fetchRecentGenerations(30),
+      fetchTopUsers(10),
+      getStripeMetrics(),
+      // Resilient: the Overview still renders if admin_explorer.sql isn't applied.
+      fetchCostBreakdown().catch(() => null),
+      // Already returns null on query errors; the catch covers thrown ones.
+      fetchCadFailureBreakdown(30).catch(() => null),
+    ]);
 
   const { users, generations, tokens, revenue } = overview;
 
@@ -288,6 +292,31 @@ export default async function DashboardPage() {
         <Kpi label="Conversations" value={num(generations.conversations)} />
         <Kpi label="Messages" value={num(generations.messages)} />
         <Kpi label="Prompt-helper runs" value={num(generations.prompts)} />
+      </div>
+
+      <div className="cols-2 grid" style={{ marginTop: 14 }}>
+        <div className="card">
+          <div className="label">CAD failures by model (30d)</div>
+          <div style={{ marginTop: 10 }}>
+            {cadFailures === null ? (
+              <div className="muted">—</div>
+            ) : cadFailures.length === 0 ? (
+              <div className="muted">No CAD jobs in the last 30 days.</div>
+            ) : (
+              cadFailures.map((row) => (
+                <div className="kv" key={row.model}>
+                  <span className="k mono">{row.model}</span>
+                  <span className="mono">
+                    {num(row.failures)} of {num(row.total)} failed ·{' '}
+                    <span className={row.failures > 0 ? 'down' : 'up'}>
+                      {pct(row.failures / row.total)}
+                    </span>
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <div style={{ marginTop: 14 }}>

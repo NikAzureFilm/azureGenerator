@@ -312,26 +312,44 @@ export async function fetchGenerationsPage({
   search = null,
   kind = null,
   status = null,
+  from = null,
+  to = null,
   limit = 50,
   offset = 0,
 }: {
   search?: string | null;
   kind?: string | null;
   status?: string | null;
+  // Inclusive created_at bounds as ISO timestamps.
+  from?: string | null;
+  to?: string | null;
   limit?: number;
   offset?: number;
 }): Promise<GenerationsPage> {
   const supa = getAdminClient();
+  const fromBound = from || undefined;
+  const toBound = to || undefined;
 
   // Parametric (OpenSCAD) artifacts live in message content, which the
   // admin_generations_page RPC doesn't know about — always served directly.
   if (kind?.toLowerCase() === 'parametric') {
-    return fetchGenerationsPageDirect({ search, kind, status, limit, offset });
+    return fetchGenerationsPageDirect({
+      search,
+      kind,
+      status,
+      from,
+      to,
+      limit,
+      offset,
+    });
   }
 
   // Only send p_status when filtering: databases still on the 4-arg version
   // of admin_generations_page keep matching for the common unfiltered path
   // (a status-filtered call errors there and uses the direct fallback).
+  // p_from/p_to work the same way: databases without the date-filter patch
+  // (admin/sql/patches/2026-06-11-generations-date-filter.sql) reject the
+  // extra args and the direct fallback applies the dates instead.
   const args: Record<string, unknown> = {
     p_search: search,
     p_kind: kind,
@@ -339,6 +357,8 @@ export async function fetchGenerationsPage({
     p_offset: offset,
   };
   if (status) args.p_status = status;
+  if (fromBound) args.p_from = fromBound;
+  if (toBound) args.p_to = toBound;
 
   // For the "all kinds" view, over-fetch the RPC page so parametric rows can
   // be merged into the correct sort positions before slicing.
@@ -351,7 +371,15 @@ export async function fetchGenerationsPage({
 
   const { data, error } = await supa.rpc('admin_generations_page', args);
   if (error) {
-    return fetchGenerationsPageDirect({ search, kind, status, limit, offset });
+    return fetchGenerationsPageDirect({
+      search,
+      kind,
+      status,
+      from,
+      to,
+      limit,
+      offset,
+    });
   }
   const rows = (data ?? []) as GenerationRow[];
   if (!mergeParametric) {
@@ -369,6 +397,8 @@ export async function fetchGenerationsPage({
     window,
     undefined,
     status?.toLowerCase() || undefined,
+    fromBound,
+    toBound,
   ).catch(() => [] as GenerationRow[]);
   const emailMap = await fetchUserEmailMap(parametric.map((r) => r.user_id));
   const merged = [
@@ -380,7 +410,9 @@ export async function fetchGenerationsPage({
     (a, b) =>
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
-  const total = rpcTotal + (await countParametricArtifacts(supa, status));
+  const total =
+    rpcTotal +
+    (await countParametricArtifacts(supa, status, fromBound, toBound));
   return {
     rows: await addGenerationEconomics(
       supa,
@@ -489,37 +521,73 @@ async function fetchGenerationsPageDirect({
   search = null,
   kind = null,
   status = null,
+  from = null,
+  to = null,
   limit = 50,
   offset = 0,
 }: {
   search?: string | null;
   kind?: string | null;
   status?: string | null;
+  from?: string | null;
+  to?: string | null;
   limit?: number;
   offset?: number;
 }): Promise<GenerationsPage> {
   const supa = getAdminClient();
   const requestedKind = kind?.toLowerCase();
   const requestedStatus = status?.toLowerCase() || undefined;
+  const fromBound = from || undefined;
+  const toBound = to || undefined;
   const queryLimit = Math.min(Math.max(limit + offset, 100), 500);
   const jobs: Promise<GenerationRow[]>[] = [];
 
   if (!requestedKind || requestedKind === 'cad') {
-    jobs.push(fetchCadRowsDirect(supa, queryLimit, undefined, requestedStatus));
+    jobs.push(
+      fetchCadRowsDirect(
+        supa,
+        queryLimit,
+        undefined,
+        requestedStatus,
+        fromBound,
+        toBound,
+      ),
+    );
   }
   if (!requestedKind || requestedKind === 'mesh') {
     jobs.push(
-      fetchMeshRowsDirect(supa, queryLimit, undefined, requestedStatus),
+      fetchMeshRowsDirect(
+        supa,
+        queryLimit,
+        undefined,
+        requestedStatus,
+        fromBound,
+        toBound,
+      ),
     );
   }
   if (!requestedKind || requestedKind === 'image') {
     jobs.push(
-      fetchImageRowsDirect(supa, queryLimit, undefined, requestedStatus),
+      fetchImageRowsDirect(
+        supa,
+        queryLimit,
+        undefined,
+        requestedStatus,
+        fromBound,
+        toBound,
+      ),
     );
   }
   if (requestedKind === 'parametric') {
     jobs.push(
-      fetchParametricRowsDirect(supa, queryLimit, undefined, requestedStatus),
+      fetchParametricRowsDirect(
+        supa,
+        queryLimit,
+        undefined,
+        requestedStatus,
+        fromBound,
+        toBound,
+      ),
     );
   } else if (!requestedKind) {
     // Merged view: a parametric failure shouldn't blank the other kinds.
@@ -529,6 +597,8 @@ async function fetchGenerationsPageDirect({
         queryLimit,
         undefined,
         requestedStatus,
+        fromBound,
+        toBound,
       ).catch(() => [] as GenerationRow[]),
     );
   }
@@ -703,11 +773,108 @@ async function addLegacyTokenMatches(
   }));
 }
 
+// --- Per-generation provider usage (detail-page debug view) ----------------
+export type GenerationUsageRow = {
+  id: number;
+  created_at: string;
+  function_name: string;
+  operation: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_input_tokens: number | null;
+  cost_usd: number;
+  status: string;
+};
+
+// provider_usage rows logged for one generation, matched on reference_id
+// (edge functions store the cad job / mesh / message id there). Returns null
+// when the table can't be read so the detail page can degrade gracefully.
+export async function fetchGenerationUsage(
+  referenceIds: Array<string | null | undefined>,
+): Promise<GenerationUsageRow[] | null> {
+  const supa = getAdminClient();
+  const ids = [...new Set(referenceIds.filter(Boolean) as string[])];
+  if (ids.length === 0) return [];
+  const { data, error } = await supa
+    .from('provider_usage')
+    .select(
+      'id,created_at,function_name,operation,provider,model,input_tokens,output_tokens,cached_input_tokens,cost_usd,status',
+    )
+    .in('reference_id', ids)
+    .order('created_at', { ascending: true });
+  if (error) return null;
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: row.id as number,
+    created_at: row.created_at as string,
+    function_name: (row.function_name as string | null) ?? '',
+    operation: (row.operation as string | null) ?? 'unknown',
+    provider: (row.provider as string | null) ?? 'unknown',
+    model: (row.model as string | null) ?? 'unknown',
+    input_tokens: (row.input_tokens as number | null) ?? null,
+    output_tokens: (row.output_tokens as number | null) ?? null,
+    cached_input_tokens: (row.cached_input_tokens as number | null) ?? null,
+    cost_usd: Number(row.cost_usd ?? 0) || 0,
+    status: (row.status as string | null) ?? 'success',
+  }));
+}
+
+// --- CAD failure breakdown (overview) ---------------------------------------
+export type CadFailureBreakdownRow = {
+  model: string;
+  failures: number;
+  total: number;
+};
+
+// CAD job outcomes for the recent window grouped by the model recorded in
+// cad_jobs.prompt (the table has no model column — cad-chat writes the model
+// into the prompt jsonb). Direct query, aggregated here; returns null on any
+// error so the overview can degrade gracefully.
+export async function fetchCadFailureBreakdown(
+  days = 30,
+  maxRows = 2000,
+): Promise<CadFailureBreakdownRow[] | null> {
+  const supa = getAdminClient();
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const { data, error } = await supa
+    .from('cad_jobs')
+    .select('status,prompt')
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(maxRows);
+  if (error) return null;
+
+  const byModel = new Map<string, CadFailureBreakdownRow>();
+  for (const row of (data ?? []) as Array<{
+    status: string | null;
+    prompt: unknown;
+  }>) {
+    const prompt =
+      row.prompt && typeof row.prompt === 'object' && !Array.isArray(row.prompt)
+        ? (row.prompt as Record<string, unknown>)
+        : {};
+    const model =
+      typeof prompt.model === 'string' && prompt.model.trim()
+        ? prompt.model
+        : 'unknown';
+    const entry = byModel.get(model) ?? { model, failures: 0, total: 0 };
+    entry.total += 1;
+    if (row.status === 'failure') entry.failures += 1;
+    byModel.set(model, entry);
+  }
+  return [...byModel.values()].sort(
+    (a, b) => b.failures - a.failures || b.total - a.total,
+  );
+}
+
 async function fetchCadRowsDirect(
   supa: ReturnType<typeof getAdminClient>,
   limit: number,
   userId?: string,
   status?: string,
+  from?: string,
+  to?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('cad_jobs')
@@ -718,6 +885,8 @@ async function fetchCadRowsDirect(
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
   if (status) query = query.eq('status', status);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
   const { data, error } = await query;
   if (error) throw new Error(`cad_jobs fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -750,6 +919,8 @@ async function fetchMeshRowsDirect(
   limit: number,
   userId?: string,
   status?: string,
+  from?: string,
+  to?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('meshes')
@@ -760,6 +931,8 @@ async function fetchMeshRowsDirect(
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
   if (status) query = query.eq('status', status);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
   const { data, error } = await query;
   if (error) throw new Error(`meshes fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -792,6 +965,8 @@ async function fetchImageRowsDirect(
   limit: number,
   userId?: string,
   status?: string,
+  from?: string,
+  to?: string,
 ): Promise<GenerationRow[]> {
   let query = supa
     .from('images')
@@ -802,6 +977,8 @@ async function fetchImageRowsDirect(
     .limit(limit);
   if (userId) query = query.eq('user_id', userId);
   if (status) query = query.eq('status', status);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
   const { data, error } = await query;
   if (error) throw new Error(`images fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -839,6 +1016,8 @@ async function fetchParametricRowsDirect(
   limit: number,
   userId?: string,
   status?: string,
+  from?: string,
+  to?: string,
 ): Promise<GenerationRow[]> {
   // An artifact only exists once generation succeeded.
   if (status && status !== 'success') return [];
@@ -852,6 +1031,8 @@ async function fetchParametricRowsDirect(
     .order('created_at', { ascending: false })
     .limit(limit);
   if (userId) query = query.eq('conversations.user_id', userId);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
   const { data, error } = await query;
   if (error) throw new Error(`parametric fallback: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
@@ -893,13 +1074,18 @@ async function fetchParametricRowsDirect(
 async function countParametricArtifacts(
   supa: ReturnType<typeof getAdminClient>,
   status?: string | null,
+  from?: string,
+  to?: string,
 ): Promise<number> {
   if (status && status.toLowerCase() !== 'success') return 0;
-  const { count, error } = await supa
+  let query = supa
     .from('messages')
     .select('id', { count: 'exact', head: true })
     .eq('role', 'assistant')
     .not('content->artifact', 'is', null);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
+  const { count, error } = await query;
   if (error) return 0;
   return count ?? 0;
 }

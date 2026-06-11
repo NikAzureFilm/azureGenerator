@@ -733,6 +733,12 @@ tr:last-child td {
   outline: none;
   border-color: var(--accent);
 }
+/* date-range filters stay compact instead of flexing like the search box */
+.searchbar input[type='date'] {
+  flex: 0 0 auto;
+  width: auto;
+  color-scheme: dark;
+}
 .select {
   background: var(--bg);
   border: 1px solid var(--border);

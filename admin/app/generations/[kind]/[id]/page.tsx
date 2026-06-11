@@ -1,14 +1,19 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireAdmin } from '@/lib/auth';
-import { generationKindLabel } from '@/lib/content';
+import {
+  generationKindLabel,
+  parseWorkerError,
+  truncateText,
+} from '@/lib/content';
 import {
   fetchCadSourceCode,
   fetchGenerationDetail,
   isGenerationKind,
   pickViewerAsset,
 } from '@/lib/generations';
-import { absoluteTime, relativeTime } from '@/lib/format';
+import { fetchGenerationUsage } from '@/lib/metrics';
+import { absoluteTime, num, relativeTime, usdSmall } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import ModelViewer from '@/app/components/ModelViewer';
 import Nav from '@/app/components/Nav';
@@ -48,8 +53,18 @@ export default async function GenerationDetailPage({
   if (!detail) notFound();
 
   const viewerAsset = pickViewerAsset(detail);
-  const sourceCode = await fetchCadSourceCode(detail);
+  // Provider usage is matched on provider_usage.reference_id, which the edge
+  // functions populate with the generation id (and the message id for chats).
+  const [sourceCode, usage] = await Promise.all([
+    fetchCadSourceCode(detail),
+    fetchGenerationUsage([detail.id, detail.message_id]),
+  ]);
   const succeeded = detail.status === 'success';
+  const workerError = detail.error ? parseWorkerError(detail.error) : null;
+  const usageCostUsd = (usage ?? []).reduce(
+    (sum, row) => sum + row.cost_usd,
+    0,
+  );
 
   return (
     <div className="wrap wide">
@@ -103,8 +118,27 @@ export default async function GenerationDetailPage({
             )}
           </div>
         </div>
-        {detail.error && <div className="error-inline">{detail.error}</div>}
+        {workerError && (
+          <div className="error-inline">
+            {truncateText(workerError.message, 240)}
+          </div>
+        )}
       </div>
+
+      {workerError && (
+        <>
+          <div className="section-title">Failure details</div>
+          <div className="card">
+            <pre className="code-block">{workerError.message}</pre>
+            {workerError.traceback && (
+              <details className="json-details">
+                <summary>Worker traceback</summary>
+                <pre className="code-block">{workerError.traceback}</pre>
+              </details>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="section-title">Output</div>
       {detail.parametric ? (
@@ -240,6 +274,74 @@ export default async function GenerationDetailPage({
         <PromptPreview value={detail.prompt} />
         <JsonBlock value={detail.prompt} summary="Prompt JSON" />
       </div>
+
+      <div className="section-title">Provider usage</div>
+      {usage === null ? (
+        <div className="card muted">
+          Provider usage could not be loaded for this generation.
+        </div>
+      ) : usage.length === 0 ? (
+        <div className="card muted">
+          No provider usage rows reference this generation (older rows predate
+          per-generation cost logging).
+        </div>
+      ) : (
+        <>
+          <div className="card table-card">
+            <table>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Operation</th>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th className="right">In tok</th>
+                  <th className="right">Out tok</th>
+                  <th className="right">Cached</th>
+                  <th className="right">Cost</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usage.map((row) => (
+                  <tr key={row.id}>
+                    <td className="muted" title={absoluteTime(row.created_at)}>
+                      {relativeTime(row.created_at)}
+                    </td>
+                    <td>
+                      {row.operation}
+                      {row.function_name && (
+                        <div className="muted tiny">{row.function_name}</div>
+                      )}
+                    </td>
+                    <td className="muted">{row.provider}</td>
+                    <td className="mono">{row.model}</td>
+                    <td className="right mono">
+                      {row.input_tokens == null ? '-' : num(row.input_tokens)}
+                    </td>
+                    <td className="right mono">
+                      {row.output_tokens == null ? '-' : num(row.output_tokens)}
+                    </td>
+                    <td className="right mono">
+                      {row.cached_input_tokens == null
+                        ? '-'
+                        : num(row.cached_input_tokens)}
+                    </td>
+                    <td className="right mono">{usdSmall(row.cost_usd)}</td>
+                    <td>
+                      <StatusBadge status={row.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="sub" style={{ marginTop: 8 }}>
+            {usage.length} provider call{usage.length === 1 ? '' : 's'} ·{' '}
+            {usdSmall(usageCostUsd)} total · matched by reference id
+          </div>
+        </>
+      )}
     </div>
   );
 }
