@@ -21,6 +21,7 @@ import { useRequestCancellation } from '@/hooks/useRequestCancellation';
 import posthog from 'posthog-js';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
+import { isAssistantGenerationInFlight } from '@/utils/generationStatus';
 
 export function ParametricEditorView() {
   const { conversation, updateConversationAsync } = useConversation();
@@ -65,9 +66,6 @@ export function ParametricEditorView() {
     mutationKey: ['parametric-chat', conversation.id],
   });
 
-  const isLoading =
-    !!isSending || isRetryingMessage || isSendingMessage || isEditingMessage;
-
   const { data: messages = [] } = useMessagesQuery();
 
   const lastMessage = useMemo(() => {
@@ -78,6 +76,16 @@ export function ParametricEditorView() {
     }
     return messages[messages.length - 1];
   }, [messages, conversation.current_message_leaf_id]);
+
+  const isRestoredGenerationInFlight =
+    isAssistantGenerationInFlight(lastMessage);
+
+  const isLoading =
+    !!isSending ||
+    isRetryingMessage ||
+    isSendingMessage ||
+    isEditingMessage ||
+    isRestoredGenerationInFlight;
 
   const messageTree = useMemo(() => {
     return new Tree<Message>(messages);

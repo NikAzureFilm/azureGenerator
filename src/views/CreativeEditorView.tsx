@@ -17,6 +17,7 @@ import Tree from '@shared/Tree';
 import { useIsMutating } from '@tanstack/react-query';
 import { useRequestCancellation } from '@/hooks/useRequestCancellation';
 import posthog from 'posthog-js';
+import { isAssistantGenerationInFlight } from '@/utils/generationStatus';
 
 export function CreativeEditorView() {
   const { conversation, updateConversationAsync } = useConversation();
@@ -54,13 +55,6 @@ export function CreativeEditorView() {
     mutationKey: ['creative-chat', conversation.id],
   });
 
-  const isLoading =
-    !!isSending ||
-    isSendingMessage ||
-    isRetryingMessage ||
-    isEditingMessage ||
-    isUpscalingMessage;
-
   const { data: messages = [] } = useMessagesQuery();
 
   const lastMessage = useMemo(() => {
@@ -71,6 +65,17 @@ export function CreativeEditorView() {
     }
     return messages[messages.length - 1];
   }, [messages, conversation.current_message_leaf_id]);
+
+  const isRestoredGenerationInFlight =
+    isAssistantGenerationInFlight(lastMessage);
+
+  const isLoading =
+    !!isSending ||
+    isSendingMessage ||
+    isRetryingMessage ||
+    isEditingMessage ||
+    isUpscalingMessage ||
+    isRestoredGenerationInFlight;
 
   const messageTree = useMemo(() => {
     return new Tree<Message>(messages);

@@ -310,7 +310,21 @@ function streamMessage(
   controller: ReadableStreamDefaultController,
   message: Message,
 ) {
-  controller.enqueue(new TextEncoder().encode(JSON.stringify(message) + '\n'));
+  try {
+    controller.enqueue(
+      new TextEncoder().encode(JSON.stringify(message) + '\n'),
+    );
+  } catch (error) {
+    console.warn('Unable to stream creative-chat message to client:', error);
+  }
+}
+
+function closeStream(controller: ReadableStreamDefaultController) {
+  try {
+    controller.close();
+  } catch (error) {
+    console.warn('Unable to close creative-chat stream:', error);
+  }
 }
 
 async function generateSuggestions(
@@ -528,10 +542,13 @@ Deno.serve(async (req) => {
     supabaseClient.removeChannel(channel);
   };
 
-  // If the client disconnects, also abort
+  // Browser navigation and hard refresh should not cancel the generation.
+  // Explicit Stop generation still aborts through the realtime channel above.
   req.signal.addEventListener('abort', () => {
-    abortController.abort('Client disconnected');
-    cleanup();
+    trace('client_disconnected_generation_continues', {
+      conversationId,
+      messageId,
+    });
   });
 
   const { data: messages, error: messagesError } = await supabaseClient
@@ -614,6 +631,25 @@ Deno.serve(async (req) => {
       },
     );
   }
+
+  const persistContent = async (nextContent: Content) => {
+    const { data, error } = await supabaseClient
+      .from('messages')
+      .update({ content: nextContent })
+      .eq('id', newMessageData.id)
+      .select()
+      .single()
+      .overrideTypes<{
+        content: Content;
+        role: 'assistant';
+      }>();
+
+    if (error) {
+      console.error('Failed to persist creative-chat content:', error);
+    }
+
+    return data;
+  };
 
   try {
     const messageTree = new Tree<Message>(messages);
@@ -831,6 +867,7 @@ Deno.serve(async (req) => {
                   ...newMessageData,
                   content: content,
                 });
+                await persistContent(content);
               }
             } else if (chunk.type === 'content_block_delta') {
               if (chunk.delta.type === 'text_delta') {
@@ -880,6 +917,7 @@ Deno.serve(async (req) => {
                       ...newMessageData,
                       content: content,
                     });
+                    await persistContent(content);
                     continue;
                   }
 
@@ -974,6 +1012,7 @@ Deno.serve(async (req) => {
                     ...newMessageData,
                     content: content,
                   });
+                  await persistContent(content);
                 }
                 currentToolUse = null;
               }
@@ -1061,22 +1100,13 @@ Deno.serve(async (req) => {
                 })) || [],
             };
           }
-          const { data: finalMessageData } = await supabaseClient
-            .from('messages')
-            .update({ content })
-            .eq('id', newMessageData.id)
-            .select()
-            .single()
-            .overrideTypes<{
-              content: Content;
-              role: 'assistant';
-            }>();
+          const finalMessageData = await persistContent(content);
 
           if (finalMessageData) {
             streamMessage(controller, finalMessageData);
           }
 
-          controller.close();
+          closeStream(controller);
         }
       },
     });
