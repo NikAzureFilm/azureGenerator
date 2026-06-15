@@ -1173,23 +1173,21 @@ Deno.serve(async (req) => {
       model ?? 'quality',
     );
 
-    EdgeRuntime.waitUntil(
-      submitMeshJob(
-        supabaseClient,
-        text,
-        images,
-        mesh,
-        userData.user.id,
-        conversationId,
-        meshData.id,
-        model ?? 'quality',
-        meshTopology,
-        polygonCount,
-        imageGenerationModel,
-        multiviewImages,
-        tokenLedger,
-        meshReferenceId,
-      ),
+    await submitMeshJob(
+      supabaseClient,
+      text,
+      images,
+      mesh,
+      userData.user.id,
+      conversationId,
+      meshData.id,
+      model ?? 'quality',
+      meshTopology,
+      polygonCount,
+      imageGenerationModel,
+      multiviewImages,
+      tokenLedger,
+      meshReferenceId,
     );
 
     return new Response(JSON.stringify({ id: meshData.id, fileType }), {
