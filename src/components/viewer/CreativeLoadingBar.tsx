@@ -69,9 +69,13 @@ export function CreativeLoadingBar({
     !isMobile; // Show after initialization is complete
 
   const timeLeft = useMemo(() => {
-    const clampedRemainingTime = Math.max(15000, remainingTime);
-    const minutes = Math.floor(clampedRemainingTime / 60000);
-    const seconds = Math.floor((clampedRemainingTime % 60000) / 1000);
+    // Once we've run past the estimated time, stop showing a misleading
+    // countdown (it used to clamp to a fixed "15 seconds left" forever).
+    if (remainingTime < 1000) {
+      return isMobile ? 'Almost done' : 'Almost done…';
+    }
+    const minutes = Math.floor(remainingTime / 60000);
+    const seconds = Math.floor((remainingTime % 60000) / 1000);
     if (minutes > 0) {
       if (isMobile) {
         return `${minutes} min`;
