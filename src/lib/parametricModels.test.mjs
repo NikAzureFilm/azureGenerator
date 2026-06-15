@@ -39,17 +39,13 @@ const fableModel = PARAMETRIC_MODELS.find(
 assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.5-flash', 'anthropic/claude-fable-5'],
+  ['google/gemini-3.5-flash'],
 );
 assert.ok(flashModel);
 assert.equal(flashModel.name, 'CAD');
 assert.equal(flashModel.tokenCost, 50);
 assert.notEqual(flashModel.disabled, true);
-assert.ok(fableModel);
-assert.equal(fableModel.name, 'CAD Reasoning');
-assert.equal(fableModel.tokenCost, 120);
-assert.equal(fableModel.supportsThinking, true);
-assert.equal(fableModel.supportsVision, true);
+assert.equal(fableModel, undefined);
 assert.equal(
   PARAMETRIC_MODELS.some(
     (model) => model.name === 'Premium' || model.name === 'Lite',
@@ -62,7 +58,7 @@ assert.equal(
 );
 assert.equal(
   normalizeParametricChatModel('anthropic/claude-fable-5'),
-  'anthropic/claude-fable-5',
+  DEFAULT_PARAMETRIC_MODEL,
 );
 assert.equal(
   normalizeParametricChatModel('google/gemini-3.1-pro-preview'),

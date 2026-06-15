@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   FREE_STARTER_TOKENS,
   PLAN_CATALOG,
@@ -14,6 +16,11 @@ import {
   getParametricModelTokenCost,
   tokensForProviderCost,
 } from './tokenCosts.ts';
+
+const pricingViewSource = readFileSync(
+  fileURLToPath(new URL('../src/views/PricingView.tsx', import.meta.url)),
+  'utf8',
+);
 
 assert.equal(TOKEN_INTERNAL_USD_COST, 0.01);
 assert.equal(TOKEN_USD_VALUE, 0.03);
@@ -111,3 +118,5 @@ assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
   270,
 );
+
+assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);

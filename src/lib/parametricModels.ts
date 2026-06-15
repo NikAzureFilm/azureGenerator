@@ -1,7 +1,4 @@
-import {
-  FEATURE_COSTS,
-  getParametricModelTokenCost,
-} from '../../shared/tokenCosts.ts';
+import { FEATURE_COSTS } from '../../shared/tokenCosts.ts';
 import type { ModelConfig } from '../types/misc.ts';
 
 export const DEFAULT_PARAMETRIC_MODEL = 'google/gemini-3.5-flash';
@@ -17,16 +14,6 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
     supportsThinking: true,
     supportsVision: true,
     tokenCost: FEATURE_COSTS.parametric.tokens,
-  },
-  {
-    id: CLAUDE_FABLE_PARAMETRIC_MODEL,
-    name: 'CAD Reasoning',
-    description: 'Deeper CAD reasoning with Claude Fable 5',
-    provider: 'Anthropic',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: getParametricModelTokenCost(CLAUDE_FABLE_PARAMETRIC_MODEL),
   },
 ];
 
