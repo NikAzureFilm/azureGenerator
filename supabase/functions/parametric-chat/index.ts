@@ -23,6 +23,7 @@ import {
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
@@ -109,6 +110,12 @@ function getUserFacingOpenRouterMessage(
 
 function asUserFacingGenerationMessage(error: unknown): string | null {
   return error instanceof UserFacingGenerationError ? error.message : null;
+}
+
+function withoutArtifact(content: Content): Content {
+  const next = { ...content };
+  delete next.artifact;
+  return next;
 }
 
 function bareAnthropicModelId(model: string): string {
@@ -1521,21 +1528,23 @@ Deno.serve(async (req) => {
                         rawCode.length > lastFlushedLen
                       ) {
                         const streamed = stripCodeFences(rawCode);
-                        content = {
-                          ...content,
-                          artifact: {
-                            title: 'Generated Object',
-                            version: 'v1',
-                            code: streamed,
-                            parameters: [],
-                          },
-                        };
-                        streamMessage(controller, {
-                          ...newMessageData,
-                          content,
-                        });
-                        lastFlushTime = now;
-                        lastFlushedLen = rawCode.length;
+                        if (hasRenderableScadCode(streamed)) {
+                          content = {
+                            ...content,
+                            artifact: {
+                              title: 'Generated Object',
+                              version: 'v1',
+                              code: streamed,
+                              parameters: [],
+                            },
+                          };
+                          streamMessage(controller, {
+                            ...newMessageData,
+                            content,
+                          });
+                          lastFlushTime = now;
+                          lastFlushedLen = rawCode.length;
+                        }
                       }
                     }
                   }
@@ -1561,7 +1570,9 @@ Deno.serve(async (req) => {
               if (lower.includes('sorry') || lower.includes('apologize'))
                 title = 'Generated Object';
 
-              if (codeGenFailed || !code) {
+              const codeMissingOrProse =
+                !codeGenFailed && !hasRenderableScadCode(code);
+              if (codeGenFailed || codeMissingOrProse) {
                 await tokenLedger.refundReference(
                   toolCall.id,
                   logRefundFailure,
@@ -1574,7 +1585,12 @@ Deno.serve(async (req) => {
                 // failure; keeping the partial code lets the user see what was
                 // generated before the error.
                 content = {
-                  ...content,
+                  ...(codeMissingOrProse
+                    ? withoutArtifact({
+                        ...content,
+                        text: "I couldn't generate renderable OpenSCAD code for that prompt. Please try again.",
+                      })
+                    : content),
                   toolCalls: (content.toolCalls || []).map((c) =>
                     c.id === toolCall.id ? { ...c, status: 'error' } : c,
                   ),
