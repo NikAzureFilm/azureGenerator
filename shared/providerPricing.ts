@@ -55,18 +55,26 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
 
 // ---------------------------------------------------------------------------
 // Image generation — USD per image.
-// gpt-image-2 cost is driven by quality (size is fixed at 1024x1024 in the
-// app). Numbers mirror scripts/fal-cost-report.mjs FEATURE_BREAKDOWNS.
+// gpt-image-2 cost is driven by quality and size. The app requests 1024x1024,
+// so these are the published 1024x1024 per-image output costs.
 // ---------------------------------------------------------------------------
-export const OPENAI_IMAGE_PRICES: Record<'low' | 'medium' | 'high', number> = {
-  low: 0.13,
-  medium: 0.18,
-  high: 0.22,
-};
+export const OPENAI_IMAGE_PRICES = {
+  low: 0.006,
+  medium: 0.053,
+  high: 0.211,
+} as const satisfies Record<'low' | 'medium' | 'high', number>;
 
-// Gemini "nano banana 2" (gemini-3.1-flash-image-preview) reference image —
-// verified $0.067/image.
-export const GEMINI_IMAGE_USD = 0.067;
+// Gemini image output costs differ by image model. The app uses
+// gemini-3.1-flash-image-preview for generated input/reference images and
+// gemini-3-pro-image-preview for mesh-mode multi-turn image generation.
+export const GEMINI_IMAGE_PRICES = {
+  'gemini-3.1-flash-image-preview': 0.067,
+  'gemini-3.1-flash-image': 0.067,
+  'gemini-3-pro-image-preview': 0.134,
+  'gemini-3-pro-image': 0.134,
+} as const satisfies Record<string, number>;
+
+const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
 // ---------------------------------------------------------------------------
 // fal.ai per-endpoint unit prices. fal does NOT return cost in its API
@@ -146,8 +154,14 @@ export function openaiImageCostUsd(
   return (OPENAI_IMAGE_PRICES[quality] ?? OPENAI_IMAGE_PRICES.high) * images;
 }
 
-export function geminiImageCostUsd(images = 1): number {
-  return GEMINI_IMAGE_USD * images;
+export function geminiImageCostUsd(
+  model = DEFAULT_GEMINI_IMAGE_MODEL,
+  images = 1,
+): number {
+  const price =
+    GEMINI_IMAGE_PRICES[model as keyof typeof GEMINI_IMAGE_PRICES] ??
+    GEMINI_IMAGE_PRICES[DEFAULT_GEMINI_IMAGE_MODEL];
+  return price * images;
 }
 
 export function falCostUsd(endpoint: string, units = 1): number {

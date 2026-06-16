@@ -13,6 +13,21 @@ assert.match(
 );
 assert.match(
   imageGenSource,
+  /generateImageWithGeminiFlash = async \([\s\S]*?usageCtx\?: ImageUsageCtx/,
+  'Gemini Flash image generation should accept provider usage context',
+);
+assert.match(
+  imageGenSource,
+  /generateImageWithGeminiFlashEdit = async \([\s\S]*?usageCtx\?: ImageUsageCtx/,
+  'Gemini Flash image editing should accept provider usage context',
+);
+assert.match(
+  imageGenSource,
+  /await logGeminiImage\(\{\s*\.\.\.usageCtx,\s*model: GEMINI_FLASH_IMAGE_MODEL\s*\}\);/,
+  'Gemini Flash image generation should log model-specific provider cost',
+);
+assert.match(
+  imageGenSource,
   /const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5\.5';/,
   'OpenAI image generation uses a Responses model that supports the image_generation tool',
 );

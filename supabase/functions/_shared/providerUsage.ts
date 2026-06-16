@@ -136,18 +136,20 @@ export function logOpenAiImage(
   });
 }
 
-// Gemini "nano banana" reference image.
+// Gemini image generation. Cost depends on the concrete image model:
+// gemini-3.1-flash-image-preview is cheaper than gemini-3-pro-image-preview.
 export function logGeminiImage(
   p: BaseUsage & { model?: string; images?: number },
 ): Promise<void> {
   const images = p.images ?? 1;
+  const model = p.model ?? 'gemini-3.1-flash-image-preview';
   return insertUsage({
     ...base(p),
     provider: 'google',
-    model: p.model ?? 'gemini-nano-banana',
+    model,
     request_units: images,
     unit: 'images',
-    cost_usd: geminiImageCostUsd(images),
+    cost_usd: geminiImageCostUsd(model, images),
     pricing_source: 'catalog',
   });
 }

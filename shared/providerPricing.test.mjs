@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { LLM_PRICES, llmCostUsd } from './providerPricing.ts';
+import {
+  GEMINI_IMAGE_PRICES,
+  LLM_PRICES,
+  OPENAI_IMAGE_PRICES,
+  geminiImageCostUsd,
+  llmCostUsd,
+  openaiImageCostUsd,
+} from './providerPricing.ts';
 
 assert.deepEqual(LLM_PRICES['anthropic/claude-fable-5'], {
   inputPerM: 10,
@@ -10,3 +17,23 @@ assert.equal(
   llmCostUsd('anthropic/claude-fable-5', 1_000_000, 1_000_000),
   60,
 );
+
+assert.deepEqual(OPENAI_IMAGE_PRICES, {
+  low: 0.006,
+  medium: 0.053,
+  high: 0.211,
+});
+assert.equal(openaiImageCostUsd('low'), 0.006);
+assert.equal(openaiImageCostUsd('medium'), 0.053);
+assert.equal(openaiImageCostUsd('high', 2), 0.422);
+
+assert.deepEqual(GEMINI_IMAGE_PRICES, {
+  'gemini-3.1-flash-image-preview': 0.067,
+  'gemini-3.1-flash-image': 0.067,
+  'gemini-3-pro-image-preview': 0.134,
+  'gemini-3-pro-image': 0.134,
+});
+assert.equal(geminiImageCostUsd('gemini-3.1-flash-image-preview'), 0.067);
+assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview'), 0.134);
+assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview', 2), 0.268);
+assert.equal(geminiImageCostUsd('unknown-google-image-model'), 0.067);

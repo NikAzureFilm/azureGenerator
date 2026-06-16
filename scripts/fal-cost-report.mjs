@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { FAL_UNIT_PRICES } from '../shared/providerPricing.ts';
+import {
+  FAL_UNIT_PRICES,
+  geminiImageCostUsd,
+  openaiImageCostUsd,
+} from '../shared/providerPricing.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
@@ -63,28 +67,51 @@ const FEATURE_BREAKDOWNS = [
   {
     id: 'generatedInputImage',
     label: 'Generated input image - Premium',
-    components: [{ name: 'gpt-image-2 high-quality image', costUsd: 0.22 }],
+    components: [
+      {
+        name: 'gpt-image-2 low-quality generated view',
+        costUsd: openaiImageCostUsd('low'),
+      },
+    ],
   },
   {
     id: 'generatedInputImageNanoBanana',
     label: 'Generated input image - Lite',
-    components: [{ name: 'Nano Banana image budget', costUsd: 0.07 }],
+    components: [
+      {
+        name: 'Gemini 3.1 Flash Image 1K output',
+        costUsd: geminiImageCostUsd('gemini-3.1-flash-image-preview'),
+      },
+    ],
   },
   {
     id: 'multiviewFrontImage',
     label: 'Multiview front image',
-    components: [{ name: 'gpt-image-2 front image', costUsd: 0.22 }],
+    components: [
+      {
+        name: 'gpt-image-2 low-quality front image',
+        costUsd: openaiImageCostUsd('low'),
+      },
+    ],
   },
   {
     id: 'multiviewNanoBananaView',
     label: 'Additional multiview angle',
-    components: [{ name: 'Nano Banana side/back view', costUsd: 0.07 }],
+    components: [
+      {
+        name: 'Gemini 3.1 Flash Image side/back view',
+        costUsd: geminiImageCostUsd('gemini-3.1-flash-image-preview'),
+      },
+    ],
   },
   {
     id: 'fastMesh',
     label: 'Textureless mesh',
     components: [
-      { name: 'gpt-image-2 low-quality seed image', costUsd: 0.13 },
+      {
+        name: 'gpt-image-2 low-quality seed image',
+        costUsd: openaiImageCostUsd('low'),
+      },
       {
         name: 'Tripo v2.5 textureless image-to-3D',
         endpoint: 'tripo3d/tripo/v2.5/image-to-3d',
@@ -101,7 +128,10 @@ const FEATURE_BREAKDOWNS = [
     id: 'qualityMesh',
     label: 'Draft mesh',
     components: [
-      { name: 'gpt-image-2 high-quality seed image', costUsd: 0.22 },
+      {
+        name: 'gpt-image-2 high-quality seed image',
+        costUsd: openaiImageCostUsd('high'),
+      },
       {
         name: 'Moondream caption',
         endpoint: 'fal-ai/moondream3-preview/caption',
@@ -127,7 +157,10 @@ const FEATURE_BREAKDOWNS = [
     id: 'ultraMesh',
     label: 'Max quality mesh',
     components: [
-      { name: 'gpt-image-2 high-quality seed image', costUsd: 0.22 },
+      {
+        name: 'gpt-image-2 high-quality seed image',
+        costUsd: openaiImageCostUsd('high'),
+      },
       {
         name: 'Meshy v6 preview textured model',
         endpoint: 'fal-ai/meshy/v6-preview/image-to-3d',

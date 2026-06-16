@@ -379,6 +379,7 @@ export const generateImageWithFalFlux = async (
 export const generateImageWithGeminiFlash = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
+  usageCtx?: ImageUsageCtx,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Generating image with ${GEMINI_FLASH_IMAGE_MODEL}`);
@@ -408,6 +409,9 @@ export const generateImageWithGeminiFlash = async (
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
   debugLog(`Successfully generated image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+  if (usageCtx) {
+    await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+  }
 
   return imageBytes;
 };
@@ -420,6 +424,7 @@ export const generateImageWithGeminiFlashEdit = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
   imageUrls: string | string[],
+  usageCtx?: ImageUsageCtx,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
@@ -481,6 +486,9 @@ export const generateImageWithGeminiFlashEdit = async (
 
     const imageBytes = Buffer.from(generatedImageData, 'base64');
     debugLog(`Successfully edited image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+    if (usageCtx) {
+      await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+    }
 
     return imageBytes;
   } catch (error) {

@@ -51,12 +51,14 @@ const unitPrices = new Map(
 const rows = buildFeatureCostRows(unitPrices);
 const byId = new Map(rows.map((row) => [row.id, row]));
 
-assert.equal(byId.get('fastMesh')?.suggestedTokens, 41);
-assert.equal(byId.get('qualityMesh')?.suggestedTokens, 34);
+assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 1);
+assert.equal(byId.get('multiviewFrontImage')?.suggestedTokens, 1);
+assert.equal(byId.get('generatedInputImageNanoBanana')?.suggestedTokens, 7);
+assert.equal(byId.get('fastMesh')?.suggestedTokens, 29);
+assert.equal(byId.get('qualityMesh')?.suggestedTokens, 33);
 assert.equal(byId.get('ultraMesh')?.suggestedTokens, 110);
 assert.equal(byId.get('multiviewMesh')?.suggestedTokens, 61);
 assert.equal(byId.get('upscaleMesh')?.suggestedTokens, 76);
-assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 22);
 
 for (const [key, feature] of Object.entries(FEATURE_COSTS)) {
   const row = byId.get(key);
