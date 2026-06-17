@@ -220,11 +220,6 @@ function TextAreaChat({
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
-  const canGenerateInputImage = shouldShowReferenceImageControl({
-    type,
-    isMultiview,
-    parametricSupportsVision: parametricModelSupportsVision(model),
-  });
 
   const seedMultiviewEntries = useMemo(
     () => getMultiviewImageEntries(seedMultiviewImages),
@@ -1046,7 +1041,7 @@ function TextAreaChat({
     promptOverride?: string;
     refImageId?: string;
   }) => {
-    if (isGeneratingInputImage || !canGenerateInputImage) return;
+    if (isGeneratingInputImage || type !== 'creative' || isMultiview) return;
     const prompt =
       options?.promptOverride?.trim() ||
       input.trim() ||
@@ -1293,7 +1288,6 @@ function TextAreaChat({
           })
         }
         maxReferences={1}
-        briefOpenByDefault={type === 'parametric'}
       />
       {isMultiview ? (
         <div
@@ -1649,21 +1643,23 @@ function TextAreaChat({
                     <ImagePlus className="h-4 w-4 text-adam-text-secondary" />
                     <span>Upload</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="gap-2 rounded-md text-adam-text-primary hover:cursor-pointer"
-                    disabled={isLoading || isGeneratingInputImage}
-                    onSelect={() => openImageCreator()}
-                  >
-                    <Sparkles className="h-4 w-4 text-adam-blue" />
-                    <span>Generate</span>
-                    <span className="ml-auto rounded-md bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
-                      {formatTokenCost(
-                        getImageGenerationTokenCost(
-                          selectedImageGenerationModel,
-                        ),
-                      )}
-                    </span>
-                  </DropdownMenuItem>
+                  {type === 'creative' && (
+                    <DropdownMenuItem
+                      className="gap-2 rounded-md text-adam-text-primary hover:cursor-pointer"
+                      disabled={isLoading || isGeneratingInputImage}
+                      onSelect={() => openImageCreator()}
+                    >
+                      <Sparkles className="h-4 w-4 text-adam-blue" />
+                      <span>Generate</span>
+                      <span className="ml-auto rounded-md bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
+                        {formatTokenCost(
+                          getImageGenerationTokenCost(
+                            selectedImageGenerationModel,
+                          ),
+                        )}
+                      </span>
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

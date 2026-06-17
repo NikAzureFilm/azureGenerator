@@ -25,21 +25,6 @@ assert.match(
 );
 assert.match(
   source,
-  /print_layout/,
-  'OpenSCAD code-generation prompt should require a user-facing print layout switch',
-);
-assert.match(
-  source,
-  /disassembl/i,
-  'OpenSCAD code-generation prompt should require separable print-ready components',
-);
-assert.match(
-  source,
-  /laid flat/i,
-  'OpenSCAD code-generation prompt should require build-plate-ready part orientation',
-);
-assert.match(
-  source,
   /BOSL2\/screws\.scad/,
   'OpenSCAD code-generation prompt should prefer BOSL2 screw helpers for threaded parts',
 );

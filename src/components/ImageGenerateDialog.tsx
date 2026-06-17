@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -62,7 +62,6 @@ interface ImageGenerateDialogProps {
   onGenerate: () => void;
   generateLabel?: string;
   maxReferences?: number;
-  briefOpenByDefault?: boolean;
 }
 
 export function ImageGenerateDialog({
@@ -83,19 +82,12 @@ export function ImageGenerateDialog({
   onGenerate,
   generateLabel = 'Generate image',
   maxReferences,
-  briefOpenByDefault = false,
 }: ImageGenerateDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isBriefOpen, setIsBriefOpen] = useState(briefOpenByDefault);
+  const [isBriefOpen, setIsBriefOpen] = useState(false);
   const busy = isGenerating || isUploadingReference;
   const canAddMore = maxReferences == null || references.length < maxReferences;
   const hasBrief = prompt.trim().length > 0;
-
-  useEffect(() => {
-    if (open) {
-      setIsBriefOpen(briefOpenByDefault);
-    }
-  }, [open, briefOpenByDefault]);
 
   const handleFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

@@ -33,6 +33,7 @@ import { normalizeParametricChatModel } from '@/lib/parametricModels';
 import { MessageCircle, Pencil, Share } from 'lucide-react';
 import { useMeshData } from '@/hooks/useMeshData';
 import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
@@ -388,7 +389,11 @@ export function ChatSection({
             type={conversation.type}
             model={model}
             setModel={handleModelChange}
-            imageGenerationModel={imageGenerationModel}
+            imageGenerationModel={
+              conversation.type === 'creative'
+                ? imageGenerationModel
+                : DEFAULT_IMAGE_GENERATION_MODEL
+            }
             setImageGenerationModel={handleImageGenerationModelChange}
             conversation={conversation}
             composerFocusRequest={composerFocusRequest}

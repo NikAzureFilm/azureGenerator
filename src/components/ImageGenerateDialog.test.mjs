@@ -15,19 +15,7 @@ assert.match(
 assert.match(
   source,
   /<Collapsible open=\{isBriefOpen\}/,
-  'raw image generation prompt should be controlled by the object brief disclosure',
-);
-
-assert.match(
-  source,
-  /briefOpenByDefault = false/,
-  'image generation dialog should let callers opt into opening the object brief by default',
-);
-
-assert.match(
-  source,
-  /if \(open\) \{\s*setIsBriefOpen\(briefOpenByDefault\);/s,
-  'image generation dialog should reset the object brief to its caller default each time it opens',
+  'raw image generation prompt should be hidden behind an advanced disclosure',
 );
 
 assert.match(

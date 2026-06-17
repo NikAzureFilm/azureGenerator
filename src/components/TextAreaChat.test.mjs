@@ -51,38 +51,3 @@ assert.match(
   /<TextAreaChat[\s\S]*seedMultiviewImages=\{latestMultiviewImages\}/s,
   'chat section should pass the latest multiview images into the composer',
 );
-
-assert.match(
-  chatSectionSource,
-  /<TextAreaChat[\s\S]*imageGenerationModel=\{imageGenerationModel\}/s,
-  'chat section should pass the persisted image generation model to CAD and mesh composers',
-);
-
-const generateInputImageHandler =
-  source.match(
-    /const generateInputImage = async[\s\S]*?\n  const openImageCreator/,
-  )?.[0] ?? '';
-
-assert.doesNotMatch(
-  generateInputImageHandler,
-  /type !== 'creative'/,
-  'generated input image creation should not be blocked in CAD mode',
-);
-
-assert.doesNotMatch(
-  source,
-  /\{type === 'creative' && \(\s*<DropdownMenuItem[\s\S]*openImageCreator\(\)/s,
-  'CAD mode should expose the generated reference image menu item when image inputs are supported',
-);
-
-assert.match(
-  source,
-  /const canGenerateInputImage =[\s\S]*shouldShowReferenceImageControl[\s\S]*parametricModelSupportsVision\(model\)/s,
-  'generated reference images should share the same CAD vision capability gate as uploaded references',
-);
-
-assert.match(
-  source,
-  /<ImageGenerateDialog[\s\S]*briefOpenByDefault=\{type === 'parametric'\}/s,
-  'CAD image generation should open the optional object brief by default',
-);
