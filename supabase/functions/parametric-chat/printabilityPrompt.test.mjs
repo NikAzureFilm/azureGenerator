@@ -23,3 +23,18 @@ assert.match(
   /build plate/i,
   'OpenSCAD code-generation prompt should require print-bed layout',
 );
+assert.match(
+  source,
+  /print_layout/,
+  'OpenSCAD code-generation prompt should require a user-facing print layout switch',
+);
+assert.match(
+  source,
+  /disassembl/i,
+  'OpenSCAD code-generation prompt should require separable print-ready components',
+);
+assert.match(
+  source,
+  /laid flat/i,
+  'OpenSCAD code-generation prompt should require build-plate-ready part orientation',
+);
