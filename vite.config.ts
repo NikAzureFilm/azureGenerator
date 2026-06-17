@@ -46,6 +46,13 @@ export default defineConfig({
           ) {
             return 'vendor';
           }
+          if (
+            id.includes('/node_modules/three/') ||
+            id.includes('/node_modules/three-stdlib/') ||
+            id.includes('/node_modules/@react-three/')
+          ) {
+            return 'three';
+          }
         },
       },
     },

@@ -6,6 +6,11 @@ import OpenAI from 'npm:openai@^6.34.0';
 import { reformatSignedUrl } from './messageUtils.ts';
 import { detectImageMediaType } from './imageMime.ts';
 import { enforce3DObjectPrompt } from './imagePrompt.ts';
+import {
+  logFalUsage,
+  logGeminiImage,
+  logOpenAiImage,
+} from './providerUsage.ts';
 
 const DEBUG_LOGS =
   Deno.env.get('ENVIRONMENT') === 'local' ||
@@ -29,6 +34,17 @@ fal.config({
 });
 
 export type GptImageQuality = 'low' | 'medium' | 'high';
+
+// Context for recording the actual provider $ cost of a generated image. When
+// passed to a generator, the generator that actually succeeds logs its own
+// cost to provider_usage (correct under the fallback chains).
+export type ImageUsageCtx = {
+  functionName: string;
+  operation: string;
+  userId?: string | null;
+  conversationId?: string | null;
+  referenceId?: string | null;
+};
 
 export type GptImage2Result = {
   imageBytes: Buffer;
@@ -63,6 +79,7 @@ export const generateImageWithGptImage2 = async (
   // Quality is selected by workflow tier. Internal cost assumptions live in
   // protected admin pricing config, not in source.
   quality: GptImageQuality,
+  usageCtx?: ImageUsageCtx,
 ): Promise<GptImage2Result> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog('Generating image with gpt-image-2 via Responses API', {
@@ -154,6 +171,14 @@ export const generateImageWithGptImage2 = async (
     status: latestCall.status,
   });
 
+  if (usageCtx) {
+    await logOpenAiImage({
+      ...usageCtx,
+      quality,
+      metadata: { imageCallId: latestCall.id },
+    });
+  }
+
   return {
     imageBytes: Buffer.from(latestCall.result, 'base64'),
     imageCallId: latestCall.id,
@@ -168,6 +193,7 @@ export const generateImageWithGeminiMultiTurn = async (
   conversationId: string,
   prompt: string,
   images: string[],
+  usageCtx?: ImageUsageCtx,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog('Generating image with Gemini Multi-Turn', {
@@ -250,6 +276,9 @@ export const generateImageWithGeminiMultiTurn = async (
   }
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
+  if (usageCtx) {
+    await logGeminiImage({ ...usageCtx, model: 'gemini-3-pro-image-preview' });
+  }
   return imageBytes;
 };
 
@@ -259,6 +288,7 @@ export const generateImageWithFalFlux = async (
   conversationId: string,
   promptText: string,
   images: string[],
+  usageCtx?: ImageUsageCtx,
 ) => {
   const enforcedPrompt = enforce3DObjectPrompt(promptText);
   // Extract all available images for visual context, similar to how OpenAI processes them
@@ -317,6 +347,12 @@ export const generateImageWithFalFlux = async (
     const imageUrl = result.data.images[0];
     const response = await fetch(imageUrl.url);
     const imageBytes = await response.arrayBuffer();
+    if (usageCtx) {
+      await logFalUsage({
+        ...usageCtx,
+        endpoint: 'fal-ai/flux-pro/kontext/max/multi',
+      });
+    }
     return Buffer.from(imageBytes);
   } else {
     const result = await fal.run('fal-ai/flux-pro/v1.1', {
@@ -329,6 +365,9 @@ export const generateImageWithFalFlux = async (
     const imageUrl = result.data.images[0];
     const response = await fetch(imageUrl.url);
     const imageBytes = await response.arrayBuffer();
+    if (usageCtx) {
+      await logFalUsage({ ...usageCtx, endpoint: 'fal-ai/flux-pro/v1.1' });
+    }
     return Buffer.from(imageBytes);
   }
 };
@@ -340,6 +379,7 @@ export const generateImageWithFalFlux = async (
 export const generateImageWithGeminiFlash = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
+  usageCtx?: ImageUsageCtx,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Generating image with ${GEMINI_FLASH_IMAGE_MODEL}`);
@@ -369,6 +409,9 @@ export const generateImageWithGeminiFlash = async (
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
   debugLog(`Successfully generated image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+  if (usageCtx) {
+    await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+  }
 
   return imageBytes;
 };
@@ -381,6 +424,7 @@ export const generateImageWithGeminiFlashEdit = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
   imageUrls: string | string[],
+  usageCtx?: ImageUsageCtx,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
@@ -442,6 +486,9 @@ export const generateImageWithGeminiFlashEdit = async (
 
     const imageBytes = Buffer.from(generatedImageData, 'base64');
     debugLog(`Successfully edited image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+    if (usageCtx) {
+      await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+    }
 
     return imageBytes;
   } catch (error) {

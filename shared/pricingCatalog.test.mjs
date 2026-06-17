@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   FREE_STARTER_TOKENS,
   PLAN_CATALOG,
@@ -14,6 +16,11 @@ import {
   getParametricModelTokenCost,
   tokensForProviderCost,
 } from './tokenCosts.ts';
+
+const pricingViewSource = readFileSync(
+  fileURLToPath(new URL('../src/views/PricingView.tsx', import.meta.url)),
+  'utf8',
+);
 
 assert.equal(TOKEN_INTERNAL_USD_COST, 0.01);
 assert.equal(TOKEN_USD_VALUE, 0.03);
@@ -77,8 +84,8 @@ assert.deepEqual(
     multiviewNanoBananaView: 7,
     fastMesh: 41,
     qualityMesh: 34,
-    ultraMesh: 60,
-    multiviewMesh: 60,
+    ultraMesh: 110,
+    multiviewMesh: 61,
     upscaleMesh: 76,
   },
 );
@@ -93,6 +100,7 @@ assert.ok(
 );
 
 assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 50);
+assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 120);
 assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 50);
 assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 50);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
@@ -106,3 +114,9 @@ assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
   270,
 );
+assert.equal(
+  getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
+  270,
+);
+
+assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);

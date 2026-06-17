@@ -27,8 +27,14 @@ import {
   formatCreativeUserMessage,
 } from '../_shared/messageUtils.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
+import { checkRateLimit } from '../_shared/rateLimit.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
+const RATE_LIMIT_MAX_REQUESTS = Number(
+  Deno.env.get('CREATIVE_CHAT_RATE_LIMIT') ?? '20',
+);
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 // Initialize Sentry for error logging
 initSentry();
@@ -304,7 +310,21 @@ function streamMessage(
   controller: ReadableStreamDefaultController,
   message: Message,
 ) {
-  controller.enqueue(new TextEncoder().encode(JSON.stringify(message) + '\n'));
+  try {
+    controller.enqueue(
+      new TextEncoder().encode(JSON.stringify(message) + '\n'),
+    );
+  } catch (error) {
+    console.warn('Unable to stream creative-chat message to client:', error);
+  }
+}
+
+function closeStream(controller: ReadableStreamDefaultController) {
+  try {
+    controller.close();
+  } catch (error) {
+    console.warn('Unable to close creative-chat stream:', error);
+  }
 }
 
 async function generateSuggestions(
@@ -422,6 +442,23 @@ Deno.serve(async (req) => {
     });
   }
 
+  const rate = checkRateLimit(`creative-chat:${userData.user.id}`, {
+    limit: RATE_LIMIT_MAX_REQUESTS,
+    windowMs: RATE_LIMIT_WINDOW_MS,
+  });
+  if (!rate.allowed) {
+    return new Response(
+      JSON.stringify({
+        error: 'rate_limited',
+        retryAfterSeconds: rate.retryAfterSeconds,
+      }),
+      {
+        status: 429,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    );
+  }
+
   const tokenLedger = new RefundableTokenLedger(billing);
   try {
     const result = await tokenLedger.consume(userData.user.email, {
@@ -505,10 +542,13 @@ Deno.serve(async (req) => {
     supabaseClient.removeChannel(channel);
   };
 
-  // If the client disconnects, also abort
+  // Browser navigation and hard refresh should not cancel the generation.
+  // Explicit Stop generation still aborts through the realtime channel above.
   req.signal.addEventListener('abort', () => {
-    abortController.abort('Client disconnected');
-    cleanup();
+    trace('client_disconnected_generation_continues', {
+      conversationId,
+      messageId,
+    });
   });
 
   const { data: messages, error: messagesError } = await supabaseClient
@@ -591,6 +631,25 @@ Deno.serve(async (req) => {
       },
     );
   }
+
+  const persistContent = async (nextContent: Content) => {
+    const { data, error } = await supabaseClient
+      .from('messages')
+      .update({ content: nextContent })
+      .eq('id', newMessageData.id)
+      .select()
+      .single()
+      .overrideTypes<{
+        content: Content;
+        role: 'assistant';
+      }>();
+
+    if (error) {
+      console.error('Failed to persist creative-chat content:', error);
+    }
+
+    return data;
+  };
 
   try {
     const messageTree = new Tree<Message>(messages);
@@ -764,6 +823,11 @@ Deno.serve(async (req) => {
           id: string;
           input?: string;
         } | null = null;
+        // Accumulate Anthropic token usage across the stream so we can record
+        // the actual provider cost at message_stop.
+        let usageInputTokens = 0;
+        let usageOutputTokens = 0;
+        let usageCacheReadTokens = 0;
 
         try {
           for await (const chunk of stream) {
@@ -772,7 +836,15 @@ Deno.serve(async (req) => {
               throw new Error('Request cancelled by user');
             }
 
-            if (chunk.type === 'content_block_start') {
+            if (chunk.type === 'message_start') {
+              usageInputTokens = chunk.message.usage.input_tokens ?? 0;
+              usageOutputTokens = chunk.message.usage.output_tokens ?? 0;
+              usageCacheReadTokens =
+                chunk.message.usage.cache_read_input_tokens ?? 0;
+            } else if (chunk.type === 'message_delta') {
+              usageOutputTokens =
+                chunk.usage.output_tokens ?? usageOutputTokens;
+            } else if (chunk.type === 'content_block_start') {
               if (chunk.content_block.type === 'tool_use') {
                 currentToolUse = {
                   name: chunk.content_block.name,
@@ -795,6 +867,7 @@ Deno.serve(async (req) => {
                   ...newMessageData,
                   content: content,
                 });
+                await persistContent(content);
               }
             } else if (chunk.type === 'content_block_delta') {
               if (chunk.delta.type === 'text_delta') {
@@ -844,6 +917,7 @@ Deno.serve(async (req) => {
                       ...newMessageData,
                       content: content,
                     });
+                    await persistContent(content);
                     continue;
                   }
 
@@ -938,10 +1012,25 @@ Deno.serve(async (req) => {
                     ...newMessageData,
                     content: content,
                   });
+                  await persistContent(content);
                 }
                 currentToolUse = null;
               }
             } else if (chunk.type === 'message_stop') {
+              EdgeRuntime.waitUntil(
+                logLlmUsage({
+                  functionName: 'creative-chat',
+                  operation: 'chat',
+                  provider: 'anthropic',
+                  model: 'claude-sonnet-4-6',
+                  userId: userData.user?.id,
+                  conversationId,
+                  referenceId: newMessageId,
+                  inputTokens: usageInputTokens,
+                  outputTokens: usageOutputTokens,
+                  cachedInputTokens: usageCacheReadTokens,
+                }),
+              );
               // Generate suggestions and create final message
               const finalSuggestions = await generateSuggestions(
                 content,
@@ -1011,22 +1100,13 @@ Deno.serve(async (req) => {
                 })) || [],
             };
           }
-          const { data: finalMessageData } = await supabaseClient
-            .from('messages')
-            .update({ content })
-            .eq('id', newMessageData.id)
-            .select()
-            .single()
-            .overrideTypes<{
-              content: Content;
-              role: 'assistant';
-            }>();
+          const finalMessageData = await persistContent(content);
 
           if (finalMessageData) {
             streamMessage(controller, finalMessageData);
           }
 
-          controller.close();
+          closeStream(controller);
         }
       },
     });

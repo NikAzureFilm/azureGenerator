@@ -124,7 +124,9 @@ export type ParametricArtifact = {
   suggestions?: string[];
 };
 
-export type ParameterOption = { value: string | number; label: string };
+// Label is optional for bare OpenSCAD customizer options like
+// `[Assembled, Exploded]`; the UI falls back to the value.
+export type ParameterOption = { value: string | number; label?: string };
 
 export type ParameterRange = { min?: number; max?: number; step?: number };
 

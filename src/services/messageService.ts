@@ -17,6 +17,7 @@ import {
 } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
+import { shouldPollMessagesForGeneration } from '@/utils/generationStatus';
 
 function messageSentConversationUpdate(
   newMessage: Message,
@@ -106,6 +107,10 @@ export const useMessagesQuery = () => {
       if (messagesError) throw messagesError;
 
       return messagesData || [];
+    },
+    refetchInterval: (query) => {
+      const messages = query.state.data as Message[] | undefined;
+      return shouldPollMessagesForGeneration(messages) ? 3000 : false;
     },
   });
 };

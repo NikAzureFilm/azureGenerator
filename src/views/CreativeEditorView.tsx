@@ -17,6 +17,8 @@ import Tree from '@shared/Tree';
 import { useIsMutating } from '@tanstack/react-query';
 import { useRequestCancellation } from '@/hooks/useRequestCancellation';
 import posthog from 'posthog-js';
+import { isAssistantGenerationInFlight } from '@/utils/generationStatus';
+import { getCreativeGenerationHistory } from '@/utils/creativeGenerationHistory';
 
 export function CreativeEditorView() {
   const { conversation, updateConversationAsync } = useConversation();
@@ -54,13 +56,6 @@ export function CreativeEditorView() {
     mutationKey: ['creative-chat', conversation.id],
   });
 
-  const isLoading =
-    !!isSending ||
-    isSendingMessage ||
-    isRetryingMessage ||
-    isEditingMessage ||
-    isUpscalingMessage;
-
   const { data: messages = [] } = useMessagesQuery();
 
   const lastMessage = useMemo(() => {
@@ -72,6 +67,17 @@ export function CreativeEditorView() {
     return messages[messages.length - 1];
   }, [messages, conversation.current_message_leaf_id]);
 
+  const isRestoredGenerationInFlight =
+    isAssistantGenerationInFlight(lastMessage);
+
+  const isLoading =
+    !!isSending ||
+    isSendingMessage ||
+    isRetryingMessage ||
+    isEditingMessage ||
+    isUpscalingMessage ||
+    isRestoredGenerationInFlight;
+
   const messageTree = useMemo(() => {
     return new Tree<Message>(messages);
   }, [messages]);
@@ -79,6 +85,10 @@ export function CreativeEditorView() {
   const currentMessageBranch = useMemo(() => {
     return messageTree.getPath(lastMessage?.id ?? '');
   }, [lastMessage, messageTree]);
+
+  const generationMessages = useMemo(() => {
+    return getCreativeGenerationHistory(messages);
+  }, [messages]);
 
   // Track the current request's user message ID for cancellation
   useEffect(() => {
@@ -133,6 +143,7 @@ export function CreativeEditorView() {
   return (
     <CreativeView
       messages={currentMessageBranch}
+      generationMessages={generationMessages}
       isLoading={isLoading}
       sendMessage={sendMessage}
       stopGenerating={stopGenerating}

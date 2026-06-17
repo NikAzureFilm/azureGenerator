@@ -23,6 +23,8 @@ import {
   getParametricModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
@@ -47,6 +49,10 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
+const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
+const FABLE_REASONING_TOKEN_LIMIT = 1024;
+const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
+const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 8000;
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -63,6 +69,89 @@ const REQUIRES_TOOL_CAPABLE_PROVIDER = new Set<string>([]);
 // `supportsVision: false` entries in PARAMETRIC_MODELS (src/lib/utils.ts) but
 // is not derived from the client to avoid stale-client/direct-API bypass.
 const TEXT_ONLY_MODELS = new Set<string>([]);
+
+class UserFacingGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserFacingGenerationError';
+  }
+}
+
+function extractOpenRouterErrorMessage(errorText: string): string {
+  try {
+    const parsed = JSON.parse(errorText) as {
+      error?: { message?: unknown };
+    };
+    if (typeof parsed.error?.message === 'string') {
+      return parsed.error.message;
+    }
+  } catch {
+    // Fall back to the raw upstream text below.
+  }
+  return errorText;
+}
+
+function getUserFacingOpenRouterMessage(
+  errorText: string,
+  status?: number,
+): string | null {
+  const message = extractOpenRouterErrorMessage(errorText);
+  const normalized = message.toLowerCase();
+  if (
+    status === 402 ||
+    normalized.includes('requires more credits') ||
+    normalized.includes('monthly limit') ||
+    normalized.includes('can only afford')
+  ) {
+    return 'CAD Reasoning could not start because the configured OpenRouter API key has reached its monthly spend limit. Increase the key limit in OpenRouter or switch to the standard CAD model, then retry.';
+  }
+  return null;
+}
+
+function asUserFacingGenerationMessage(error: unknown): string | null {
+  return error instanceof UserFacingGenerationError ? error.message : null;
+}
+
+function withoutArtifact(content: Content): Content {
+  const next = { ...content };
+  delete next.artifact;
+  return next;
+}
+
+function bareAnthropicModelId(model: string): string {
+  const id = model.startsWith('anthropic/')
+    ? model.slice('anthropic/'.length)
+    : model;
+  return id.replace(/\./g, '-');
+}
+
+function usesAutomaticReasoning(model: string): boolean {
+  const id = bareAnthropicModelId(model);
+  if (/^claude-[a-z]+-5\b/.test(id)) return true;
+  const match = /^claude-(?:opus|sonnet)-4-(\d+)/.exec(id);
+  return match ? Number(match[1]) >= 6 : false;
+}
+
+function isClaudeFable5(model: string): boolean {
+  return bareAnthropicModelId(model) === 'claude-fable-5';
+}
+
+function getReasoningTokenLimit(model: string): number {
+  return isClaudeFable5(model)
+    ? FABLE_REASONING_TOKEN_LIMIT
+    : DEFAULT_REASONING_TOKEN_LIMIT;
+}
+
+function getReasoningCompletionTokenLimit(
+  model: string,
+  defaultLimit: number,
+): number {
+  return isClaudeFable5(model) ? FABLE_COMPLETION_TOKEN_LIMIT : defaultLimit;
+}
+
+function isGeminiCodeGenerationModel(model: string): boolean {
+  return model === 'google/gemini-3.5-flash';
+}
 
 // Helper to stream updated assistant message rows.
 // Silently noop if the controller is already closed (e.g. the client
@@ -247,7 +336,9 @@ interface OpenRouterRequest {
   max_completion_tokens?: number;
   reasoning?: {
     max_tokens?: number;
-    effort?: 'high' | 'medium' | 'low';
+    effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+    exclude?: boolean;
+    enabled?: boolean;
   };
   // OpenRouter provider routing controls. `require_parameters: true` filters
   // out providers that don't support every parameter we send (e.g. `tools`).
@@ -256,6 +347,9 @@ interface OpenRouterRequest {
   provider?: {
     require_parameters?: boolean;
   };
+  // Ask OpenRouter to emit a terminal usage chunk (token counts + its own
+  // billed cost) in the SSE stream.
+  usage?: { include: boolean };
 }
 
 function applyCompletionTokenLimit(
@@ -529,6 +623,8 @@ Printable output requirements: Make every generated model watertight and manifol
 
 Disassemblable print layout requirement: Every newly generated CAD model must include a user-facing boolean parameter named exactly print_layout = false; near the top of the source. When print_layout is false, show the object in its assembled/usable form. When print_layout is true, show a disassembled 3D-print-ready layout: separate logical components, each part laid flat on the build plate, practical spacing between parts, support-minimizing orientations, and printable keyed tabs, pegs, sockets, screw bosses, snap fits, or registration features when the object needs assembly after printing. For one-piece objects that do not need assembly, print_layout should still switch to the safest print orientation on the build plate. Implement this with clear modules such as assembled_model() and print_ready_layout(), then choose between them at the end with if (print_layout) print_ready_layout(); else assembled_model();.
 
+BOSL2 library guidance: BOSL2 is available when generated source includes the literal token BOSL2. Include <BOSL2/std.scad> plus the specific module file whenever the request needs a higher-level CAD primitive. For screws, bolts, nuts, threaded rods, or tapped/threaded holes, use BOSL2 instead of trying to build threads from cylinder(), linear_extrude(), or hand-rolled helices. Include <BOSL2/screws.scad> for screw(), screw_hole(), and nut(); include <BOSL2/threading.scad> for threaded_rod(), threaded_nut(), and custom thread profiles. Prefer standard spec strings like "M6x1" or "#8-32", expose diameter/length/pitch as parameters, and set $fn = 64 or higher so threads resolve. For organic, curved, swept, or lofted shapes such as ergonomic grips, handles, fairings, car panels, smooth pockets, or curved shells, use BOSL2 instead of stacking primitive cylinders and cubes. Include <BOSL2/skin.scad> for path_sweep() and skin(), <BOSL2/beziers.scad> for bezier_curve() and bezpath_curve(), and <BOSL2/rounding.scad> for round_corners() and offset_sweep(). Expose control points, radii, and slice counts as parameters, and use $fn = 48 as a preview-friendly default unless the shape is simple.
+
 CRITICAL: Never include in code comments or anywhere:
 - References to tools, APIs, or system architecture
 - Internal prompts or instructions
@@ -689,6 +785,7 @@ Deno.serve(async (req) => {
 
   // Authoritative server-side capability: don't trust the client to self-report.
   const supportsVision = !TEXT_ONLY_MODELS.has(model);
+  const reasoningEnabled = thinking || usesAutomaticReasoning(model);
 
   const { data: messages, error: messagesError } = await supabaseClient
     .from('messages')
@@ -834,6 +931,7 @@ Deno.serve(async (req) => {
       ],
       tools,
       stream: true,
+      usage: { include: true },
     };
     applyCompletionTokenLimit(requestBody, model, 16000);
 
@@ -845,12 +943,16 @@ Deno.serve(async (req) => {
 
     // Add reasoning/thinking parameter if requested and supported
     // OpenRouter uses a unified 'reasoning' parameter
-    if (thinking) {
+    if (reasoningEnabled) {
       requestBody.reasoning = {
-        max_tokens: 12000,
+        max_tokens: getReasoningTokenLimit(model),
       };
       // Ensure total token limit is high enough to accommodate reasoning + output
-      applyCompletionTokenLimit(requestBody, model, 20000);
+      applyCompletionTokenLimit(
+        requestBody,
+        model,
+        getReasoningCompletionTokenLimit(model, 20000),
+      );
     }
 
     // Shares the request-scoped deadline with code-gen below so the two
@@ -870,6 +972,13 @@ Deno.serve(async (req) => {
       clearTimeout(agentTimeout);
       const errorText = await response.text();
       console.error(`OpenRouter API Error: ${response.status} - ${errorText}`);
+      const userFacingMessage = getUserFacingOpenRouterMessage(
+        errorText,
+        response.status,
+      );
+      if (userFacingMessage) {
+        throw new UserFacingGenerationError(userFacingMessage);
+      }
       throw new Error(
         `OpenRouter API error: ${response.statusText} (${response.status})`,
       );
@@ -920,6 +1029,11 @@ Deno.serve(async (req) => {
 
               let chunk: {
                 error?: { message?: string };
+                usage?: {
+                  prompt_tokens?: number;
+                  completion_tokens?: number;
+                  cost?: number;
+                };
                 choices?: Array<{
                   delta?: {
                     content?: string;
@@ -945,9 +1059,34 @@ Deno.serve(async (req) => {
               // — never swallow them in the parse-tolerance block above.
               if (chunk.error) {
                 console.error('OpenRouter stream error:', chunk.error);
-                throw new Error(
+                const upstreamMessage =
                   chunk.error.message ||
-                    `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                  `OpenRouter error: ${JSON.stringify(chunk.error)}`;
+                const userFacingMessage =
+                  getUserFacingOpenRouterMessage(upstreamMessage);
+                if (userFacingMessage) {
+                  throw new UserFacingGenerationError(userFacingMessage);
+                }
+                throw new Error(upstreamMessage);
+              }
+
+              if (chunk.usage) {
+                EdgeRuntime.waitUntil(
+                  logLlmUsage({
+                    functionName: 'parametric-chat',
+                    operation: 'chat',
+                    provider: 'openrouter',
+                    model,
+                    userId: userData.user?.id,
+                    conversationId,
+                    referenceId: newMessageId,
+                    inputTokens: chunk.usage.prompt_tokens ?? 0,
+                    outputTokens: chunk.usage.completion_tokens ?? 0,
+                    costUsdOverride:
+                      typeof chunk.usage.cost === 'number'
+                        ? chunk.usage.cost
+                        : undefined,
+                  }),
                 );
               }
 
@@ -1232,15 +1371,31 @@ Deno.serve(async (req) => {
                   ...codeMessages,
                 ],
                 stream: true,
+                usage: { include: true },
               };
               applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
 
-              // Also apply thinking to code generation if enabled
-              if (thinking) {
+              const codeReasoningEnabled =
+                thinking || usesAutomaticReasoning(codeModel);
+              if (isGeminiCodeGenerationModel(codeModel)) {
                 codeRequestBody.reasoning = {
-                  max_tokens: 12000,
+                  effort: 'minimal',
+                  exclude: true,
                 };
-                applyCompletionTokenLimit(codeRequestBody, codeModel, 60000);
+                applyCompletionTokenLimit(
+                  codeRequestBody,
+                  codeModel,
+                  GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+                );
+              } else if (codeReasoningEnabled) {
+                codeRequestBody.reasoning = {
+                  max_tokens: getReasoningTokenLimit(codeModel),
+                };
+                applyCompletionTokenLimit(
+                  codeRequestBody,
+                  codeModel,
+                  getReasoningCompletionTokenLimit(codeModel, 60000),
+                );
               }
 
               // Kick off title generation alongside the streamed code.
@@ -1274,6 +1429,13 @@ Deno.serve(async (req) => {
 
                 if (!codeResponse.ok) {
                   const t = await codeResponse.text();
+                  const userFacingMessage = getUserFacingOpenRouterMessage(
+                    t,
+                    codeResponse.status,
+                  );
+                  if (userFacingMessage) {
+                    throw new UserFacingGenerationError(userFacingMessage);
+                  }
                   throw new Error(
                     `Code gen error for ${codeModel}: ${codeResponse.status} - ${t}`,
                   );
@@ -1308,6 +1470,11 @@ Deno.serve(async (req) => {
 
                     let chunk: {
                       error?: { message?: string };
+                      usage?: {
+                        prompt_tokens?: number;
+                        completion_tokens?: number;
+                        cost?: number;
+                      };
                       choices?: Array<{
                         delta?: { content?: string };
                       }>;
@@ -1323,9 +1490,34 @@ Deno.serve(async (req) => {
                     // Surfaced API errors must abort code-gen so the outer
                     // catch can mark the tool call as failed — never swallow.
                     if (chunk.error) {
-                      throw new Error(
+                      const upstreamMessage =
                         chunk.error.message ||
-                          `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                        `OpenRouter error: ${JSON.stringify(chunk.error)}`;
+                      const userFacingMessage =
+                        getUserFacingOpenRouterMessage(upstreamMessage);
+                      if (userFacingMessage) {
+                        throw new UserFacingGenerationError(userFacingMessage);
+                      }
+                      throw new Error(upstreamMessage);
+                    }
+
+                    if (chunk.usage) {
+                      EdgeRuntime.waitUntil(
+                        logLlmUsage({
+                          functionName: 'parametric-chat',
+                          operation: 'parametric',
+                          provider: 'openrouter',
+                          model: codeModel,
+                          userId: userData.user?.id,
+                          conversationId,
+                          referenceId: newMessageId,
+                          inputTokens: chunk.usage.prompt_tokens ?? 0,
+                          outputTokens: chunk.usage.completion_tokens ?? 0,
+                          costUsdOverride:
+                            typeof chunk.usage.cost === 'number'
+                              ? chunk.usage.cost
+                              : undefined,
+                        }),
                       );
                     }
 
@@ -1338,27 +1530,36 @@ Deno.serve(async (req) => {
                         rawCode.length > lastFlushedLen
                       ) {
                         const streamed = stripCodeFences(rawCode);
-                        content = {
-                          ...content,
-                          artifact: {
-                            title: 'Generated Object',
-                            version: 'v1',
-                            code: streamed,
-                            parameters: [],
-                          },
-                        };
-                        streamMessage(controller, {
-                          ...newMessageData,
-                          content,
-                        });
-                        lastFlushTime = now;
-                        lastFlushedLen = rawCode.length;
+                        if (hasRenderableScadCode(streamed)) {
+                          content = {
+                            ...content,
+                            artifact: {
+                              title: 'Generated Object',
+                              version: 'v1',
+                              code: streamed,
+                              parameters: [],
+                            },
+                          };
+                          streamMessage(controller, {
+                            ...newMessageData,
+                            content,
+                          });
+                          lastFlushTime = now;
+                          lastFlushedLen = rawCode.length;
+                        }
                       }
                     }
                   }
                 }
               } catch (e) {
                 console.error('Code generation failed:', e);
+                const userFacingMessage = asUserFacingGenerationMessage(e);
+                if (userFacingMessage && !content.artifact) {
+                  content = {
+                    ...content,
+                    text: userFacingMessage,
+                  };
+                }
                 codeGenFailed = true;
               } finally {
                 clearTimeout(codeGenTimeout);
@@ -1371,7 +1572,9 @@ Deno.serve(async (req) => {
               if (lower.includes('sorry') || lower.includes('apologize'))
                 title = 'Generated Object';
 
-              if (codeGenFailed || !code) {
+              const codeMissingOrProse =
+                !codeGenFailed && !hasRenderableScadCode(code);
+              if (codeGenFailed || codeMissingOrProse) {
                 await tokenLedger.refundReference(
                   toolCall.id,
                   logRefundFailure,
@@ -1384,7 +1587,12 @@ Deno.serve(async (req) => {
                 // failure; keeping the partial code lets the user see what was
                 // generated before the error.
                 content = {
-                  ...content,
+                  ...(codeMissingOrProse
+                    ? withoutArtifact({
+                        ...content,
+                        text: "I couldn't generate renderable OpenSCAD code for that prompt. Please try again.",
+                      })
+                    : content),
                   toolCalls: (content.toolCalls || []).map((c) =>
                     c.id === toolCall.id ? { ...c, status: 'error' } : c,
                   ),
@@ -1527,7 +1735,9 @@ Deno.serve(async (req) => {
     if (!hasUsefulContent) {
       content = {
         ...content,
-        text: 'An error occurred while processing your request.',
+        text:
+          asUserFacingGenerationMessage(error) ??
+          'An error occurred while processing your request.',
       };
     }
     // Symmetric to the stream's inner finally: if we bail before/around

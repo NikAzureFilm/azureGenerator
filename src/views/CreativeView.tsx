@@ -29,6 +29,7 @@ const PANEL_SIZES = {
 
 type CreativeViewProps = {
   messages: TreeNode<Message>[];
+  generationMessages?: Message[];
   isLoading: boolean;
   sendMessage?: (content: Content) => void;
   stopGenerating?: () => void;
@@ -53,6 +54,7 @@ type CreativeViewProps = {
 
 export function CreativeView({
   messages,
+  generationMessages = [],
   isLoading,
   sendMessage,
   stopGenerating,
@@ -202,7 +204,10 @@ export function CreativeView({
               minSize={PANEL_SIZES.PREVIEW.MIN}
               className="overflow-hidden"
             >
-              <CreativePreviewSection isLoading={isLoading} />
+              <CreativePreviewSection
+                isLoading={isLoading}
+                generationMessages={generationMessages}
+              />
             </Panel>
           </PanelGroup>
         )}

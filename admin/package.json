@@ -1,0 +1,29 @@
+{
+  "name": "azurefilm-admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Admin analytics dashboard for the AzureFilm/Adam text-to-CAD app. Tracks users, generations, revenue and token costs.",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "@zip.js/zip.js": "^2.7.63",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "stripe": "^17.5.0",
+    "three": "^0.160.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@types/three": "^0.160.0",
+    "typescript": "^5.7.3"
+  }
+}

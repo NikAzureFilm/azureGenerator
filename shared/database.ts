@@ -462,6 +462,69 @@ export type Database = {
         };
         Relationships: [];
       };
+      provider_usage: {
+        Row: {
+          cached_input_tokens: number | null;
+          conversation_id: string | null;
+          cost_usd: number;
+          created_at: string;
+          function_name: string;
+          id: number;
+          input_tokens: number | null;
+          metadata: Json;
+          model: string;
+          operation: string;
+          output_tokens: number | null;
+          pricing_source: string;
+          provider: Database['public']['Enums']['provider_kind'];
+          reference_id: string | null;
+          request_units: number | null;
+          status: string;
+          unit: string | null;
+          user_id: string | null;
+        };
+        Insert: {
+          cached_input_tokens?: number | null;
+          conversation_id?: string | null;
+          cost_usd?: number;
+          created_at?: string;
+          function_name: string;
+          id?: never;
+          input_tokens?: number | null;
+          metadata?: Json;
+          model: string;
+          operation: string;
+          output_tokens?: number | null;
+          pricing_source?: string;
+          provider: Database['public']['Enums']['provider_kind'];
+          reference_id?: string | null;
+          request_units?: number | null;
+          status?: string;
+          unit?: string | null;
+          user_id?: string | null;
+        };
+        Update: {
+          cached_input_tokens?: number | null;
+          conversation_id?: string | null;
+          cost_usd?: number;
+          created_at?: string;
+          function_name?: string;
+          id?: never;
+          input_tokens?: number | null;
+          metadata?: Json;
+          model?: string;
+          operation?: string;
+          output_tokens?: number | null;
+          pricing_source?: string;
+          provider?: Database['public']['Enums']['provider_kind'];
+          reference_id?: string | null;
+          request_units?: number | null;
+          status?: string;
+          unit?: string | null;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
       trial_users: {
         Row: {
           id: string;
@@ -537,6 +600,13 @@ export type Database = {
       mesh_model_type: 'quality' | 'fast';
       privacy_type: 'public' | 'private';
       prompt_type: 'mesh' | 'image' | 'chat';
+      provider_kind:
+        | 'anthropic'
+        | 'openai'
+        | 'openrouter'
+        | 'google'
+        | 'fal'
+        | 'worker';
       'stripe-level': 'pro' | 'standard';
       subscription_level: 'pro' | 'standard' | 'free';
       token_operation_type: 'mesh' | 'parametric' | 'chat' | 'refund';
@@ -685,6 +755,14 @@ export const Constants = {
       mesh_model_type: ['quality', 'fast'],
       privacy_type: ['public', 'private'],
       prompt_type: ['mesh', 'image', 'chat'],
+      provider_kind: [
+        'anthropic',
+        'openai',
+        'openrouter',
+        'google',
+        'fal',
+        'worker',
+      ],
       'stripe-level': ['pro', 'standard'],
       subscription_level: ['pro', 'standard', 'free'],
       token_operation_type: ['mesh', 'parametric', 'chat', 'refund'],

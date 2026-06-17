@@ -2,6 +2,7 @@ import { FEATURE_COSTS } from '../../shared/tokenCosts.ts';
 import type { ModelConfig } from '../types/misc.ts';
 
 export const DEFAULT_PARAMETRIC_MODEL = 'google/gemini-3.5-flash';
+export const CLAUDE_FABLE_PARAMETRIC_MODEL = 'anthropic/claude-fable-5';
 
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {

@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
-import { MeshPreview } from './MeshPreview';
+import { LazyMeshPreview } from './LazyMeshPreview';
 import { ImageGallery } from './ImageGallery';
 
 export function CreativePreviewDialog() {
@@ -32,7 +32,7 @@ export function CreativePreviewDialog() {
           )}
           {currentMessage?.content.mesh && (
             <div className="aspect-square w-full">
-              <MeshPreview meshId={currentMessage.content.mesh.id} />
+              <LazyMeshPreview meshId={currentMessage.content.mesh.id} />
             </div>
           )}
         </div>

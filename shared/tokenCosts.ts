@@ -83,13 +83,13 @@ export const FEATURE_COSTS = {
   ultraMesh: {
     id: 'ultra-mesh',
     label: 'Max quality mesh',
-    tokens: 60,
+    tokens: 110,
     description: 'Higher quality textured 3D mesh generation.',
   },
   multiviewMesh: {
     id: 'multiview-mesh',
     label: 'Multiview mesh',
-    tokens: 60,
+    tokens: 61,
     description: 'Hunyuan Pro four-view 3D mesh generation.',
   },
   upscaleMesh: {
@@ -130,6 +130,7 @@ export function getCreativeModelCost(model: CreativeModel): PublicFeatureCost {
 
 export function getParametricModelTokenCost(model: string): number {
   switch (model) {
+    case 'anthropic/claude-fable-5':
     case 'anthropic/claude-opus-4.7':
       return FEATURE_COSTS.parametricCadReasoning.tokens;
     default:

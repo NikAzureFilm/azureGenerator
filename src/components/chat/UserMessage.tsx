@@ -102,9 +102,9 @@ export function UserMessage({
   };
 
   return (
-    <div className="flex justify-start">
+    <div className="flex items-center justify-start">
       {message.role === 'user' && (
-        <div className="mr-2 mt-1">
+        <div className="mr-2">
           <UserAvatar className="h-9 w-9 border border-adam-neutral-700 bg-adam-neutral-950 p-0" />
         </div>
       )}

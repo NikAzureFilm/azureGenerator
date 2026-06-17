@@ -11,6 +11,10 @@ import {
   TOKEN_INTERNAL_USD_COST as SHARED_TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE as SHARED_TOKEN_USD_VALUE,
 } from '../shared/tokenCosts.ts';
+import { FAL_UNIT_PRICES } from '../shared/providerPricing.ts';
+
+// The CLI's endpoint list must come from the shared price source of truth.
+assert.deepEqual(FAL_ENDPOINTS, Object.keys(FAL_UNIT_PRICES));
 
 assert.equal(TOKEN_INTERNAL_USD_COST, SHARED_TOKEN_INTERNAL_USD_COST);
 assert.equal(TOKEN_USD_VALUE, SHARED_TOKEN_USD_VALUE);
@@ -47,12 +51,14 @@ const unitPrices = new Map(
 const rows = buildFeatureCostRows(unitPrices);
 const byId = new Map(rows.map((row) => [row.id, row]));
 
-assert.equal(byId.get('fastMesh')?.suggestedTokens, 41);
-assert.equal(byId.get('qualityMesh')?.suggestedTokens, 34);
+assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 1);
+assert.equal(byId.get('multiviewFrontImage')?.suggestedTokens, 1);
+assert.equal(byId.get('generatedInputImageNanoBanana')?.suggestedTokens, 7);
+assert.equal(byId.get('fastMesh')?.suggestedTokens, 29);
+assert.equal(byId.get('qualityMesh')?.suggestedTokens, 33);
 assert.equal(byId.get('ultraMesh')?.suggestedTokens, 110);
 assert.equal(byId.get('multiviewMesh')?.suggestedTokens, 61);
 assert.equal(byId.get('upscaleMesh')?.suggestedTokens, 76);
-assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 22);
 
 for (const [key, feature] of Object.entries(FEATURE_COSTS)) {
   const row = byId.get(key);

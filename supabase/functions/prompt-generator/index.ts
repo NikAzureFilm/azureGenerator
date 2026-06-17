@@ -13,6 +13,7 @@ import {
   type RefundFailure,
 } from '../_shared/refundableTokenLedger.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
+import { logLlmUsage } from '../_shared/providerUsage.ts';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
@@ -28,11 +29,17 @@ type OpenRouterMessageContent =
     }>;
 
 interface OpenRouterChatCompletion {
+  model?: string;
   choices?: Array<{
     message?: {
       content?: OpenRouterMessageContent;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    cost?: number;
+  };
   error?: {
     message?: string;
   };
@@ -285,11 +292,14 @@ Return only the enhanced prompt text, no introductory phrases.`;
     const requestBody = {
       model: PROMPT_GENERATOR_MODEL,
       max_completion_tokens: 200,
+      // Ask OpenRouter to return token usage (and its own billed cost).
+      usage: { include: true },
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
     };
+    let usedModel: string = PROMPT_GENERATOR_MODEL;
 
     const requestPrompt = (body: typeof requestBody) =>
       fetch(OPENROUTER_API_URL, {
@@ -311,6 +321,7 @@ Return only the enhanced prompt text, no introductory phrases.`;
         console.warn(
           `${PROMPT_GENERATOR_MODEL} is not available on OpenRouter; retrying with ${PROMPT_GENERATOR_FALLBACK_MODEL}`,
         );
+        usedModel = PROMPT_GENERATOR_FALLBACK_MODEL;
         response = await requestPrompt({
           ...requestBody,
           model: PROMPT_GENERATOR_FALLBACK_MODEL,
@@ -330,6 +341,22 @@ Return only the enhanced prompt text, no introductory phrases.`;
     if (completion.error?.message) {
       throw new Error(completion.error.message);
     }
+
+    EdgeRuntime.waitUntil(
+      logLlmUsage({
+        functionName: 'prompt-generator',
+        operation: 'prompt',
+        provider: 'openrouter',
+        model: completion.model ?? usedModel,
+        userId: userData.user.id,
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+        costUsdOverride:
+          typeof completion.usage?.cost === 'number'
+            ? completion.usage.cost
+            : undefined,
+      }),
+    );
 
     const prompt = extractGeneratedText(completion);
 

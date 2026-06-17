@@ -10,7 +10,6 @@ const FEATURE_ROWS = [
       FEATURE_COSTS.chat,
       FEATURE_COSTS.promptGeneration,
       FEATURE_COSTS.parametric,
-      FEATURE_COSTS.parametricCadReasoning,
     ],
   },
   {
@@ -22,7 +21,11 @@ const FEATURE_ROWS = [
   },
   {
     group: '3D generation',
-    rows: [FEATURE_COSTS.ultraMesh, FEATURE_COSTS.upscaleMesh],
+    rows: [
+      FEATURE_COSTS.ultraMesh,
+      FEATURE_COSTS.multiviewMesh,
+      FEATURE_COSTS.upscaleMesh,
+    ],
   },
 ];
 

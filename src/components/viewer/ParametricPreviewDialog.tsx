@@ -7,7 +7,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ImageGallery } from '@/components/viewer/ImageGallery';
-import { OpenSCADPreview } from './OpenSCADViewer';
+import { LazyOpenSCADPreview } from './LazyOpenSCADPreview';
 import OpenSCADError from '@/lib/OpenSCADError';
 import {
   Sheet,
@@ -159,7 +159,7 @@ export function ParametricPreviewDialog({
               <div className="mx-auto flex h-full max-w-xl flex-col items-center pb-6">
                 <div className="h-[40dvh] min-h-[40dvh] w-full px-4">
                   <div className="h-full w-full overflow-hidden rounded-xl">
-                    <OpenSCADPreview
+                    <LazyOpenSCADPreview
                       scadCode={currentMessage.content.artifact.code}
                       color="#F8248A"
                       onOutputChange={onOutputChange}

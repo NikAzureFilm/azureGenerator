@@ -10,6 +10,7 @@ import {
 import { ParameterSlider } from '@/components/parameter/ParameterSlider';
 import { Label } from '@/components/ui/label';
 import { ColorPicker } from '@/components/parameter/ColorPicker';
+import { cn } from '@/lib/utils';
 
 export function ParameterInput({
   param,
@@ -38,6 +39,49 @@ export function ParameterInput({
     setParamState({ ...paramState, value });
     handleCommit(paramState, value);
   };
+
+  if (paramState.options && paramState.options.length > 0) {
+    const options = paramState.options;
+    const currentValue = String(paramState.value);
+    const labelId = `${paramState.name}-label`;
+
+    return (
+      <div className="grid w-full grid-cols-[80px_1fr] items-center gap-3">
+        <Label
+          id={labelId}
+          className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
+        >
+          {paramState.displayName}
+        </Label>
+        <div
+          role="radiogroup"
+          aria-labelledby={labelId}
+          className="flex w-full flex-wrap justify-start gap-0.5 rounded-lg bg-adam-neutral-900 p-0.5"
+        >
+          {options.map((option) => {
+            const optionValue = String(option.value);
+            const selected = optionValue === currentValue;
+            return (
+              <button
+                key={optionValue}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={cn(
+                  'h-5 flex-1 rounded-md px-2 text-xs text-adam-neutral-300 transition-colors [@media(hover:hover)]:hover:text-adam-text-primary',
+                  selected &&
+                    'bg-adam-neutral-700 font-medium text-adam-text-primary shadow-sm',
+                )}
+                onClick={() => handleValueCommit(option.value)}
+              >
+                {option.label ?? optionValue}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   if (!paramState.type || paramState.type === 'number') {
     return (
