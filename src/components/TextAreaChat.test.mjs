@@ -80,3 +80,9 @@ assert.match(
   /const canGenerateInputImage =[\s\S]*shouldShowReferenceImageControl[\s\S]*parametricModelSupportsVision\(model\)/s,
   'generated reference images should share the same CAD vision capability gate as uploaded references',
 );
+
+assert.match(
+  source,
+  /<ImageGenerateDialog[\s\S]*briefOpenByDefault=\{type === 'parametric'\}/s,
+  'CAD image generation should open the optional object brief by default',
+);

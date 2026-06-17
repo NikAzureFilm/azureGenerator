@@ -1662,6 +1662,7 @@ function TextAreaChat({
           })
         }
         maxReferences={1}
+        briefOpenByDefault={type === 'parametric'}
       />
       {isMultiview ? (
         <div
