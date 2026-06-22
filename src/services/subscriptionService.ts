@@ -8,7 +8,6 @@ type CheckoutResponse = { url: string };
 
 async function invokeCheckout(body: {
   priceId: string;
-  trialPeriodDays?: number;
 }): Promise<CheckoutResponse> {
   const { data, error } = await supabase.functions.invoke('billing-checkout', {
     body,
@@ -24,18 +23,16 @@ export const useSubscriptionService = () => {
   return useMutation({
     mutationFn: async ({
       priceId,
-      trialPeriodDays,
       source,
     }: {
       priceId: string;
-      trialPeriodDays?: number;
       source: string;
     }) => {
       posthog.capture('subscribe_clicked', {
         source,
         price_id: priceId,
       });
-      return invokeCheckout({ priceId, trialPeriodDays });
+      return invokeCheckout({ priceId });
     },
     onSuccess: (data) => {
       window.location.href = data.url;

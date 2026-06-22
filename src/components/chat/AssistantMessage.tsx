@@ -28,7 +28,6 @@ import {
   PARAMETRIC_MODELS,
 } from '@/lib/utils';
 import { Link } from '@tanstack/react-router';
-import { TrialDialog } from '@/components/auth/TrialDialog';
 import { getLevel, useAuth } from '@/contexts/AuthContext';
 import { ImageViewer } from '@/components/ImageViewer';
 import { useConversation } from '@/contexts/ConversationContext';
@@ -87,7 +86,7 @@ interface AssistantMessageProps {
 
 const paymentRequiredMessages = {
   insufficient_tokens: <InsufficientTokensMessage />,
-  trial_user_E9ueHIgpei2JvFUDeJLEnwzDhy7GF38a: <TrialUserMessage />,
+  trial_user_E9ueHIgpei2JvFUDeJLEnwzDhy7GF38a: <FreeUserMessage />,
   free_user_E9ueHIgpei2JvFUDeJLEnwzDhy7GF38a: <FreeUserMessage />,
   limit_reached_E9ueHIgpei2JvFUDeJLEnwzDhy7GF38a: <LimitReachedMessage />,
   limit_reached_image_E9ueHIgpei2JvFUDeJLEnwzDhy7GF38a: (
@@ -690,19 +689,6 @@ function FreeUserMessage() {
       </Link>{' '}
       to a paid plan to experience all the features AzureFilm Generator has to
       offer.
-    </span>
-  );
-}
-
-function TrialUserMessage() {
-  return (
-    <span>
-      <TrialDialog>
-        <span className="cursor-pointer text-adam-blue hover:underline">
-          Start a trial
-        </span>
-      </TrialDialog>{' '}
-      to experience all Pro features for 7 days, completely free.
     </span>
   );
 }
