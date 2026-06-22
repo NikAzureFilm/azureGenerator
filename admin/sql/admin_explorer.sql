@@ -171,6 +171,7 @@ begin
                      where tt.user_id = u.id and tt.source = 'purchased'
                        and tt.operation = 'chat' and tt.amount > 0), 0)
           + case coalesce(sub.level::text, 'free')
+              when 'max' then 150000
               when 'pro' then 15000
               when 'standard' then 3000
               else 0 end
@@ -296,6 +297,7 @@ begin
       ), 0),
       'plan_monthly_cents', coalesce((
         select case s.level::text
+                 when 'max' then 150000
                  when 'pro' then 15000
                  when 'standard' then 3000
                  else 0 end
@@ -771,7 +773,7 @@ begin
     ), '{}'::jsonb),
     'revenue', jsonb_build_object(
       'mrr_cents', coalesce((
-        select sum(case level when 'pro' then 15000 when 'standard' then 3000 else 0 end)
+        select sum(case level when 'max' then 150000 when 'pro' then 15000 when 'standard' then 3000 else 0 end)
           from subscriptions where status in ('active','trialing')
       ), 0),
       'by_plan', coalesce((

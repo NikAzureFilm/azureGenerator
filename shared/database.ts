@@ -45,6 +45,89 @@ export type Database = {
         };
         Relationships: [];
       };
+      generation_assets: {
+        Row: {
+          bucket: string;
+          conversation_id: string | null;
+          created_at: string;
+          deleted_at: string | null;
+          expires_at: string | null;
+          id: string;
+          kind:
+            | 'image'
+            | 'mesh'
+            | 'preview'
+            | 'cad-artifact'
+            | 'temp-multiview'
+            | 'failed-artifact';
+          metadata: Json;
+          mime_type: string | null;
+          object_key: string;
+          provider: 'r2' | 'supabase';
+          size_bytes: number;
+          source_id: string | null;
+          source_table: 'images' | 'meshes' | 'previews' | 'cad_jobs' | null;
+          user_id: string;
+          visibility: 'private' | 'public';
+        };
+        Insert: {
+          bucket: string;
+          conversation_id?: string | null;
+          created_at?: string;
+          deleted_at?: string | null;
+          expires_at?: string | null;
+          id?: string;
+          kind:
+            | 'image'
+            | 'mesh'
+            | 'preview'
+            | 'cad-artifact'
+            | 'temp-multiview'
+            | 'failed-artifact';
+          metadata?: Json;
+          mime_type?: string | null;
+          object_key: string;
+          provider?: 'r2' | 'supabase';
+          size_bytes?: number;
+          source_id?: string | null;
+          source_table?: 'images' | 'meshes' | 'previews' | 'cad_jobs' | null;
+          user_id: string;
+          visibility?: 'private' | 'public';
+        };
+        Update: {
+          bucket?: string;
+          conversation_id?: string | null;
+          created_at?: string;
+          deleted_at?: string | null;
+          expires_at?: string | null;
+          id?: string;
+          kind?:
+            | 'image'
+            | 'mesh'
+            | 'preview'
+            | 'cad-artifact'
+            | 'temp-multiview'
+            | 'failed-artifact';
+          metadata?: Json;
+          mime_type?: string | null;
+          object_key?: string;
+          provider?: 'r2' | 'supabase';
+          size_bytes?: number;
+          source_id?: string | null;
+          source_table?: 'images' | 'meshes' | 'previews' | 'cad_jobs' | null;
+          user_id?: string;
+          visibility?: 'private' | 'public';
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'generation_assets_conversation_id_fkey';
+            columns: ['conversation_id'];
+            isOneToOne: false;
+            referencedRelation: 'conversations';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       images: {
         Row: {
           conversation_id: string;
@@ -542,9 +625,27 @@ export type Database = {
       };
     };
     Views: {
-      [_ in never]: never;
+      generation_asset_usage: {
+        Row: {
+          asset_count: number | null;
+          latest_asset_at: string | null;
+          r2_storage_bytes: number | null;
+          storage_bytes: number | null;
+          supabase_storage_bytes: number | null;
+          temp_storage_bytes: number | null;
+          user_id: string | null;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
+      cleanup_expired_generation_assets: {
+        Args: { p_now?: string };
+        Returns: {
+          marked_deleted: number;
+          deleted_supabase_objects: number;
+        }[];
+      };
       credit_purchased_tokens: {
         Args: { p_amount: number; p_reference_id?: string; p_user_id: string };
         Returns: Json;
@@ -607,8 +708,8 @@ export type Database = {
         | 'google'
         | 'fal'
         | 'worker';
-      'stripe-level': 'pro' | 'standard';
-      subscription_level: 'pro' | 'standard' | 'free';
+      'stripe-level': 'pro' | 'standard' | 'max';
+      subscription_level: 'pro' | 'standard' | 'max' | 'free';
       token_operation_type: 'mesh' | 'parametric' | 'chat' | 'refund';
       token_source_type: 'subscription' | 'purchased';
     };
@@ -763,8 +864,8 @@ export const Constants = {
         'fal',
         'worker',
       ],
-      'stripe-level': ['pro', 'standard'],
-      subscription_level: ['pro', 'standard', 'free'],
+      'stripe-level': ['pro', 'standard', 'max'],
+      subscription_level: ['pro', 'standard', 'max', 'free'],
       token_operation_type: ['mesh', 'parametric', 'chat', 'refund'],
       token_source_type: ['subscription', 'purchased'],
     },

@@ -26,6 +26,15 @@ ALTER TABLE "public"."previews" ADD CONSTRAINT "previews_mesh_id_fkey" FOREIGN K
 ALTER TABLE "public"."previews" VALIDATE CONSTRAINT "previews_mesh_id_fkey";
 
 
+CREATE INDEX IF NOT EXISTS idx_previews_user_created ON "public"."previews" USING btree (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_previews_conversation_created ON "public"."previews" USING btree (conversation_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_previews_mesh_status_updated ON "public"."previews" USING btree (mesh_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_previews_status_created ON "public"."previews" USING btree (status, created_at DESC);
+
+
 ALTER TABLE "public"."previews" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can manage their own previews" ON "public"."previews" USING ( (SELECT "auth"."uid"()) = "user_id" );

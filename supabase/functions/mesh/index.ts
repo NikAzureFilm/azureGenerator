@@ -40,6 +40,14 @@ import { reformatSignedUrl } from '../_shared/messageUtils.ts';
 import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
+  getBodySizeBytes,
+  recordGeneratedAsset,
+} from '../_shared/generatedAssets.ts';
+import {
+  checkGenerationCostControls,
+  costControlErrorBody,
+} from '../_shared/costControls.ts';
+import {
   RefundableTokenLedger,
   type RefundFailure,
 } from '../_shared/refundableTokenLedger.ts';
@@ -137,6 +145,38 @@ async function logFalMeshCost(
     userId: meshRow?.user_id ?? null,
     conversationId: meshRow?.conversation_id ?? null,
     referenceId: meshId,
+  });
+}
+
+async function recordGeneratedImageAsset({
+  supabaseClient,
+  userId,
+  conversationId,
+  imageId,
+  body,
+  contentType,
+  metadata,
+}: {
+  supabaseClient: SupabaseClient;
+  userId: string;
+  conversationId: string;
+  imageId: string;
+  body: unknown;
+  contentType?: string | null;
+  metadata?: Record<string, unknown>;
+}) {
+  await recordGeneratedAsset({
+    supabaseClient,
+    userId,
+    conversationId,
+    sourceTable: 'images',
+    sourceId: imageId,
+    kind: 'image',
+    bucket: 'images',
+    objectKey: `${userId}/${conversationId}/${imageId}`,
+    mimeType: contentType ?? null,
+    sizeBytes: getBodySizeBytes(body),
+    metadata: metadata ?? {},
   });
 }
 
@@ -762,6 +802,20 @@ Deno.serve(async (req) => {
         JSON.stringify({ error: { message: 'Images or text not found' } }),
         {
           status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    const limitViolation = await checkGenerationCostControls({
+      supabaseClient,
+      userId: userData.user.id,
+    });
+    if (limitViolation) {
+      return new Response(
+        JSON.stringify(costControlErrorBody(limitViolation)),
+        {
+          status: 429,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       );
@@ -1474,6 +1528,16 @@ async function submitMeshJob(
           throw new Error(imageUploadError.message);
         }
 
+        await recordGeneratedImageAsset({
+          supabaseClient,
+          userId,
+          conversationId,
+          imageId: imageData.id,
+          body: imageBytes,
+          contentType,
+          metadata: { source: 'mesh', model: 'quality' },
+        });
+
         await supabaseClient
           .from('images')
           .update({
@@ -1551,6 +1615,16 @@ async function submitMeshJob(
         if (imageUploadError) {
           throw new Error(imageUploadError.message);
         }
+
+        await recordGeneratedImageAsset({
+          supabaseClient,
+          userId,
+          conversationId,
+          imageId: imageData.id,
+          body: imageBytes,
+          contentType,
+          metadata: { source: 'mesh', model: 'fast' },
+        });
 
         await supabaseClient
           .from('images')
@@ -1720,6 +1794,16 @@ async function submitMeshJob(
       if (imageUploadError) {
         throw new Error(imageUploadError.message);
       }
+
+      await recordGeneratedImageAsset({
+        supabaseClient,
+        userId,
+        conversationId,
+        imageId: imageData.id,
+        body: imageBytes,
+        contentType,
+        metadata: { source: 'mesh', model: 'ultra', subStage: ultraSubStage },
+      });
 
       await supabaseClient
         .from('images')
@@ -2240,6 +2324,18 @@ async function submitPreviewJob(
       if (imageUploadError) {
         throw new Error(imageUploadError.message);
       }
+
+      await recordGeneratedAsset({
+        supabaseClient,
+        userId,
+        conversationId,
+        kind: 'image',
+        bucket: 'images',
+        objectKey: `${userId}/${conversationId}/${imageId}`,
+        mimeType: detectImageMediaType(imageBytes),
+        sizeBytes: getBodySizeBytes(imageBytes),
+        metadata: { source: 'mesh-preview-seed' },
+      });
 
       const { data: imageSignedUrl, error: imageSignedUrlError } =
         await supabaseClient.storage

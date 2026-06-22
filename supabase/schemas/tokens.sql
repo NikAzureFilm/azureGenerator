@@ -66,6 +66,10 @@ ALTER TABLE "public"."token_transactions" ADD CONSTRAINT "token_transactions_pke
 ALTER TABLE "public"."token_transactions" ADD CONSTRAINT "token_transactions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE NOT VALID;
 ALTER TABLE "public"."token_transactions" VALIDATE CONSTRAINT "token_transactions_user_id_fkey";
 
+CREATE INDEX IF NOT EXISTS idx_token_transactions_user_operation_created ON "public"."token_transactions" USING btree (user_id, operation, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_token_transactions_reference_id ON "public"."token_transactions" USING btree (reference_id) WHERE (reference_id IS NOT NULL);
+
 ALTER TABLE "public"."token_transactions" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "token_transactions_read_own" ON "public"."token_transactions" FOR SELECT TO authenticated

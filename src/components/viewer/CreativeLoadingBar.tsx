@@ -41,6 +41,7 @@ export function CreativeLoadingBar({
   // Query for preview status and GLB URL
   const { data: previewBlob, updatedAt } = useGlbPreview({
     id: meshId,
+    isGenerationActive: modelType === 'mesh' && !!meshId,
   });
 
   const actualUpdatedAt = useMemo(() => {

@@ -15,6 +15,10 @@ import { detectImageMediaType } from '../_shared/imageMime.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
+  getBodySizeBytes,
+  recordGeneratedAsset,
+} from '../_shared/generatedAssets.ts';
+import {
   RefundableTokenLedger,
   type RefundFailure,
 } from '../_shared/refundableTokenLedger.ts';
@@ -319,6 +323,18 @@ Deno.serve(async (req) => {
     if (uploadError) {
       throw new Error(`Upload failed: ${uploadError.message}`);
     }
+
+    await recordGeneratedAsset({
+      supabaseClient: serviceClient,
+      userId,
+      conversationId,
+      kind: 'image',
+      bucket: 'images',
+      objectKey: path,
+      mimeType: contentType,
+      sizeBytes: getBodySizeBytes(imageBytes),
+      metadata: { source: 'generate-view', view, mode },
+    });
 
     const { data: signedUploaded, error: signedUploadedError } =
       await serviceClient.storage.from('images').createSignedUrl(path, 60 * 60);

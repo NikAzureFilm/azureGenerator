@@ -18,6 +18,14 @@ export type CostTotals = {
   failedCostUsd: number;
 };
 
+export type StorageCostTotals = {
+  assetCount: number;
+  storageBytes: number;
+  r2StorageBytes: number;
+  supabaseStorageBytes: number;
+  tempStorageBytes: number;
+};
+
 export type ModelCostRow = {
   provider: string;
   model: string;
@@ -68,6 +76,7 @@ export type CostExplorer = {
   truncated: boolean;
   rowCount: number;
   totals: CostTotals;
+  storage: StorageCostTotals;
   byModel: ModelCostRow[];
   byOperation: OperationCostRow[];
   byProvider: ProviderCostRow[];
@@ -87,6 +96,14 @@ type UsageRow = {
   cached_input_tokens: number | null;
   cost_usd: number | string | null;
   status: string | null;
+};
+
+type AssetUsageRow = {
+  asset_count: number | string | null;
+  storage_bytes: number | string | null;
+  r2_storage_bytes: number | string | null;
+  supabase_storage_bytes: number | string | null;
+  temp_storage_bytes: number | string | null;
 };
 
 const PAGE_SIZE = 1000;
@@ -122,6 +139,42 @@ async function fetchUsageRows(
   }
   truncated = true;
   return { rows, truncated };
+}
+
+async function fetchGeneratedAssetStorage(): Promise<StorageCostTotals> {
+  const supa = getAdminClient();
+  const empty: StorageCostTotals = {
+    assetCount: 0,
+    storageBytes: 0,
+    r2StorageBytes: 0,
+    supabaseStorageBytes: 0,
+    tempStorageBytes: 0,
+  };
+
+  const { data, error } = await supa
+    .from('generation_asset_usage')
+    .select(
+      'asset_count,storage_bytes,r2_storage_bytes,supabase_storage_bytes,temp_storage_bytes',
+    );
+
+  if (error) {
+    if (
+      error.code === '42P01' ||
+      /generation_asset_usage/i.test(error.message)
+    ) {
+      return empty;
+    }
+    throw new Error(`generation_asset_usage read: ${error.message}`);
+  }
+
+  return ((data ?? []) as AssetUsageRow[]).reduce((totals, row) => {
+    totals.assetCount += Number(row.asset_count ?? 0) || 0;
+    totals.storageBytes += Number(row.storage_bytes ?? 0) || 0;
+    totals.r2StorageBytes += Number(row.r2_storage_bytes ?? 0) || 0;
+    totals.supabaseStorageBytes += Number(row.supabase_storage_bytes ?? 0) || 0;
+    totals.tempStorageBytes += Number(row.temp_storage_bytes ?? 0) || 0;
+    return totals;
+  }, empty);
 }
 
 // Counts successful generation units in the window so operations can be
@@ -205,9 +258,10 @@ async function emailMapFor(
 export async function fetchCostExplorer(
   days: number | null,
 ): Promise<CostExplorer> {
-  const [{ rows, truncated }, unitCounts] = await Promise.all([
+  const [{ rows, truncated }, unitCounts, storage] = await Promise.all([
     fetchUsageRows(days),
     fetchUnitCounts(days),
+    fetchGeneratedAssetStorage(),
   ]);
 
   const totals: CostTotals = {
@@ -322,6 +376,7 @@ export async function fetchCostExplorer(
     truncated,
     rowCount: rows.length,
     totals,
+    storage,
     byModel: [...byModel.values()].sort((a, b) => b.costUsd - a.costUsd),
     byOperation: [...byOperation.values()].sort(
       (a, b) => b.costUsd - a.costUsd,

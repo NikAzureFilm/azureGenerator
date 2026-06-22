@@ -5,6 +5,7 @@ import {
   FEATURE_COSTS,
   getCreativeModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
+import { recordGeneratedAsset } from '../_shared/generatedAssets.ts';
 import { unzipSync } from 'npm:fflate@0.8.2';
 
 const supabaseClient = getServiceRoleSupabaseClient();
@@ -327,19 +328,32 @@ Deno.serve(async (request) => {
         ? 'application/octet-stream'
         : 'model/gltf-binary';
 
+    const bucket = mode === 'preview' ? 'previews' : 'meshes';
+    const objectKey = `${meshData.user_id}/${meshData.conversation_id}/${id}.${fileExtension}`;
+
     const { error: uploadError } = await supabaseClient.storage
       .from(mode === 'preview' ? 'previews' : 'meshes')
-      .upload(
-        `${meshData.user_id}/${meshData.conversation_id}/${id}.${fileExtension}`,
-        model,
-        {
-          contentType,
-        },
-      );
+      .upload(objectKey, model, {
+        contentType,
+      });
 
     if (uploadError) {
       throw new Error(uploadError.message);
     }
+
+    await recordGeneratedAsset({
+      supabaseClient,
+      userId: meshData.user_id,
+      conversationId: meshData.conversation_id,
+      sourceTable: mode === 'preview' ? 'previews' : 'meshes',
+      sourceId: id,
+      kind: mode === 'preview' ? 'preview' : 'mesh',
+      bucket,
+      objectKey,
+      mimeType: contentType,
+      sizeBytes: model.byteLength,
+      metadata: { source: 'fal-webhook', fileExtension },
+    });
 
     const { error: updateError } = await supabaseClient
       .from(mode === 'preview' ? 'previews' : 'meshes')

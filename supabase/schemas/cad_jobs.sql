@@ -30,6 +30,17 @@ ALTER TABLE "public"."cad_jobs" ADD CONSTRAINT "cad_jobs_user_id_fkey" FOREIGN K
 ALTER TABLE "public"."cad_jobs" VALIDATE CONSTRAINT "cad_jobs_user_id_fkey";
 
 
+CREATE INDEX IF NOT EXISTS idx_cad_jobs_user_created ON "public"."cad_jobs" USING btree (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cad_jobs_user_status_created ON "public"."cad_jobs" USING btree (user_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cad_jobs_conversation_created ON "public"."cad_jobs" USING btree (conversation_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cad_jobs_status_created ON "public"."cad_jobs" USING btree (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cad_jobs_worker_request_id ON "public"."cad_jobs" USING btree (worker_request_id) WHERE (worker_request_id IS NOT NULL);
+
+
 CREATE POLICY "Everyone can view CAD jobs associated with public conversations" ON "public"."cad_jobs" FOR SELECT TO "authenticated", "anon" USING ((EXISTS ( SELECT 1
    FROM "public"."conversations"
   WHERE (("conversations"."id" = "cad_jobs"."conversation_id") AND ("conversations"."privacy" = 'public'::"public"."privacy_type")))));

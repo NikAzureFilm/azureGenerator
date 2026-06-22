@@ -5,6 +5,10 @@ import {
   type SupabaseClient,
 } from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import {
+  checkGenerationCostControls,
+  costControlErrorBody,
+} from '../_shared/costControls.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { CadJobArtifact, Content, Model } from '@shared/types.ts';
 import { getCadBackendTokenCost } from '../../../shared/tokenCosts.ts';
@@ -593,6 +597,14 @@ Deno.serve(async (req) => {
     model: Model;
     newMessageId: string;
   } = await req.json();
+
+  const limitViolation = await checkGenerationCostControls({
+    supabaseClient,
+    userId: userData.user.id,
+  });
+  if (limitViolation) {
+    return jsonResponse(costControlErrorBody(limitViolation), 429);
+  }
 
   const { data: userMessage, error: userMessageError } = await supabaseClient
     .from('messages')

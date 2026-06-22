@@ -34,12 +34,14 @@ CREATE TYPE "public"."prompt_type" AS ENUM (
 
 CREATE TYPE "public"."stripe-level" AS ENUM (
     'pro',
-    'standard'
+    'standard',
+    'max'
 );
 
 CREATE TYPE "public"."subscription_level" AS ENUM (
     'pro',
     'standard',
+    'max',
     'free'
 );
 

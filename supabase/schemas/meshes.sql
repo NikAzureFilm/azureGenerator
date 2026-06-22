@@ -23,6 +23,15 @@ ALTER TABLE "public"."meshes" ADD CONSTRAINT "meshes_user_id_fkey" FOREIGN KEY (
 ALTER TABLE "public"."meshes" VALIDATE CONSTRAINT "meshes_user_id_fkey";
 
 
+CREATE INDEX IF NOT EXISTS idx_meshes_user_created ON "public"."meshes" USING btree (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meshes_conversation_created ON "public"."meshes" USING btree (conversation_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meshes_status_created ON "public"."meshes" USING btree (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meshes_user_status_created ON "public"."meshes" USING btree (user_id, status, created_at DESC);
+
+
 CREATE POLICY "Everyone can view meshes associated with public conversations" ON "public"."meshes" FOR SELECT TO "authenticated", "anon" USING ((EXISTS ( SELECT 1
    FROM "public"."conversations"
   WHERE (("conversations"."id" = "meshes"."conversation_id") AND ("conversations"."privacy" = 'public'::"public"."privacy_type")))));

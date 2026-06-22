@@ -9,6 +9,7 @@ import {
 import { PLAN_DISPLAY } from '@/lib/pricing';
 import {
   absoluteTime,
+  bytes,
   num,
   pct,
   usd,
@@ -71,6 +72,7 @@ export default async function CostsPage({
   const failedShare =
     totals.costUsd > 0 ? totals.failedCostUsd / totals.costUsd : 0;
   const avgCallUsd = totals.calls > 0 ? totals.costUsd / totals.calls : 0;
+  const storage = explorer.storage;
 
   return (
     <div className="wrap wide">
@@ -131,6 +133,17 @@ export default async function CostsPage({
                 {pct(failedShare)}
               </b>{' '}
               of spend - {num(totals.failedCalls)} failed calls
+            </>
+          }
+        />
+        <Kpi
+          label="Generated storage (current)"
+          value={bytes(storage.storageBytes)}
+          sub={
+            <>
+              <b>{num(storage.assetCount)}</b> assets - R2{' '}
+              {bytes(storage.r2StorageBytes)}, Supabase{' '}
+              {bytes(storage.supabaseStorageBytes)}
             </>
           }
         />

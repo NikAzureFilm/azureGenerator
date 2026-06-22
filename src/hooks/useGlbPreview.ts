@@ -1,10 +1,17 @@
 import { supabase } from '@/lib/supabase';
 import { useQuery } from '@tanstack/react-query';
+import { getPreviewRefetchInterval } from '@/utils/previewPolling';
 
-export const useGlbPreview = ({ id }: { id?: string }) => {
+export const useGlbPreview = ({
+  id,
+  isGenerationActive = false,
+}: {
+  id?: string;
+  isGenerationActive?: boolean;
+}) => {
   const query = useQuery({
     queryKey: ['preview', id],
-    enabled: !!id,
+    enabled: !!id && isGenerationActive,
     queryFn: async () => {
       if (!id) return null;
 
@@ -39,8 +46,10 @@ export const useGlbPreview = ({ id }: { id?: string }) => {
     },
     // Poll for preview availability during mesh generation
     refetchInterval: (query) => {
-      // Only poll if we don't have a successful preview yet
-      return !query.state.data ? 3000 : false;
+      return getPreviewRefetchInterval({
+        hasPreview: !!query.state.data,
+        isGenerationActive,
+      });
     },
   });
 

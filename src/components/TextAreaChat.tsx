@@ -78,7 +78,7 @@ import {
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { useMutation, useQueries } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/contexts/AuthContext';
+import { getLevel, useAuth } from '@/contexts/AuthContext';
 import { ModelSelector } from '@/components/ModelSelector';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -107,6 +107,10 @@ import {
   getMultiviewImageEntries,
   multiviewSlotMapsMatchPreviews,
 } from '@/utils/multiviewReference';
+import {
+  formatUploadSize,
+  getUploadSizeLimitBytes,
+} from '@/utils/uploadLimits';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -181,7 +185,7 @@ function TextAreaChat({
     useState('');
   const prevIsDraggingRef = useRef(isDragging);
   const { toast } = useToast();
-  const { session } = useAuth();
+  const { session, billing } = useAuth();
   const { images, mesh, setImages, setMesh } = useItemSelection();
   const meshFiles = useMeshFiles();
   const focusRequestId = composerFocusRequest?.id;
@@ -704,10 +708,10 @@ function TextAreaChat({
   const addItems = async (files: FileList) => {
     const newItems = Array.from(files);
     let hasSmallImages = false;
-    let hasLargeImages = false;
+    let hasLargeFiles = false;
     let hasInvalidImages = false;
     let hasInvalidItems = false;
-    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
+    const maxUploadBytes = getUploadSizeLimitBytes(getLevel(billing));
 
     const validImages = await Promise.all(
       newItems.map(async (file) => {
@@ -722,8 +726,8 @@ function TextAreaChat({
         }
 
         // Check file size
-        if (file.size > MAX_FILE_SIZE) {
-          hasLargeImages = true;
+        if (file.size > maxUploadBytes) {
+          hasLargeFiles = true;
           return null;
         }
 
@@ -753,6 +757,11 @@ function TextAreaChat({
         return null;
       }
 
+      if (file.size > maxUploadBytes) {
+        hasLargeFiles = true;
+        return null;
+      }
+
       return file;
     });
 
@@ -775,11 +784,10 @@ function TextAreaChat({
         description:
           'Some images were not added because they are smaller than 256x256 pixels.',
       });
-    } else if (hasLargeImages) {
+    } else if (hasLargeFiles) {
       toast({
-        title: 'Image too large',
-        description:
-          'Some images were not added because they are larger than 100MB.',
+        title: 'File too large',
+        description: `Some files were not added because they are larger than ${formatUploadSize(maxUploadBytes)} for your plan.`,
       });
     } else if (hasInvalidImages) {
       toast({

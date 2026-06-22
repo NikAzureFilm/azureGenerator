@@ -22,6 +22,18 @@ export function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+export function bytes(value: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = Math.max(0, value || 0);
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 || size >= 10 ? 0 : 1;
+  return `${size.toFixed(digits)} ${units[unit]}`;
+}
+
 // USD with enough precision for sub-cent unit costs (e.g. cost per call).
 export function usdSmall(dollars: number): string {
   if (!dollars) return '$0';

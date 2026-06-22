@@ -12,7 +12,9 @@ BEGIN
     WHERE user_id = p_user_id;
 
     IF userstatus = 'active' OR userstatus = 'trialing' THEN
-        IF userlevel = 'pro' THEN
+        IF userlevel = 'max' THEN
+            RETURN 50000;
+        ELSIF userlevel = 'pro' THEN
             RETURN 5000;
         ELSIF userlevel = 'standard' THEN
             RETURN 1000;
@@ -22,6 +24,43 @@ BEGIN
     -- Free tier
     RETURN 0;
 END;
+$$;
+
+CREATE OR REPLACE FUNCTION "public"."cleanup_expired_generation_assets"("p_now" timestamp with time zone DEFAULT "now"())
+RETURNS TABLE("marked_deleted" bigint, "deleted_supabase_objects" bigint)
+LANGUAGE "sql"
+SECURITY DEFINER
+SET search_path = public, storage
+AS $$
+  with expired as (
+    select id, provider, bucket, object_key
+    from public.generation_assets
+    where deleted_at is null
+      and (
+        expires_at <= p_now
+        or (kind = 'temp-multiview' and created_at < p_now - interval '6 hours')
+        or (kind = 'failed-artifact' and created_at < p_now - interval '6 hours')
+      )
+  ),
+  deleted_storage as (
+    delete from storage.objects o
+    using expired e
+    where e.provider = 'supabase'
+      and o.bucket_id = e.bucket
+      and o.name = e.object_key
+    returning o.id
+  ),
+  marked as (
+    update public.generation_assets ga
+    set deleted_at = p_now
+    from expired e
+    where ga.id = e.id
+    returning ga.id
+  )
+  select
+    (select count(*) from marked)::bigint as marked_deleted,
+    (select count(*) from deleted_storage)::bigint
+      as deleted_supabase_objects;
 $$;
 -- Compatibility no-op for older callers. Free-tier users no longer receive
 -- recurring subscription tokens; new accounts get a one-time starter grant.

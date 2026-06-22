@@ -8,6 +8,8 @@ import { AuthContext, type BillingStatus, getLevel } from './AuthContext';
 import { brandAsset } from '@/config/brand';
 import { authRedirectUrl } from '@/lib/authRedirect';
 
+const BILLING_STATUS_REFETCH_INTERVAL_MS = 10 * 60 * 1000;
+
 const ensurePermission = async () => {
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return false;
@@ -61,13 +63,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
-  // Poll adam-billing for subscription state + token balances. 30s cadence
-  // matches the prior user_extradata poll — adam-billing is the source of
-  // truth; no local realtime channel anymore.
+  // billing-status refreshes on auth/session changes, generation completions,
+  // and this low-frequency visible-tab fallback.
   const { data: billing, isLoading: isBillingLoading } = useQuery({
     queryKey: ['billing', 'status'],
     enabled: !!user,
-    refetchInterval: 30000,
+    refetchInterval: BILLING_STATUS_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
     queryFn: async (): Promise<BillingStatus> => {
       const { data, error } = await supabase.functions.invoke('billing-status');
       if (error) throw error;
@@ -155,6 +157,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       supabase.removeChannel(meshChannel);
     };
   }, [user, queryClient, navigate, profile?.notifications_enabled]);
+
+  // CAD worker callbacks happen out-of-band, so subscribe to the narrow
+  // per-user channel and refetch only the affected conversation and billing.
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const cadJobChannel = supabase
+      .channel(`cad-job-updates-${user.id}`)
+      .on(
+        'broadcast',
+        {
+          event: 'cad-job-updated',
+        },
+        ({ payload }) => {
+          queryClient.invalidateQueries({
+            queryKey: ['messages', payload.conversation_id],
+          });
+          queryClient.invalidateQueries({
+            queryKey: ['conversation', payload.conversation_id],
+          });
+          queryClient.invalidateQueries({ queryKey: ['billing', 'status'] });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(cadJobChannel);
+    };
+  }, [user, queryClient]);
 
   // Track user in PostHog once we have all their data
   useEffect(() => {

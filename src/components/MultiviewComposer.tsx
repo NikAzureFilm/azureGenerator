@@ -47,6 +47,11 @@ import {
 } from '@/utils/multiviewReference';
 import { invokeGenerateViewWithFallback } from '@/utils/generateViewWithFallback';
 import { getSafeFilename } from '@/utils/file-utils';
+import { getLevel, useAuth } from '@/contexts/AuthContext';
+import {
+  formatUploadSize,
+  getUploadSizeLimitBytes,
+} from '@/utils/uploadLimits';
 
 const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
@@ -161,6 +166,8 @@ export function MultiviewComposer({
   disabled = false,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
+  const { billing } = useAuth();
+  const maxUploadBytes = getUploadSizeLimitBytes(getLevel(billing));
   const firstFilledSlot = SLOT_ORDER.find((s) => {
     const state = slots[s];
     return !!state?.id && !state.isBusy;
@@ -198,6 +205,13 @@ export function MultiviewComposer({
         });
         return;
       }
+      if (file.size > maxUploadBytes) {
+        toast({
+          title: 'Image too large',
+          description: `Use an image under ${formatUploadSize(maxUploadBytes)} for your plan.`,
+        });
+        return;
+      }
       const id = crypto.randomUUID();
       const objectUrl = URL.createObjectURL(file);
       updateSlot(slot, { id, url: objectUrl, isBusy: true, kind: 'upload' });
@@ -223,7 +237,7 @@ export function MultiviewComposer({
         });
       }
     },
-    [conversationId, userId, updateSlot, toast],
+    [conversationId, userId, updateSlot, toast, maxUploadBytes],
   );
 
   const buildReferencesForSlot = useCallback(
@@ -287,6 +301,14 @@ export function MultiviewComposer({
         });
         return;
       }
+      if (file.size > maxUploadBytes) {
+        toast({
+          title: 'Image too large',
+          description: `Use an image under ${formatUploadSize(maxUploadBytes)} for your plan.`,
+          variant: 'destructive',
+        });
+        return;
+      }
       const id = crypto.randomUUID();
       setIsUploadingDialogRef(true);
       try {
@@ -319,7 +341,7 @@ export function MultiviewComposer({
         setIsUploadingDialogRef(false);
       }
     },
-    [conversationId, userId, toast],
+    [conversationId, userId, toast, maxUploadBytes],
   );
 
   const handleRemoveDialogReference = useCallback((id: string) => {

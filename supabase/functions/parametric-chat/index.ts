@@ -13,6 +13,10 @@ import parseParameters from '../_shared/parseParameter.ts';
 import { formatUserMessage } from '../_shared/messageUtils.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
+import {
+  checkGenerationCostControls,
+  costControlErrorBody,
+} from '../_shared/costControls.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import {
   RefundableTokenLedger,
@@ -730,6 +734,31 @@ Deno.serve(async (req) => {
     });
   }
 
+  const {
+    messageId,
+    conversationId,
+    model,
+    newMessageId,
+    thinking, // Add thinking parameter
+  }: {
+    messageId: string;
+    conversationId: string;
+    model: Model;
+    newMessageId: string;
+    thinking?: boolean;
+  } = await req.json();
+
+  const limitViolation = await checkGenerationCostControls({
+    supabaseClient,
+    userId: userData.user.id,
+  });
+  if (limitViolation) {
+    return new Response(JSON.stringify(costControlErrorBody(limitViolation)), {
+      status: 429,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   const tokenLedger = new RefundableTokenLedger(billing);
   try {
     const result = await tokenLedger.consume(userData.user.email, {
@@ -766,20 +795,6 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-
-  const {
-    messageId,
-    conversationId,
-    model,
-    newMessageId,
-    thinking, // Add thinking parameter
-  }: {
-    messageId: string;
-    conversationId: string;
-    model: Model;
-    newMessageId: string;
-    thinking?: boolean;
-  } = await req.json();
 
   // Authoritative server-side capability: don't trust the client to self-report.
   const supportsVision = !TEXT_ONLY_MODELS.has(model);

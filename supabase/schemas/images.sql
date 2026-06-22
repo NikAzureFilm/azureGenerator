@@ -24,6 +24,14 @@ ALTER TABLE "public"."images" VALIDATE CONSTRAINT "images_user_id_fkey";
 
 CREATE INDEX IF NOT EXISTS idx_images_image_generation_call_id ON "public"."images" USING "btree" ("image_generation_call_id");
 
+CREATE INDEX IF NOT EXISTS idx_images_user_created ON "public"."images" USING btree (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_images_conversation_created ON "public"."images" USING btree (conversation_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_images_status_created ON "public"."images" USING btree (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_images_user_status_created ON "public"."images" USING btree (user_id, status, created_at DESC);
+
 
 CREATE POLICY "Public conversations images" ON "public"."images" FOR SELECT TO "authenticated", "anon" USING ((EXISTS ( SELECT 1
    FROM "public"."conversations"

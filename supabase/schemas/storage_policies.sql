@@ -1,3 +1,15 @@
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES
+  ('images', 'images', false, 104857600),
+  ('meshes', 'meshes', false, 104857600),
+  ('previews', 'previews', false, 104857600),
+  ('cad-artifacts', 'cad-artifacts', false, 104857600),
+  ('temp-multiview', 'temp-multiview', false, 26214400)
+ON CONFLICT (id) DO UPDATE
+SET
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit;
+
 -- Images and Meshes
 CREATE POLICY "Give users access to own folder images_select" ON storage.objects FOR SELECT TO public USING (bucket_id = 'images' AND (select auth.uid()::text) = (storage.foldername(name))[1]);
 

@@ -69,6 +69,7 @@ as $$
         select coalesce(sum(case level
                               when 'pro' then 15000
                               when 'standard' then 3000
+                              when 'max' then 150000
                               else 0 end), 0)
           from subscriptions where status in ('active','trialing')
       ),
@@ -93,6 +94,13 @@ as $$
          where tt.source = 'purchased' and tt.operation = 'chat' and tt.amount > 0
            and tt.created_at >= now() - interval '30 days'
       )
+    ),
+    'storage', jsonb_build_object(
+      'generated_asset_bytes', (select coalesce(sum(storage_bytes), 0) from generation_asset_usage),
+      'generated_asset_count', (select coalesce(sum(asset_count), 0) from generation_asset_usage),
+      'r2_asset_bytes', (select coalesce(sum(r2_storage_bytes), 0) from generation_asset_usage),
+      'supabase_asset_bytes', (select coalesce(sum(supabase_storage_bytes), 0) from generation_asset_usage),
+      'temp_asset_bytes', (select coalesce(sum(temp_storage_bytes), 0) from generation_asset_usage)
     )
   );
 $$;
