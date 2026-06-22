@@ -35,6 +35,7 @@ export function TrialDialog({
       p.productType === 'subscription' &&
       p.active,
   );
+  const proCredits = proMonthly?.tokenAmount;
 
   const handleSubscribe = () => {
     if (!user) {
@@ -81,8 +82,9 @@ export function TrialDialog({
           <li className="flex items-center gap-2">
             <Check className="h-4 w-4 text-adam-neutral-100" />
             <span className="text-adam-neutral-100">
-              {(proMonthly?.tokenAmount ?? 5000).toLocaleString()} tokens per
-              month
+              {proCredits !== undefined
+                ? `${proCredits.toLocaleString()} credits per month`
+                : 'Monthly Pro credits'}
             </span>
           </li>
           <li className="flex items-center gap-2">
