@@ -89,6 +89,7 @@ const QUALITY_CAPTION_TIMEOUT_MS = 10000;
 const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
 const QUALITY_MASK_TIMEOUT_MS = 10000;
 const MESHY_V6_IMAGE_TO_3D_ENDPOINT = 'fal-ai/meshy/v6-preview/image-to-3d';
+const MESHY_V6_MAX_TARGET_POLYCOUNT = 300000;
 const HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT =
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d';
 const MULTIVIEW_SLOTS = ['front', 'left', 'back', 'right'] as const;
@@ -1828,15 +1829,16 @@ async function submitMeshJob(
 
       const baseImageUrl = reformatSignedUrl(imageSignedUrl.signedUrl);
 
-      // Configure Meshy parameters. Topology defaults to triangle, but
-      // preserves the quad preference from the Max Quality controls.
+      // Configure Meshy for the Max Quality path. Meshy v6 accepts up to 300k
+      // polygons; default to that cap when the UI does not send an override.
       const meshyTopology = meshTopology === 'quads' ? 'quad' : 'triangle';
       const safePolycount = polygonCount
-        ? Math.max(200, Math.min(300000, polygonCount))
-        : 30000;
+        ? Math.max(100, Math.min(MESHY_V6_MAX_TARGET_POLYCOUNT, polygonCount))
+        : MESHY_V6_MAX_TARGET_POLYCOUNT;
 
       const meshyInput = {
         image_url: baseImageUrl,
+        model_type: 'standard' as const,
         topology: meshyTopology as 'quad' | 'triangle',
         target_polycount: safePolycount,
         symmetry_mode: 'auto' as const,

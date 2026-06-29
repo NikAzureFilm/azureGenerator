@@ -162,9 +162,9 @@ const FEATURE_BREAKDOWNS = [
         costUsd: openaiImageCostUsd('high'),
       },
       {
-        name: 'Meshy v6 preview textured model',
+        name: 'Meshy 6 Preview image-to-3D generation',
         endpoint: 'fal-ai/meshy/v6-preview/image-to-3d',
-        note: 'textured image-to-3D submit',
+        note: 'fal model page lists $0.80 per generation',
       },
       {
         name: 'Hunyuan mini preview',

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import {
   GEMINI_IMAGE_PRICES,
+  FAL_UNIT_PRICES,
   LLM_PRICES,
   OPENAI_IMAGE_PRICES,
+  falCostUsd,
   geminiImageCostUsd,
   llmCostUsd,
   openaiImageCostUsd,
@@ -37,3 +39,9 @@ assert.equal(geminiImageCostUsd('gemini-3.1-flash-image-preview'), 0.067);
 assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview'), 0.134);
 assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview', 2), 0.268);
 assert.equal(geminiImageCostUsd('unknown-google-image-model'), 0.067);
+
+assert.deepEqual(FAL_UNIT_PRICES['fal-ai/meshy/v6-preview/image-to-3d'], {
+  unitPrice: 0.8,
+  unit: 'units',
+});
+assert.equal(falCostUsd('fal-ai/meshy/v6-preview/image-to-3d'), 0.8);
