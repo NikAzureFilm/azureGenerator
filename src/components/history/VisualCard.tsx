@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { HistoryConversation } from '../../types/misc.ts';
+import { MeshFileType } from '@shared/types';
 import { GoodEarth } from '../icons/ui/GoodEarth';
 import { supabase } from '@/lib/supabase';
 import { useOpenSCAD } from '@/hooks/useOpenSCAD';
@@ -109,6 +110,12 @@ export function VisualCard({
   const [artifactCode, setArtifactCode] = useState<string | null>(null);
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   const [isVisible, setIsVisible] = useState(false);
+  const [meshInfo, setMeshInfo] = useState<{
+    id: string;
+    fileType: MeshFileType;
+  } | null>(null);
+  const [meshPreview, setMeshPreview] = useState<string | null>(null);
+  const [meshError, setMeshError] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const { compileScad, isCompiling, output, isError } = useOpenSCAD();
 
@@ -132,7 +139,7 @@ export function VisualCard({
   }, []);
 
   useEffect(() => {
-    const fetchLastArtifact = async () => {
+    const fetchLatestCreation = async () => {
       try {
         const { data: messages, error } = await supabase
           .from('messages')
@@ -166,15 +173,86 @@ export function VisualCard({
             typeof artifact.code === 'string'
           ) {
             setArtifactCode(artifact.code);
+            return;
+          }
+        }
+
+        // No parametric artifact: fall back to the latest generated mesh so
+        // mesh-only conversations get a thumbnail instead of the empty
+        // placeholder. Parametric previews above keep taking precedence.
+        const messageWithMesh = messages?.find(
+          (msg) =>
+            msg.content &&
+            typeof msg.content === 'object' &&
+            'mesh' in msg.content &&
+            msg.content.mesh,
+        );
+
+        if (
+          messageWithMesh &&
+          messageWithMesh.content &&
+          typeof messageWithMesh.content === 'object' &&
+          'mesh' in messageWithMesh.content
+        ) {
+          const mesh = messageWithMesh.content.mesh;
+          if (
+            mesh &&
+            typeof mesh === 'object' &&
+            'id' in mesh &&
+            typeof mesh.id === 'string'
+          ) {
+            const fileType =
+              'fileType' in mesh && typeof mesh.fileType === 'string'
+                ? (mesh.fileType as MeshFileType)
+                : 'glb';
+            setMeshInfo({ id: mesh.id, fileType });
           }
         }
       } catch (error) {
-        console.error('Error fetching artifact:', error);
+        console.error('Error fetching creation preview:', error);
       }
     };
 
-    fetchLastArtifact();
+    fetchLatestCreation();
   }, [conversation.id]);
+
+  // Render a static thumbnail for mesh generations once the card scrolls into
+  // view. Mirrors MeshImagePreview in the chat (download mesh -> render one
+  // PNG), avoiding a live WebGL canvas per card in the grid.
+  useEffect(() => {
+    if (!meshInfo || !isVisible) return;
+
+    let cancelled = false;
+
+    const generateMeshPreview = async () => {
+      try {
+        const { data: blob, error } = await supabase.storage
+          .from('meshes')
+          .download(
+            `${conversation.user_id}/${conversation.id}/${meshInfo.id}.${meshInfo.fileType}`,
+          );
+
+        if (error || !blob) {
+          throw error ?? new Error('Mesh file not available');
+        }
+
+        // Dynamic import keeps three.js out of the history view's initial bundle.
+        const { generatePreview } = await import('@/utils/meshUtils');
+        const image = await generatePreview(blob, meshInfo.fileType);
+
+        if (!cancelled) setMeshPreview(image);
+      } catch (err) {
+        console.error('Error generating mesh preview:', err);
+        if (!cancelled) setMeshError(true);
+      }
+    };
+
+    generateMeshPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [meshInfo, isVisible, conversation.user_id, conversation.id]);
 
   useEffect(() => {
     if (artifactCode) {
@@ -220,6 +298,22 @@ export function VisualCard({
             <div className="flex h-full w-full items-center justify-center">
               <Box className="text-adam-neutral-600 h-16 w-16 opacity-30" />
             </div>
+          ) : meshInfo ? (
+            meshPreview ? (
+              <img
+                src={meshPreview}
+                alt={conversation.title}
+                className="h-full w-full object-cover"
+              />
+            ) : meshError ? (
+              <div className="flex h-full w-full items-center justify-center">
+                <Box className="text-adam-neutral-600 h-16 w-16 opacity-50" />
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-adam-blue" />
+              </div>
+            )
           ) : isCompiling ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="flex flex-col items-center gap-2">
