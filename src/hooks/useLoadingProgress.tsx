@@ -11,8 +11,8 @@ export const TIMING_CONFIG = {
   },
   mesh: {
     fast: { expected: 75000, min: 60000, max: 90000 }, // Total: 60-90s matches UI
-    quality: { expected: 45000, min: 30000, max: 60000 }, // Total: ~45s for SAM 3D
-    ultra: { expected: 450000, min: 300000, max: 600000 }, // Meshy 6 Preview: 5-10 min
+    quality: { expected: 45000, min: 30000, max: 60000 },
+    ultra: { expected: 450000, min: 300000, max: 600000 }, // Max Quality: 5-10 min
     multiview: { expected: 75000, min: 45000, max: 120000 }, // Tripo H3.1 multiview
   },
 };

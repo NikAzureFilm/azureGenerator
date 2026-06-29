@@ -48,9 +48,9 @@ assert.equal(
 );
 
 assert.equal(
-  /catch \(error\) \{\s+logError\(error[\s\S]+imageBytes = await generateWithNanoBanana\(\);/.test(
+  /catch \(error\) \{\s+logError\(error[\s\S]+imageBytes = await generateWithLite\(\);/.test(
     source,
   ),
   true,
-  'generate-view should fall back to Nano Banana for any OpenAI image failure',
+  'generate-view should fall back to Lite for any Premium image failure',
 );

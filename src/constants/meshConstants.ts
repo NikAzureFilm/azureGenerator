@@ -9,12 +9,12 @@ export const POLYGON_COUNTS = {
   POLYS_DEFAULT: 100000,
 
   // Model-specific maximums
-  STANDARD_MAX: 0, // SAM 3D doesn't support polygon limits
+  STANDARD_MAX: 0,
   ULTRA_MAX: 300000,
   TEXTURELESS_MAX: 50000,
 
   // Model-specific defaults
-  STANDARD_DEFAULT: 0, // SAM 3D handles this automatically
+  STANDARD_DEFAULT: 0,
   TEXTURELESS_DEFAULT: 50000,
   ULTRA_DEFAULT: 300000, // Set to max for ultra quality
 
@@ -66,7 +66,7 @@ export const MODEL_CONFIGS: Record<CreativeModel, ModelConfig> = {
       quads: POLYGON_COUNTS.STANDARD_DEFAULT,
       polys: POLYGON_COUNTS.STANDARD_DEFAULT,
     },
-    showPolygonControls: false, // SAM 3D doesn't support polygon/quad controls
+    showPolygonControls: false,
     showNormalIntensity: true,
     maxPolygonCount: POLYGON_COUNTS.STANDARD_MAX,
   },

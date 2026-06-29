@@ -239,7 +239,7 @@ Deno.serve(async (req) => {
       mode,
     });
 
-    const generateWithNanoBanana = async (): Promise<Buffer> => {
+    const generateWithLite = async (): Promise<Buffer> => {
       if (primaryRefImageId) {
         const refPaths = referenceIds.map(
           (refId) => `${userId}/${conversationId}/${refId}`,
@@ -304,13 +304,11 @@ Deno.serve(async (req) => {
             mode,
           },
         });
-        console.warn(
-          'OpenAI image generation failed; falling back to Nano Banana.',
-        );
-        imageBytes = await generateWithNanoBanana();
+        console.warn('Premium image generation failed; falling back to Lite.');
+        imageBytes = await generateWithLite();
       }
     } else {
-      imageBytes = await generateWithNanoBanana();
+      imageBytes = await generateWithLite();
     }
 
     const imageId = crypto.randomUUID();

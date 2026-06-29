@@ -8,7 +8,7 @@ export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
     id: 'google/gemini-3.5-flash',
     name: 'CAD',
-    description: 'Fast, lower-cost CAD generation with Gemini 3.5 Flash',
+    description: 'Fast, lower-cost CAD generation',
     provider: 'Google',
     supportsTools: true,
     supportsThinking: true,

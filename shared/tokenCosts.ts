@@ -50,8 +50,8 @@ export const FEATURE_COSTS = {
     tokens: 22,
     description: 'Create a reference image from a prompt with Premium.',
   },
-  generatedInputImageNanoBanana: {
-    id: 'generated-input-image-nano-banana',
+  generatedInputImageLite: {
+    id: 'generated-input-image-lite',
     label: 'Generated input image - Lite',
     tokens: 7,
     description: 'Create a lower-cost reference image from a prompt with Lite.',
@@ -62,7 +62,7 @@ export const FEATURE_COSTS = {
     tokens: 22,
     description: 'Generate the first image for a four-view object set.',
   },
-  multiviewNanoBananaView: {
+  multiviewLiteView: {
     id: 'multiview-side-view',
     label: 'Additional multiview angle',
     tokens: 7,
@@ -84,7 +84,7 @@ export const FEATURE_COSTS = {
     id: 'ultra-mesh',
     label: 'Max quality mesh',
     tokens: 110,
-    description: 'Meshy 6 Preview textured 3D mesh generation.',
+    description: 'Highest quality textured 3D mesh generation.',
   },
   multiviewMesh: {
     id: 'multiview-mesh',

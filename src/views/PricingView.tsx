@@ -16,7 +16,7 @@ const FEATURE_ROWS = [
     group: 'Image inputs',
     rows: [
       FEATURE_COSTS.generatedInputImage,
-      FEATURE_COSTS.generatedInputImageNanoBanana,
+      FEATURE_COSTS.generatedInputImageLite,
     ],
   },
   {

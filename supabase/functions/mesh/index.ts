@@ -88,8 +88,8 @@ const logRefundFailure = ({ error, charge }: RefundFailure) => {
 const QUALITY_CAPTION_TIMEOUT_MS = 10000;
 const QUALITY_GENERICIZE_TIMEOUT_MS = 5000;
 const QUALITY_MASK_TIMEOUT_MS = 10000;
-const MESHY_V6_IMAGE_TO_3D_ENDPOINT = 'fal-ai/meshy/v6-preview/image-to-3d';
-const MESHY_V6_MAX_TARGET_POLYCOUNT = 300000;
+const MAX_QUALITY_IMAGE_TO_3D_ENDPOINT = 'fal-ai/meshy/v6-preview/image-to-3d';
+const MAX_QUALITY_TARGET_POLYCOUNT = 300000;
 const HUNYUAN_3D_PRO_IMAGE_TO_3D_ENDPOINT =
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d';
 const MULTIVIEW_SLOTS = ['front', 'left', 'back', 'right'] as const;
@@ -311,14 +311,13 @@ async function getPriorImageCallId(
 }
 
 // Unified mesh-image generation. Every mesh mode goes through this helper:
-//   1. Primary: gpt-image-2 via OpenAI Responses API (canonical per OpenAI
-//      docs, supports multi-turn via image_generation_call id)
-//   2. Fallback 1: Gemini 3 Pro Image Preview (nano banana pro)
-//   3. Fallback 2: Flux (fal-ai)
+//   1. Primary premium path, including multi-turn image_generation_call support
+//   2. First fallback path
+//   3. Second fallback path
 //
-// Flux is also the sole provider for mesh previews (see submitPreviewJob),
+// The fallback image path also powers mesh previews (see submitPreviewJob),
 // which intentionally does not go through this chain.
-// Per-mode gpt-image-2 quality. Fast mode defaults to `low` since fast-mode
+// Per-mode image quality. Fast mode defaults to `low` since fast-mode
 // output is inherently draft quality. Quality/ultra use `high` for final seed
 // fidelity. Internal cost assumptions live in protected admin pricing config.
 const QUALITY_BY_MESH_MODEL: Record<
@@ -1466,14 +1465,14 @@ async function submitMeshJob(
       allImages.push(recentMeshPreview);
     }
 
-    // Skip initial image generation for ultra model - it has its own flow
+    // Skip initial image generation for Max Quality - it has its own flow.
     if (model === 'ultra') {
-      // Ultra model handles image generation differently, skip to model-specific logic
-      debugLog('Skipping initial image generation for ultra model');
+      // Max Quality handles image generation in its dedicated branch below.
+      debugLog('Skipping initial image generation for Max Quality path');
     } else if (meshTextPrompt && meshTextPrompt.trim() !== '') {
-      // Generate images for standard and textureless models
+      // Generate images for standard and textureless paths.
       if (model === 'quality') {
-        // Use Gemini 3 Pro with fallback to Flux for quality model
+        // Use the premium image path with fallback for quality generation.
         const { data: imageData, error: imageError } = await supabaseClient
           .from('images')
           .insert({
@@ -1687,11 +1686,11 @@ async function submitMeshJob(
       throw new Error('No valid images for 3D generation');
     }
 
-    debugLog('=== CHECKING MODEL TYPE ===');
-    debugLog('model value:', model);
+    debugLog('=== CHECKING GENERATION PATH ===');
+    debugLog('path value:', model);
 
     if (model === 'ultra') {
-      debugLog('=== ENTERING ULTRA MODEL PATH (MESHY V6 PREVIEW) ===');
+      debugLog('=== ENTERING MAX QUALITY PATH ===');
 
       // Check if this is first generation or conversational edit by looking for COMPLETED meshes (not images)
       // This properly handles branching - a branch won't have completed meshes
@@ -1814,7 +1813,7 @@ async function submitMeshJob(
         })
         .eq('id', imageData.id);
 
-      // Get signed URL for the base image to send to Meshy
+      // Get signed URL for the base image.
       const { data: imageSignedUrl, error: imageSignedUrlError } =
         await supabaseClient.storage
           .from('images')
@@ -1829,17 +1828,17 @@ async function submitMeshJob(
 
       const baseImageUrl = reformatSignedUrl(imageSignedUrl.signedUrl);
 
-      // Configure Meshy for the Max Quality path. Meshy v6 accepts up to 300k
-      // polygons; default to that cap when the UI does not send an override.
-      const meshyTopology = meshTopology === 'quads' ? 'quad' : 'triangle';
+      // Default Max Quality to the highest supported polygon target when the
+      // UI does not send an override.
+      const maxQualityTopology = meshTopology === 'quads' ? 'quad' : 'triangle';
       const safePolycount = polygonCount
-        ? Math.max(100, Math.min(MESHY_V6_MAX_TARGET_POLYCOUNT, polygonCount))
-        : MESHY_V6_MAX_TARGET_POLYCOUNT;
+        ? Math.max(100, Math.min(MAX_QUALITY_TARGET_POLYCOUNT, polygonCount))
+        : MAX_QUALITY_TARGET_POLYCOUNT;
 
-      const meshyInput = {
+      const maxQualityInput = {
         image_url: baseImageUrl,
         model_type: 'standard' as const,
-        topology: meshyTopology as 'quad' | 'triangle',
+        topology: maxQualityTopology as 'quad' | 'triangle',
         target_polycount: safePolycount,
         symmetry_mode: 'auto' as const,
         should_remesh: true,
@@ -1847,38 +1846,38 @@ async function submitMeshJob(
         enable_pbr: false,
       };
 
-      debugLog('Submitting to Meshy v6 Preview', {
-        topology: meshyTopology,
+      debugLog('Submitting Max Quality image-to-3D job', {
+        topology: maxQualityTopology,
         polycount: safePolycount,
       });
 
-      const meshySubmission = await fal.queue.submit(
-        MESHY_V6_IMAGE_TO_3D_ENDPOINT,
+      const maxQualitySubmission = await fal.queue.submit(
+        MAX_QUALITY_IMAGE_TO_3D_ENDPOINT,
         {
-          input: meshyInput,
+          input: maxQualityInput,
           webhookUrl: `${supabaseHost}/functions/v1/fal-webhook?id=${meshId}`,
         },
       );
       await recordFalQueueRequest(
         supabaseClient,
         meshId,
-        MESHY_V6_IMAGE_TO_3D_ENDPOINT,
-        meshySubmission,
+        MAX_QUALITY_IMAGE_TO_3D_ENDPOINT,
+        maxQualitySubmission,
       );
 
-      debugLog('Successfully submitted to Meshy v6 Preview');
+      debugLog('Successfully submitted Max Quality image-to-3D job');
 
       // Create preview using the base image
       await createHunyuanPreview(
         baseImageUrl,
-        'ultra Meshy v6 seed image',
+        'max quality seed image',
         userId,
         conversationId,
         meshId,
         supabaseHost,
       );
     } else if (model === 'quality') {
-      debugLog('=== ENTERING QUALITY MODEL PATH (SAM 3D) ===');
+      debugLog('=== ENTERING QUALITY PATH ===');
 
       if (imageInputs.length === 0) {
         throw new Error('No valid image found for quality mesh generation');
@@ -1887,7 +1886,7 @@ async function submitMeshJob(
       const imageUrl = imageInputs[0];
 
       // ========================================================================
-      // SAM 3D PIPELINE WITH MOONDREAM3 CAPTIONING
+      // Quality pipeline with captioning and segmentation.
       // Strategy:
       // 1. Pre-fetch Moondream3 long caption and genericize it
       // 2. Try simple prompt "all the 3d models in the scene" first
@@ -2060,7 +2059,7 @@ Output:`;
 
       if (maskUrl) {
         sam3dInput.mask_urls = [maskUrl];
-        debugLog('Using SAM-3/image mask for SAM 3D');
+        debugLog('Using generated mask for quality path');
       } else {
         // Fallback: full-image box prompt (5% inset, assumes 1024x1024)
         // This guarantees segmentation when text prompts fail
@@ -2070,7 +2069,7 @@ Output:`;
         debugLog('No mask found, using full-image box fallback');
       }
 
-      debugLog('SAM 3D input:', JSON.stringify(sam3dInput, null, 2));
+      debugLog('Quality path input:', JSON.stringify(sam3dInput, null, 2));
 
       const sam3dEndpoint = 'fal-ai/sam-3/3d-objects';
       const sam3dSubmission = await fal.queue.submit(sam3dEndpoint, {
@@ -2084,12 +2083,12 @@ Output:`;
         sam3dSubmission,
       );
 
-      debugLog('Successfully submitted to SAM 3D');
+      debugLog('Successfully submitted quality path');
 
       // Create preview
       await createHunyuanPreview(
         imageUrl,
-        'quality SAM 3D seed image',
+        'quality seed image',
         userId,
         conversationId,
         meshId,
@@ -2103,7 +2102,7 @@ Output:`;
         throw new Error('No valid image found for textureless mesh generation');
       }
 
-      // Submit to Tripo v2.5 with the generated image
+      // Submit textureless path with the generated image.
       // NOTE: H3.1 (newer model) currently returns downstream_service_error on
       // textureless requests (Tripo-side 500). Reverted to v2.5 until fixed.
       const tripoInput = {
@@ -2127,11 +2126,11 @@ Output:`;
           { costUsd: FAL_FIXED_CALL_USD['tripo3d/tripo/v2.5/image-to-3d'] },
         );
         debugLog(
-          'Successfully submitted to Tripo v2.5 textureless with conversational context',
+          'Successfully submitted textureless path with conversational context',
         );
       } catch (submitError) {
         const errObj = submitError as { body?: unknown; status?: number };
-        console.error('Tripo v2.5 submit failed:', {
+        console.error('Textureless submit failed:', {
           message:
             submitError instanceof Error
               ? submitError.message

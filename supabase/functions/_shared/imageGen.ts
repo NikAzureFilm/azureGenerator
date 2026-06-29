@@ -231,13 +231,13 @@ export const generateImageWithGeminiMultiTurn = async (
     }
   }
 
-  // Initialize chat with the new Gemini 3 Pro Image Preview model
+  // Initialize the premium image chat path.
   const chat = googleGenAI.chats.create({
     model: 'gemini-3-pro-image-preview',
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
-      // Note: Google Search grounding is built into gemini-3-pro-image-preview
-      // and doesn't need to be explicitly enabled as a tool for image generation
+      // Search grounding is built into this endpoint and does not need to be
+      // explicitly enabled as a tool for image generation.
     },
   });
 
@@ -373,7 +373,7 @@ export const generateImageWithFalFlux = async (
 };
 
 /**
- * Generates an image using Nano Banana directly via Google GenAI.
+ * Generates an image using the Lite path directly.
  * Best for initial text-to-image generation for 3D models.
  */
 export const generateImageWithGeminiFlash = async (
@@ -393,7 +393,7 @@ export const generateImageWithGeminiFlash = async (
   });
 
   if (!result.candidates?.[0]?.content?.parts) {
-    throw new Error('No result from Nano Banana');
+    throw new Error('No result from Lite image generation');
   }
 
   let generatedImageData: string | undefined;
@@ -404,7 +404,7 @@ export const generateImageWithGeminiFlash = async (
   }
 
   if (!generatedImageData) {
-    throw new Error('No image data from Nano Banana');
+    throw new Error('No image data from Lite image generation');
   }
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
@@ -417,7 +417,7 @@ export const generateImageWithGeminiFlash = async (
 };
 
 /**
- * Edits an image using Nano Banana directly via Google GenAI.
+ * Edits an image using the Lite path directly.
  * Best for editing existing images or uploaded images for 3D model generation.
  */
 export const generateImageWithGeminiFlashEdit = async (
@@ -470,7 +470,7 @@ export const generateImageWithGeminiFlashEdit = async (
     });
 
     if (!result.candidates?.[0]?.content?.parts) {
-      throw new Error('No result from Nano Banana edit');
+      throw new Error('No result from Lite image edit');
     }
 
     let generatedImageData: string | undefined;
@@ -481,7 +481,7 @@ export const generateImageWithGeminiFlashEdit = async (
     }
 
     if (!generatedImageData) {
-      throw new Error('No image data from Nano Banana edit');
+      throw new Error('No image data from Lite image edit');
     }
 
     const imageBytes = Buffer.from(generatedImageData, 'base64');

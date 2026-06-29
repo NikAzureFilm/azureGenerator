@@ -16,13 +16,13 @@ export const IMAGE_GENERATION_MODELS: Array<{
   {
     id: 'gpt-image-2',
     name: 'Premium',
-    description: 'OpenAI image generation',
+    description: 'Highest quality image generation',
     provider: 'openai',
   },
   {
     id: 'nano-banana-2',
     name: 'Lite',
-    description: 'Google image generation',
+    description: 'Lower-cost image generation',
     provider: 'nano-banana',
   },
 ];
@@ -48,6 +48,6 @@ export function getImageGenerationProvider(
 
 export function getImageGenerationTokenCost(model: unknown): number {
   return getImageGenerationProvider(model) === 'nano-banana'
-    ? FEATURE_COSTS.generatedInputImageNanoBanana.tokens
+    ? FEATURE_COSTS.generatedInputImageLite.tokens
     : FEATURE_COSTS.generatedInputImage.tokens;
 }

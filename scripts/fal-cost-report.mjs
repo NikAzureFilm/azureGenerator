@@ -33,9 +33,9 @@ const CONFIGURED_TOKENS = {
   parametric: 50,
   parametricCadReasoning: 120,
   generatedInputImage: 22,
-  generatedInputImageNanoBanana: 7,
+  generatedInputImageLite: 7,
   multiviewFrontImage: 22,
-  multiviewNanoBananaView: 7,
+  multiviewLiteView: 7,
   fastMesh: 41,
   qualityMesh: 34,
   ultraMesh: 110,
@@ -62,24 +62,24 @@ const FEATURE_BREAKDOWNS = [
   {
     id: 'parametricCadReasoning',
     label: 'CAD Reasoning generation',
-    components: [{ name: 'CAD reasoning model budget', costUsd: 1.2 }],
+    components: [{ name: 'CAD reasoning budget', costUsd: 1.2 }],
   },
   {
     id: 'generatedInputImage',
     label: 'Generated input image - Premium',
     components: [
       {
-        name: 'gpt-image-2 low-quality generated view',
+        name: 'Premium generated view',
         costUsd: openaiImageCostUsd('low'),
       },
     ],
   },
   {
-    id: 'generatedInputImageNanoBanana',
+    id: 'generatedInputImageLite',
     label: 'Generated input image - Lite',
     components: [
       {
-        name: 'Gemini 3.1 Flash Image 1K output',
+        name: 'Lite generated image',
         costUsd: geminiImageCostUsd('gemini-3.1-flash-image-preview'),
       },
     ],
@@ -89,17 +89,17 @@ const FEATURE_BREAKDOWNS = [
     label: 'Multiview front image',
     components: [
       {
-        name: 'gpt-image-2 low-quality front image',
+        name: 'Premium front image',
         costUsd: openaiImageCostUsd('low'),
       },
     ],
   },
   {
-    id: 'multiviewNanoBananaView',
+    id: 'multiviewLiteView',
     label: 'Additional multiview angle',
     components: [
       {
-        name: 'Gemini 3.1 Flash Image side/back view',
+        name: 'Lite side/back view',
         costUsd: geminiImageCostUsd('gemini-3.1-flash-image-preview'),
       },
     ],
@@ -109,17 +109,17 @@ const FEATURE_BREAKDOWNS = [
     label: 'Textureless mesh',
     components: [
       {
-        name: 'gpt-image-2 low-quality seed image',
+        name: 'Premium seed image',
         costUsd: openaiImageCostUsd('low'),
       },
       {
-        name: 'Tripo v2.5 textureless image-to-3D',
+        name: 'Textureless image-to-3D',
         endpoint: 'tripo3d/tripo/v2.5/image-to-3d',
         fixedCostUsd: 0.2,
-        note: 'fal gallery fixed textureless cost',
+        note: 'fixed textureless cost',
       },
       {
-        name: 'Hunyuan mini preview',
+        name: 'Fast 3D preview',
         endpoint: 'fal-ai/hunyuan3d/v2/mini/turbo',
       },
     ],
@@ -129,26 +129,26 @@ const FEATURE_BREAKDOWNS = [
     label: 'Draft mesh',
     components: [
       {
-        name: 'gpt-image-2 high-quality seed image',
+        name: 'Premium seed image',
         costUsd: openaiImageCostUsd('high'),
       },
       {
-        name: 'Moondream caption',
+        name: 'Caption pass',
         endpoint: 'fal-ai/moondream3-preview/caption',
         fixedCostUsd: 0.001351,
         note: 'recent historical per-call estimate; caption length varies',
       },
       {
-        name: 'SAM-3 image masks, up to 2 attempts',
+        name: 'Mask pass, up to 2 attempts',
         endpoint: 'fal-ai/sam-3/image',
         unitQuantity: 2,
       },
       {
-        name: 'SAM-3 3D objects',
+        name: 'Draft 3D generation',
         endpoint: 'fal-ai/sam-3/3d-objects',
       },
       {
-        name: 'Hunyuan mini preview',
+        name: 'Fast 3D preview',
         endpoint: 'fal-ai/hunyuan3d/v2/mini/turbo',
       },
     ],
@@ -158,16 +158,16 @@ const FEATURE_BREAKDOWNS = [
     label: 'Max quality mesh',
     components: [
       {
-        name: 'gpt-image-2 high-quality seed image',
+        name: 'Premium seed image',
         costUsd: openaiImageCostUsd('high'),
       },
       {
-        name: 'Meshy 6 Preview image-to-3D generation',
+        name: 'Max quality image-to-3D',
         endpoint: 'fal-ai/meshy/v6-preview/image-to-3d',
-        note: 'fal model page lists $0.80 per generation',
+        note: '$0.80 per generation',
       },
       {
-        name: 'Hunyuan mini preview',
+        name: 'Fast 3D preview',
         endpoint: 'fal-ai/hunyuan3d/v2/mini/turbo',
       },
     ],
@@ -177,13 +177,13 @@ const FEATURE_BREAKDOWNS = [
     label: 'Multiview mesh',
     components: [
       {
-        name: 'Hunyuan 3D v3.1 Pro multiview mesh',
+        name: 'Multiview 3D generation',
         endpoint: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
         fixedCostUsd: 0.525,
-        note: 'base Pro image-to-3D plus multiview input surcharge',
+        note: 'base image-to-3D plus multiview input surcharge',
       },
       {
-        name: 'Hunyuan mini preview',
+        name: 'Fast 3D preview',
         endpoint: 'fal-ai/hunyuan3d/v2/mini/turbo',
       },
     ],
@@ -193,13 +193,13 @@ const FEATURE_BREAKDOWNS = [
     label: 'Upscale mesh',
     components: [
       {
-        name: 'Hunyuan 3D v3.1 Pro with PBR and custom face count',
+        name: 'Upscale 3D generation with PBR and custom face count',
         endpoint: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
         unitQuantity: 45,
         note: 'base generation + PBR + custom face count',
       },
       {
-        name: 'Hunyuan mini preview',
+        name: 'Fast 3D preview',
         endpoint: 'fal-ai/hunyuan3d/v2/mini/turbo',
       },
     ],

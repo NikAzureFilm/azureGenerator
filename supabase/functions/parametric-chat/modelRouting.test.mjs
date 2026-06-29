@@ -11,7 +11,7 @@ assert.match(
 assert.match(
   source,
   /\^claude-\[a-z\]\+-5\\b/,
-  'parametric chat should enable automatic reasoning for Claude 5 model ids',
+  'parametric chat should enable automatic reasoning for configured reasoning ids',
 );
 assert.match(
   source,

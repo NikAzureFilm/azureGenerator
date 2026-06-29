@@ -9,42 +9,42 @@ const imageGenSource = readFileSync(
 assert.match(
   imageGenSource,
   /const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3\.1-flash-image-preview';/,
-  'Lite image generation uses the available Gemini 3.1 Flash Image model',
+  'Lite image generation uses the configured image endpoint',
 );
 assert.match(
   imageGenSource,
   /generateImageWithGeminiFlash = async \([\s\S]*?usageCtx\?: ImageUsageCtx/,
-  'Gemini Flash image generation should accept provider usage context',
+  'Lite image generation should accept provider usage context',
 );
 assert.match(
   imageGenSource,
   /generateImageWithGeminiFlashEdit = async \([\s\S]*?usageCtx\?: ImageUsageCtx/,
-  'Gemini Flash image editing should accept provider usage context',
+  'Lite image editing should accept provider usage context',
 );
 assert.match(
   imageGenSource,
   /await logGeminiImage\(\{\s*\.\.\.usageCtx,\s*model: GEMINI_FLASH_IMAGE_MODEL\s*\}\);/,
-  'Gemini Flash image generation should log model-specific provider cost',
+  'Lite image generation should log provider-specific cost',
 );
 assert.match(
   imageGenSource,
   /const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5\.5';/,
-  'OpenAI image generation uses a Responses model that supports the image_generation tool',
+  'Premium image generation uses the configured orchestration endpoint',
 );
 assert.match(
   imageGenSource,
   /const OPENAI_IMAGE_MODEL = 'gpt-image-2';/,
-  'OpenAI image generation invokes gpt-image-2 through the hosted image tool',
+  'Premium image generation invokes the configured hosted image tool',
 );
 assert.doesNotMatch(
   imageGenSource,
   /const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3-flash-image';/,
-  'Lite image generation does not call the unavailable gemini-3-flash-image model id',
+  'Lite image generation does not call an unavailable image endpoint',
 );
 assert.doesNotMatch(
   imageGenSource,
   /model: 'gpt-5\.4'/,
-  'OpenAI image generation does not use an unsupported gpt-5.4 Responses model',
+  'Premium image generation does not use an unsupported endpoint',
 );
 assert.doesNotMatch(
   imageGenSource,
@@ -64,7 +64,7 @@ assert.match(
 assert.match(
   imageGenSource,
   /const enforcedPrompt = enforce3DObjectPrompt\(promptText\);/,
-  'Flux prompt provider should enforce 3D object output before enhancing prompts',
+  'Fallback prompt provider should enforce 3D object output before enhancing prompts',
 );
 assert.match(
   imageGenSource,

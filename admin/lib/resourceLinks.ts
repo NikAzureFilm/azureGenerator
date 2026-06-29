@@ -171,17 +171,17 @@ export function getResourceGroups(): ResourceGroup[] {
         {
           label: 'OpenRouter usage',
           href: 'https://openrouter.ai/activity',
-          description: 'Parametric/CAD LLM request activity and spend.',
+          description: 'Parametric/CAD request activity and spend.',
         },
         {
           label: 'OpenRouter keys',
           href: 'https://openrouter.ai/settings/keys',
-          description: 'API key management for routed model calls.',
+          description: 'API key management for routed calls.',
         },
         {
           label: 'Anthropic console',
           href: 'https://console.anthropic.com/',
-          description: 'Direct Claude usage, keys, billing, and limits.',
+          description: 'Direct API usage, keys, billing, and limits.',
         },
         {
           label: 'OpenAI usage',
@@ -191,17 +191,17 @@ export function getResourceGroups(): ResourceGroup[] {
         {
           label: 'OpenAI keys',
           href: 'https://platform.openai.com/api-keys',
-          description: 'API key management for OpenAI image generation.',
+          description: 'API key management for image generation.',
         },
         {
           label: 'Google AI Studio',
           href: 'https://aistudio.google.com/',
-          description: 'Gemini image/model access and keys.',
+          description: 'Image generation access and keys.',
         },
         {
           label: 'fal dashboard',
           href: 'https://fal.ai/dashboard',
-          description: 'fal.ai usage, keys, and model endpoints.',
+          description: 'fal.ai usage, keys, and endpoints.',
         },
         {
           label: 'fal pricing',

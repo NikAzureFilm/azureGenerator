@@ -25,10 +25,9 @@ export type ProviderKind =
 
 // ---------------------------------------------------------------------------
 // LLM token rates — USD per 1,000,000 tokens.
-// Keyed by the model id exactly as it appears in the edge functions: Anthropic
-// SDK ids (e.g. 'claude-haiku-4-5') and OpenRouter slugs (e.g.
-// 'anthropic/claude-opus-4.7'). Unknown models cost $0 (a visible gap, not a
-// crash) — add the model here when you introduce it.
+// Keyed by the provider id exactly as it appears in the edge functions.
+// Unknown ids cost $0 (a visible gap, not a crash) — add pricing here when
+// introducing a new paid provider call.
 // ---------------------------------------------------------------------------
 export type LlmPrice = {
   inputPerM: number;
@@ -124,8 +123,7 @@ export const HUNYUAN_PRO_UPSCALE_UNITS = 45;
 // ---------------------------------------------------------------------------
 // Cost helpers
 // ---------------------------------------------------------------------------
-// Strip a trailing dated snapshot suffix (e.g. '-20251001') so a model id like
-// 'claude-haiku-4-5-20251001' resolves to the 'claude-haiku-4-5' rate.
+// Strip a trailing dated snapshot suffix so dated ids resolve to the base rate.
 function normalizeModelId(model: string): string {
   return model.replace(/-\d{8}$/, '');
 }

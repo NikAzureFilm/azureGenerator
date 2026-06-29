@@ -246,7 +246,7 @@ export const CREATIVE_MODELS: ModelConfig[] = [
   {
     id: 'ultra',
     name: 'Max Quality',
-    description: 'Meshy 6 Preview textured mesh generation',
+    description: 'Highest quality textured mesh generation',
     timeEstimate: '5-10 minutes',
     tokenCost: getCreativeModelTokenCost('ultra'),
   },
