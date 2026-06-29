@@ -6,6 +6,7 @@ import {
   normalizeCostControlPlanLevel,
   type CostControlPlanLevel,
 } from '../../../shared/costControls.ts';
+import { FREE_STARTER_TOKENS } from '../../../shared/pricingCatalog.ts';
 
 export {
   DAILY_GENERATION_LIMITS,
@@ -50,6 +51,7 @@ type SupabaseCountClient = {
 };
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+const ACTIVE_GENERATION_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 export type GenerationUsage = {
   activeGenerations: number;
@@ -122,11 +124,35 @@ export async function getUserPlanLevel(
     | { status?: string | null; level?: unknown }
     | null
     | undefined;
-  if (error || !subscription) return 'free';
-  if (!ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status ?? '')) {
-    return 'free';
+  if (
+    !error &&
+    subscription &&
+    ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status ?? '')
+  ) {
+    const subscriptionPlan = normalizeCostControlPlanLevel(subscription.level);
+    if (subscriptionPlan !== 'free') return subscriptionPlan;
   }
-  return normalizeCostControlPlanLevel(subscription.level);
+
+  const { data: tokenBalance, error: tokenBalanceError } = await supabaseClient
+    .from('token_balances')
+    .select('balance')
+    .eq('user_id', userId)
+    .eq('source', 'purchased')
+    .maybeSingle();
+
+  const purchasedBalance =
+    tokenBalance &&
+    typeof tokenBalance === 'object' &&
+    'balance' in tokenBalance &&
+    typeof tokenBalance.balance === 'number'
+      ? tokenBalance.balance
+      : 0;
+
+  if (!tokenBalanceError && purchasedBalance > FREE_STARTER_TOKENS) {
+    return 'standard';
+  }
+
+  return 'free';
 }
 
 export async function getUserGenerationUsage(
@@ -134,6 +160,9 @@ export async function getUserGenerationUsage(
   userId: string,
   now = new Date(),
 ): Promise<GenerationUsage> {
+  const activeStartIso = new Date(
+    now.getTime() - ACTIVE_GENERATION_WINDOW_MS,
+  ).toISOString();
   const dayStartIso = new Date(
     now.getTime() - 24 * 60 * 60 * 1000,
   ).toISOString();
@@ -141,10 +170,10 @@ export async function getUserGenerationUsage(
   const [activeCadJobs, activeMeshes, dailyChargedGenerations] =
     await Promise.all([
       countRows(supabaseClient, 'cad_jobs', userId, (query) =>
-        query.eq('status', 'pending'),
+        query.eq('status', 'pending').gte('created_at', activeStartIso),
       ),
       countRows(supabaseClient, 'meshes', userId, (query) =>
-        query.eq('status', 'pending'),
+        query.eq('status', 'pending').gte('created_at', activeStartIso),
       ),
       countRows(supabaseClient, 'token_transactions', userId, (query) =>
         query
