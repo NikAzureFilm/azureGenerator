@@ -785,11 +785,12 @@ Deno.serve(async (req) => {
   }
 
   const tokenLedger = new RefundableTokenLedger(billing);
+  const chatReferenceId = crypto.randomUUID();
   try {
     const result = await tokenLedger.consume(userData.user.email, {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
-      referenceId: crypto.randomUUID(),
+      referenceId: chatReferenceId,
       userId: userData.user.id,
     });
     if (!result.ok) {
@@ -1636,6 +1637,10 @@ Deno.serve(async (req) => {
                   ),
                 };
               } else {
+                await tokenLedger.refundReference(
+                  chatReferenceId,
+                  logRefundFailure,
+                );
                 tokenLedger.settleReference(toolCall.id);
                 const artifact: ParametricArtifact = {
                   title,

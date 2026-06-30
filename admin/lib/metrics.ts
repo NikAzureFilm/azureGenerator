@@ -1,5 +1,6 @@
 import 'server-only';
 import { getAdminClient } from './supabaseAdmin';
+import { displayGenerationTokens } from './generationTokens';
 import { TOKEN_INTERNAL_USD_COST, TOKEN_USD_VALUE } from './pricing';
 
 export type Overview = {
@@ -635,7 +636,10 @@ async function addGenerationEconomics(
     rows.map((row) => ({
       ...row,
       actual_cost_usd: row.actual_cost_usd ?? null,
-      tokens_used: row.tokens_used ?? null,
+      tokens_used: displayGenerationTokens({
+        kind: row.kind,
+        tokens_used: row.tokens_used ?? null,
+      }),
     }));
   const ids = [...new Set(rows.map((row) => row.id).filter(Boolean))];
   if (ids.length === 0) return withEmptyEconomics();
@@ -688,7 +692,14 @@ async function addGenerationEconomics(
       : null,
   }));
 
-  return addLegacyTokenMatches(supa, enriched);
+  const withLegacyMatches = await addLegacyTokenMatches(supa, enriched);
+  return withLegacyMatches.map((row) => ({
+    ...row,
+    tokens_used: displayGenerationTokens({
+      kind: row.kind,
+      tokens_used: row.tokens_used ?? null,
+    }),
+  }));
 }
 
 async function addLegacyTokenMatches(

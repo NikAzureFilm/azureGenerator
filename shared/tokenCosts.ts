@@ -133,10 +133,10 @@ export function getParametricModelTokenCost(_model: string): number {
 }
 
 export function getParametricBuildTokenCost(
-  model: string,
-  prepaidTokens = FEATURE_COSTS.chat.tokens,
+  _model: string,
+  _prepaidTokens = FEATURE_COSTS.chat.tokens,
 ): number {
-  return Math.max(0, getParametricModelTokenCost(model) - prepaidTokens);
+  return CAD_GENERATION_TOKEN_COST;
 }
 
 export function getCadBackendTokenCost(

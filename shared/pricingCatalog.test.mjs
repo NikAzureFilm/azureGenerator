@@ -105,9 +105,9 @@ assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 25);
 assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 25);
 assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 25);
 assert.equal(getParametricModelTokenCost('legacy-model'), 25);
-assert.equal(getParametricBuildTokenCost('google/gemini-3.1-pro-preview'), 15);
-assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.7'), 15);
-assert.equal(getParametricBuildTokenCost('legacy-model', 25), 0);
+assert.equal(getParametricBuildTokenCost('google/gemini-3.1-pro-preview'), 25);
+assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.7'), 25);
+assert.equal(getParametricBuildTokenCost('legacy-model', 25), 25);
 assert.equal(
   getCadBackendTokenCost('openscad', 'google/gemini-3.1-pro-preview'),
   25,
