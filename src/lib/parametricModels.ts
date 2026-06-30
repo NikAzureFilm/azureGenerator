@@ -1,14 +1,14 @@
 import { FEATURE_COSTS } from '../../shared/tokenCosts.ts';
+import { DEFAULT_CODE_GENERATION_MODEL } from '../../shared/parametricRouting.ts';
 import type { ModelConfig } from '../types/misc.ts';
 
-export const DEFAULT_PARAMETRIC_MODEL = 'google/gemini-3.5-flash';
-export const CLAUDE_FABLE_PARAMETRIC_MODEL = 'anthropic/claude-fable-5';
+export const DEFAULT_PARAMETRIC_MODEL = DEFAULT_CODE_GENERATION_MODEL;
 
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
-    id: 'google/gemini-3.5-flash',
-    name: 'CAD',
-    description: 'Fast, lower-cost CAD generation',
+    id: DEFAULT_CODE_GENERATION_MODEL,
+    name: 'Gemini 3.1 Pro',
+    description: 'CADAM-style CAD generation with Google Gemini 3.1 Pro',
     provider: 'Google',
     supportsTools: true,
     supportsThinking: true,

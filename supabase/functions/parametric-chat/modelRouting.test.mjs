@@ -45,13 +45,23 @@ assert.match(
 );
 assert.match(
   source,
-  /const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 8000/,
-  'Gemini code generation should use a bounded token budget that still emits complete OpenSCAD',
+  /const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000/,
+  'Gemini 3.1 Pro code generation should use a larger bounded token budget for CADAM-style OpenSCAD',
 );
 assert.match(
   source,
   /isGeminiCodeGenerationModel\(codeModel\)[\s\S]*effort: 'minimal'[\s\S]*exclude: true/,
   'Gemini code generation should request minimal hidden reasoning and exclude it from the response',
+);
+assert.match(
+  source,
+  /const model = normalizeParametricGenerationModel\(requestedModel\)/,
+  'parametric chat should normalize stale client model ids to the configured Gemini CAD model',
+);
+assert.match(
+  source,
+  /model: DEFAULT_CODE_GENERATION_MODEL/,
+  'parametric title generation should use the configured Gemini CAD model',
 );
 assert.match(
   source,

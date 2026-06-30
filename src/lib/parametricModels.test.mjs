@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  CLAUDE_FABLE_PARAMETRIC_MODEL,
   DEFAULT_PARAMETRIC_MODEL,
   PARAMETRIC_MODELS,
   normalizeParametricChatModel,
@@ -29,23 +28,19 @@ const modelSelectorSource = readFileSync(
   'utf8',
 );
 
-const flashModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'google/gemini-3.5-flash',
-);
-const fableModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === CLAUDE_FABLE_PARAMETRIC_MODEL,
+const geminiModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'google/gemini-3.1-pro-preview',
 );
 
-assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
+assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.1-pro-preview');
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.5-flash'],
+  ['google/gemini-3.1-pro-preview'],
 );
-assert.ok(flashModel);
-assert.equal(flashModel.name, 'CAD');
-assert.equal(flashModel.tokenCost, 25);
-assert.notEqual(flashModel.disabled, true);
-assert.equal(fableModel, undefined);
+assert.ok(geminiModel);
+assert.equal(geminiModel.name, 'Gemini 3.1 Pro');
+assert.equal(geminiModel.tokenCost, 25);
+assert.notEqual(geminiModel.disabled, true);
 assert.equal(
   PARAMETRIC_MODELS.some(
     (model) => model.name === 'Premium' || model.name === 'Lite',
@@ -53,8 +48,12 @@ assert.equal(
   false,
 );
 assert.equal(
+  normalizeParametricChatModel('google/gemini-3.1-pro-preview'),
+  'google/gemini-3.1-pro-preview',
+);
+assert.equal(
   normalizeParametricChatModel('google/gemini-3.5-flash'),
-  'google/gemini-3.5-flash',
+  DEFAULT_PARAMETRIC_MODEL,
 );
 assert.equal(
   normalizeParametricChatModel('anthropic/claude-fable-5'),

@@ -25,8 +25,48 @@ assert.match(
 );
 assert.match(
   source,
+  /never leave floating parts/i,
+  'OpenSCAD code-generation prompt should explicitly forbid floating parts',
+);
+assert.match(
+  source,
+  /overlap/i,
+  'OpenSCAD code-generation prompt should require features to overlap the body they attach to',
+);
+assert.match(
+  source,
+  /one connected piece or as a kit of separate parts/i,
+  'OpenSCAD code-generation prompt should frame output as one connected piece or a kit of separate parts',
+);
+assert.match(
+  source,
+  /lowest point is at z = 0/i,
+  'OpenSCAD code-generation prompt should require separate parts to rest flat on the build plate',
+);
+assert.match(
+  source,
   /BOSL2\/screws\.scad/,
   'OpenSCAD code-generation prompt should prefer BOSL2 screw helpers for threaded parts',
+);
+assert.match(
+  source,
+  /OpenSCAD Customizer/i,
+  'OpenSCAD code-generation prompt should require Customizer annotations for editable parameters',
+);
+assert.match(
+  source,
+  /full descriptive snake_case/i,
+  'OpenSCAD code-generation prompt should require readable parameter names',
+);
+assert.match(
+  source,
+  /\*_color/i,
+  'OpenSCAD code-generation prompt should require editable color parameters',
+);
+assert.match(
+  source,
+  /Use modules for repeated or meaningful model parts/i,
+  'OpenSCAD code-generation prompt should encourage structured CAD modules',
 );
 assert.match(
   source,

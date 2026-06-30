@@ -15,9 +15,14 @@ assert.deepEqual(LLM_PRICES['anthropic/claude-fable-5'], {
   outputPerM: 50,
 });
 
+assert.equal(llmCostUsd('anthropic/claude-fable-5', 1_000_000, 1_000_000), 60);
+assert.deepEqual(LLM_PRICES['google/gemini-3.1-pro-preview'], {
+  inputPerM: 1.25,
+  outputPerM: 10,
+});
 assert.equal(
-  llmCostUsd('anthropic/claude-fable-5', 1_000_000, 1_000_000),
-  60,
+  llmCostUsd('google/gemini-3.1-pro-preview', 1_000_000, 1_000_000),
+  11.25,
 );
 
 assert.deepEqual(OPENAI_IMAGE_PRICES, {

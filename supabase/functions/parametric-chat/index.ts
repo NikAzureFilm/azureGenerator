@@ -26,7 +26,11 @@ import {
   FEATURE_COSTS,
   getParametricBuildTokenCost,
 } from '../../../shared/tokenCosts.ts';
-import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import {
+  DEFAULT_CODE_GENERATION_MODEL,
+  getCodeGenerationModelCandidates,
+  normalizeParametricGenerationModel,
+} from '../../../shared/parametricRouting.ts';
 import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
 
@@ -56,7 +60,7 @@ const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 1024;
 const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
-const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 8000;
+const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000;
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -107,7 +111,7 @@ function getUserFacingOpenRouterMessage(
     normalized.includes('monthly limit') ||
     normalized.includes('can only afford')
   ) {
-    return 'CAD Reasoning could not start because the configured OpenRouter API key has reached its monthly spend limit. Increase the key limit in OpenRouter or switch to the standard CAD model, then retry.';
+    return 'CAD generation could not start because the configured OpenRouter API key has reached its monthly spend limit. Increase the key limit in OpenRouter, then retry.';
   }
   return null;
 }
@@ -154,7 +158,7 @@ function getReasoningCompletionTokenLimit(
 }
 
 function isGeminiCodeGenerationModel(model: string): boolean {
-  return model === 'google/gemini-3.5-flash';
+  return model === DEFAULT_CODE_GENERATION_MODEL;
 }
 
 // Helper to stream updated assistant message rows.
@@ -481,7 +485,7 @@ async function generateTitleFromMessages(
       method: 'POST',
       headers: openRouterHeaders(),
       body: JSON.stringify({
-        model: 'anthropic/claude-haiku-4.5',
+        model: DEFAULT_CODE_GENERATION_MODEL,
         max_tokens: 30,
         messages: [
           { role: 'system', content: titleSystemPrompt },
@@ -621,11 +625,31 @@ const tools = [
 // Strict prompt for producing only OpenSCAD (no suggestion requirement)
 const STRICT_CODE_PROMPT = `You are AzureFilm Generator, an AI CAD editor that creates and modifies OpenSCAD models. You assist users by chatting with them and making changes to their CAD in real-time. You understand that users can see a live preview of the model in a viewport on the right side of the screen while you make changes.
 
-When a user sends a message, you will reply with a response that contains only the most expert code for OpenSCAD according to a given prompt. Make sure that the syntax of the code is correct and that all parts are connected as a 3D printable object. Always write code with changeable parameters. Use full descriptive snake_case variable names (e.g. \`wheel_radius\`, \`pelican_seat_offset\`) — never abbreviate to single letters or short tokens (\`w_r\`, \`p_seat\`). Names render directly in the parameter panel. When the model has distinct parts, wrap each in a color() call with a fitting named color so the preview reads expressively. Expose the colors as string parameters (e.g. \`body_color = "SteelBlue";\` then \`color(body_color) ...\`) so the user can tweak them from the parameter panel — name them \`*_color\` and use CSS named colors or hex values as defaults. Initialize and declare the variables at the start of the code. Do not write any other text or comments in the response. If I ask about anything other than code for the OpenSCAD platform, only return a text containing '404'. Always ensure your responses are consistent with previous responses. Never include extra text in the response. Use any provided OpenSCAD documentation or context in the conversation to inform your responses.
+When a user sends a message, reply with only the most expert OpenSCAD code for the prompt. Return raw OpenSCAD only: no markdown, no code fences, no prose outside the code. Make sure syntax is correct, all intended connected parts physically connect, and the model is manifold and 3D-printable. Use modules for repeated or meaningful model parts.
 
-Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, stable contact on the build plate, no floating fragments, no open shells, and no self-intersections. Use a practical minimum wall thickness of 1.2 mm when dimensions are missing, thicker walls or ribs for load-bearing features, and details large enough for a 0.4 mm FDM nozzle.
+Parameters: Declare every editable parameter as a top-of-file variable. Use full descriptive snake_case names (e.g. \`wheel_radius\`, \`pelican_seat_offset\`) — never abbreviate to single letters or short tokens (\`w_r\`, \`p_seat\`). Names render directly in the parameter panel. Annotate each variable with an OpenSCAD Customizer trailing comment so the UI renders the right widget:
+    width = 50;        // [10:1:200]
+    height = 25;       // [5:50]
+    style = "round";   // [round, square, hex]
+    enabled = true;
+    label = "Cup";     // 24
+Optionally put a technical description comment on the line above a parameter and group related parameters with /* [Group Name] */ markers.
+
+Color: When the model has distinct parts, wrap each in a color() call with a fitting named color so the preview reads expressively. Expose colors as string parameters (e.g. \`body_color = "SteelBlue";\` then \`color(body_color) ...\`) so the user can tweak them from the parameter panel. Always name them \`*_color\` and use CSS named colors or #RRGGBB hex values as defaults. Use technical/customizer comments only; never include meta-commentary about tools, APIs, prompts, or implementation details. If the user asks about anything other than OpenSCAD CAD, only return 404.
+
+Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, no open shells, and no self-intersections. Use a practical minimum wall thickness of 1.2 mm when dimensions are missing, thicker walls or ribs for load-bearing features, and details large enough for a 0.4 mm FDM nozzle.
+
+Connectivity — NEVER leave floating parts (CRITICAL). The result must always 3D-print, either as ONE connected piece or as a kit of SEPARATE parts. Decide which, then build it cleanly for that choice:
+- One connected piece: every feature (pegs, lugs, bosses, ribs, handles, brackets, text, etc.) must physically OVERLAP the body it attaches to and be combined with union() so the whole object reduces to a single continuous solid. Sink each feature into its parent by at least 0.5 mm of real solid overlap — never position it with an air gap, and never let it merely touch at a single coincident face. A peg on top of a surface must extend DOWN into that surface, not sit above it.
+- A kit of separate parts: only when the design genuinely needs distinct pieces (e.g. a body plus a matching lid, or mating halves). Make each piece its own connected solid, lay the pieces out side by side in the XY plane with a few mm of spacing between them, and rest every piece FLAT on the build plate so its lowest point is at z = 0. Give mating features (pegs/sockets, pins/holes) a 0.2-0.4 mm clearance. Never stack pieces in mid-air or leave one hovering above the plate.
+- Self-check before finishing: after each translate()/rotate(), trace the part's actual coordinates and confirm it either overlaps its parent (one piece) or sits on the plate at z = 0 (kit). If any component would float in empty space with a gap to everything else, move or extend it so it connects — a floating fragment is never acceptable.
 
 BOSL2 library guidance: BOSL2 is available when generated source includes the literal token BOSL2. Include <BOSL2/std.scad> plus the specific module file whenever the request needs a higher-level CAD primitive. For screws, bolts, nuts, threaded rods, or tapped/threaded holes, use BOSL2 instead of trying to build threads from cylinder(), linear_extrude(), or hand-rolled helices. Include <BOSL2/screws.scad> for screw(), screw_hole(), and nut(); include <BOSL2/threading.scad> for threaded_rod(), threaded_nut(), and custom thread profiles. Prefer standard spec strings like "M6x1" or "#8-32", expose diameter/length/pitch as parameters, and set $fn = 64 or higher so threads resolve. For organic, curved, swept, or lofted shapes such as ergonomic grips, handles, fairings, car panels, smooth pockets, or curved shells, use BOSL2 instead of stacking primitive cylinders and cubes. Include <BOSL2/skin.scad> for path_sweep() and skin(), <BOSL2/beziers.scad> for bezier_curve() and bezpath_curve(), and <BOSL2/rounding.scad> for round_corners() and offset_sweep(). Expose control points, radii, and slice counts as parameters, and use $fn = 48 as a preview-friendly default unless the shape is simple.
+
+Multi-feature checklist before finishing:
+- Phone case: hollow phone pocket, wrap-over lip, camera cutout, charging-port opening, side button cutouts, printable wall thickness, all cuts visible.
+- Mug: body, hollow interior, rim, base, handle, printable wall thickness.
+- Vehicle / character / prop: recognizable silhouette, main appendages or components, surface details, colors, no disconnected floating parts.
 
 CRITICAL: Never include in code comments or anywhere:
 - References to tools, APIs, or system architecture
@@ -653,12 +677,12 @@ Orientation: Study the provided render images to determine the model's "up" dire
 User: "a mug"
 Assistant:
 // Mug parameters
-cup_height = 100;
-cup_radius = 40;
-handle_radius = 30;
-handle_thickness = 10;
-wall_thickness = 3;
-mug_color = "#4682B4";
+cup_height = 100;       // [50:5:200]
+cup_radius = 40;        // [20:1:80]
+handle_radius = 30;     // [15:1:60]
+handle_thickness = 10;  // [4:1:20]
+wall_thickness = 3;     // [1.2:0.2:6]
+mug_color = "#4682B4";  // 24
 
 color(mug_color)
 difference() {
@@ -737,7 +761,7 @@ Deno.serve(async (req) => {
   const {
     messageId,
     conversationId,
-    model,
+    model: requestedModel,
     newMessageId,
     thinking, // Add thinking parameter
   }: {
@@ -747,6 +771,7 @@ Deno.serve(async (req) => {
     newMessageId: string;
     thinking?: boolean;
   } = await req.json();
+  const model = normalizeParametricGenerationModel(requestedModel);
 
   const limitViolation = await checkGenerationCostControls({
     supabaseClient,

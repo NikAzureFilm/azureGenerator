@@ -12,7 +12,10 @@ import {
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { CadJobArtifact, Content, Model } from '@shared/types.ts';
 import { getCadBackendTokenCost } from '../../../shared/tokenCosts.ts';
-import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
+import {
+  getCodeGenerationModelCandidates,
+  normalizeParametricGenerationModel,
+} from '../../../shared/parametricRouting.ts';
 import {
   buildCadSystemPrompt,
   buildCadUserPrompt,
@@ -589,7 +592,7 @@ Deno.serve(async (req) => {
   const {
     messageId,
     conversationId,
-    model,
+    model: requestedModel,
     newMessageId,
   }: {
     messageId: string;
@@ -597,6 +600,7 @@ Deno.serve(async (req) => {
     model: Model;
     newMessageId: string;
   } = await req.json();
+  const model = normalizeParametricGenerationModel(requestedModel);
 
   const limitViolation = await checkGenerationCostControls({
     supabaseClient,

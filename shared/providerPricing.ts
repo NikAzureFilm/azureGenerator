@@ -42,8 +42,11 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   // title-generator + creative-chat suggestions (Haiku-class; estimate).
   'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cachedInputPerM: 0.1 },
   // --- OpenRouter slugs ---
-  // parametric-chat agent + parametric/cad code-gen — verified $1.50 / $9.
+  // Historical parametric model; retained so old provider_usage rows can still
+  // be costed.
   'google/gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9 },
+  // CADAM-aligned parametric-chat agent + code-gen model.
+  'google/gemini-3.1-pro-preview': { inputPerM: 1.25, outputPerM: 10 },
   // Claude Fable 5 via OpenRouter / Anthropic — verified $10 / $50.
   'anthropic/claude-fable-5': { inputPerM: 10, outputPerM: 50 },
   // prompt-generator + code-gen fallback — verified $5 / $30.
