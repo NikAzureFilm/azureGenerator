@@ -30,8 +30,8 @@ const DEFAULT_UNIT_PRICES = new Map(
 const CONFIGURED_TOKENS = {
   chat: 10,
   promptGeneration: 10,
-  parametric: 50,
-  parametricCadReasoning: 120,
+  parametric: 25,
+  parametricCadReasoning: 25,
   generatedInputImage: 22,
   generatedInputImageLite: 7,
   multiviewFrontImage: 22,

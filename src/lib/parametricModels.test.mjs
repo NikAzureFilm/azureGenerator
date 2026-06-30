@@ -43,7 +43,7 @@ assert.deepEqual(
 );
 assert.ok(flashModel);
 assert.equal(flashModel.name, 'CAD');
-assert.equal(flashModel.tokenCost, 50);
+assert.equal(flashModel.tokenCost, 25);
 assert.notEqual(flashModel.disabled, true);
 assert.equal(fableModel, undefined);
 assert.equal(

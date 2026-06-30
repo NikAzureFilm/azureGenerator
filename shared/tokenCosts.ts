@@ -2,7 +2,7 @@ import type { CadBackend, CreativeModel } from './types.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
-const TEXT_TO_CAD_WORKER_TOKENS = 140;
+export const CAD_GENERATION_TOKEN_COST = 25;
 
 export function tokensForProviderCost(providerCostUsd: number): number {
   return Math.max(
@@ -34,13 +34,13 @@ export const FEATURE_COSTS = {
   parametric: {
     id: 'parametric',
     label: 'Parametric CAD generation',
-    tokens: 50,
+    tokens: CAD_GENERATION_TOKEN_COST,
     description: 'Text-to-CAD generation with editable parameters.',
   },
   parametricCadReasoning: {
     id: 'parametric-cad-reasoning',
     label: 'CAD Reasoning generation',
-    tokens: 120,
+    tokens: CAD_GENERATION_TOKEN_COST,
     description:
       'Alternative engine with deeper reasoning — slower and costlier per call.',
   },
@@ -128,28 +128,22 @@ export function getCreativeModelCost(model: CreativeModel): PublicFeatureCost {
   }
 }
 
-export function getParametricModelTokenCost(model: string): number {
-  switch (model) {
-    case 'anthropic/claude-fable-5':
-    case 'anthropic/claude-opus-4.7':
-      return FEATURE_COSTS.parametricCadReasoning.tokens;
-    default:
-      return FEATURE_COSTS.parametric.tokens;
-  }
+export function getParametricModelTokenCost(_model: string): number {
+  return CAD_GENERATION_TOKEN_COST;
+}
+
+export function getParametricBuildTokenCost(
+  model: string,
+  prepaidTokens = FEATURE_COSTS.chat.tokens,
+): number {
+  return Math.max(0, getParametricModelTokenCost(model) - prepaidTokens);
 }
 
 export function getCadBackendTokenCost(
-  backend: CadBackend,
-  model: string,
+  _backend: CadBackend,
+  _model: string,
 ): number {
-  const baseCost =
-    FEATURE_COSTS.chat.tokens + getParametricModelTokenCost(model);
-  switch (backend) {
-    case 'openscad':
-      return baseCost;
-    case 'text-to-cad':
-      return baseCost + TEXT_TO_CAD_WORKER_TOKENS;
-  }
+  return CAD_GENERATION_TOKEN_COST;
 }
 
 export function formatTokenCost(tokens: number): string {

@@ -13,6 +13,7 @@ import {
   TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE,
   getCadBackendTokenCost,
+  getParametricBuildTokenCost,
   getParametricModelTokenCost,
   tokensForProviderCost,
 } from './tokenCosts.ts';
@@ -76,8 +77,8 @@ assert.deepEqual(
   {
     chat: 10,
     promptGeneration: 10,
-    parametric: 50,
-    parametricCadReasoning: 120,
+    parametric: 25,
+    parametricCadReasoning: 25,
     generatedInputImage: 22,
     generatedInputImageLite: 7,
     multiviewFrontImage: 22,
@@ -99,24 +100,27 @@ assert.ok(
   'Max quality mesh should cost more than draft mesh',
 );
 
-assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 50);
-assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 120);
-assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 50);
-assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 50);
-assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 120);
-assert.equal(getParametricModelTokenCost('legacy-model'), 50);
-assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 60);
+assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 25);
+assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 25);
+assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 25);
+assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 25);
+assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 25);
+assert.equal(getParametricModelTokenCost('legacy-model'), 25);
+assert.equal(getParametricBuildTokenCost('google/gemini-3.5-flash'), 15);
+assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.7'), 15);
+assert.equal(getParametricBuildTokenCost('legacy-model', 25), 0);
+assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 25);
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'google/gemini-3.5-flash'),
-  200,
+  25,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
-  270,
+  25,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
-  270,
+  25,
 );
 
 assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);

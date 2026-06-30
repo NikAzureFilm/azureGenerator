@@ -24,7 +24,7 @@ import {
 } from '../_shared/refundableTokenLedger.ts';
 import {
   FEATURE_COSTS,
-  getParametricModelTokenCost,
+  getParametricBuildTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import { getCodeGenerationModelCandidates } from '../../../shared/parametricRouting.ts';
 import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
@@ -1304,12 +1304,12 @@ Deno.serve(async (req) => {
                 return;
               }
 
-              // Deduct parametric tokens (5) for model building
+              // Deduct CAD generation tokens for model building.
               try {
                 const paramResult = await tokenLedger.consume(
                   userData.user!.email!,
                   {
-                    tokens: getParametricModelTokenCost(model),
+                    tokens: getParametricBuildTokenCost(model),
                     operation: 'parametric',
                     referenceId: toolCall.id,
                     userId: userData.user!.id,
