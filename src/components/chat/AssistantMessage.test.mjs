@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const source = readFileSync(new URL('./AssistantMessage.tsx', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('./AssistantMessage.tsx', import.meta.url),
+  'utf8',
+);
 
 assert.doesNotMatch(
   source,
@@ -61,4 +64,16 @@ assert.match(
   source,
   /downloadSTEPArtifactFile[\s\S]*downloadOBJArtifactFile/s,
   'CAD job export controls should support native STEP artifacts and OBJ conversion',
+);
+
+assert.doesNotMatch(
+  source,
+  /RetryModelSelector/,
+  'assistant message retry controls should not render a visible model selector',
+);
+
+assert.doesNotMatch(
+  source,
+  /Retry with \{model\.name\}/,
+  'assistant message retry controls should not expose model names in the interface',
 );

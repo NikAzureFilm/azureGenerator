@@ -7,7 +7,6 @@ import {
   History,
   ThumbsDown,
   ThumbsUp,
-  ChevronDown,
   Download,
   Loader2,
   ImageIcon,
@@ -21,12 +20,7 @@ import { BRAND_WEBSITE } from '@/config/brand';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import { Avatar } from '@/components/ui/avatar';
-import {
-  cn,
-  CREATIVE_MODELS,
-  getBackupModel,
-  PARAMETRIC_MODELS,
-} from '@/lib/utils';
+import { cn, getBackupModel } from '@/lib/utils';
 import { Link } from '@tanstack/react-router';
 import { getLevel, useAuth } from '@/contexts/AuthContext';
 import { ImageViewer } from '@/components/ImageViewer';
@@ -39,12 +33,6 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import { useCallback, useMemo, useState } from 'react';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMeshData } from '@/hooks/useMeshData';
 import { MeshImagePreview } from '@/components/viewer/MeshImagePreview';
@@ -451,7 +439,7 @@ export function AssistantMessage({
                         }}
                         disabled={isLoading || limitReached}
                         className={cn(
-                          'h-6 w-6 rounded-lg rounded-r-none border-r-0 p-0',
+                          'h-6 w-6 rounded-lg p-0',
                           limitReached && 'cursor-not-allowed opacity-50',
                         )}
                       >
@@ -462,21 +450,6 @@ export function AssistantMessage({
                       <span>Retry</span>
                     </TooltipContent>
                   </Tooltip>
-                  {model && (
-                    <RetryModelSelector
-                      message={message}
-                      parentMessage={message.parent ?? undefined}
-                      onRetry={(model) =>
-                        onRetry({ model, id: message.parent_message_id! })
-                      }
-                      disabled={isLoading || limitReached}
-                      className={cn(
-                        'h-6 w-fit',
-                        limitReached && 'cursor-not-allowed opacity-50',
-                        updateConversation && 'rounded-l-none',
-                      )}
-                    />
-                  )}
                 </div>
               )}
               {canUpscale && (
@@ -777,113 +750,6 @@ function MeshLimitReachedMessage() {
       </span>
     );
   }
-}
-
-function RetryModelSelector({
-  message,
-  parentMessage,
-  onRetry,
-  disabled,
-  className,
-}: {
-  message: Message;
-  parentMessage?: Message;
-  onRetry: (modelId: Model) => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const { conversation } = useConversation();
-
-  // Get the appropriate model list based on conversation type and content
-  const models =
-    conversation.type === 'parametric' ? PARAMETRIC_MODELS : CREATIVE_MODELS;
-
-  const selectedModelConfig =
-    models.find(
-      (model) =>
-        model.id ===
-        getBackupModel({
-          message,
-          parentMessage,
-          type: conversation.type,
-        }),
-    ) ?? models[0];
-
-  // Filter out current model and handle multiple images case
-  const availableModels = models
-    .filter((model) => model.id !== selectedModelConfig.id)
-    .map((model) => {
-      if (
-        parentMessage?.content.images &&
-        parentMessage.content.images.length > 1
-      ) {
-        return { ...model, disabled: model.id !== 'quality' };
-      }
-      return model;
-    });
-
-  if (availableModels.length === 0) {
-    return (
-      <Button
-        variant="outline"
-        disabled={true}
-        className={cn(
-          'h-6 w-fit gap-1 rounded-lg px-2 text-xs text-adam-text-primary opacity-50',
-          className,
-        )}
-      >
-        <span>{selectedModelConfig.name}</span>
-      </Button>
-    );
-  }
-
-  return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          disabled={disabled}
-          className={cn(
-            'h-6 w-fit gap-1 rounded-lg px-2 text-xs text-adam-text-primary',
-            isOpen && 'bg-adam-neutral-800',
-            className,
-          )}
-        >
-          <span>{selectedModelConfig.name}</span>
-          <ChevronDown
-            className={cn(
-              'h-3 w-3 transition-transform duration-100',
-              isOpen && 'rotate-180',
-            )}
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        className="w-48 rounded-lg border border-adam-neutral-700 bg-adam-neutral-800 p-1"
-        align="start"
-      >
-        {availableModels.map((model) => (
-          <DropdownMenuItem
-            key={model.id}
-            className={cn(
-              'cursor-pointer rounded-md bg-adam-neutral-800 px-2 py-1.5 text-xs text-adam-text-primary hover:bg-adam-neutral-700 focus:bg-adam-bg-secondary-dark',
-              model.disabled && 'cursor-not-allowed opacity-50',
-            )}
-            onClick={() => {
-              if (!model.disabled && onRetry) {
-                onRetry(model.id);
-                setIsOpen(false);
-              }
-            }}
-            disabled={model.disabled}
-          >
-            Retry with {model.name}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 }
 
 function AssistantMessageImagesViewer({ message }: { message: Message }) {
