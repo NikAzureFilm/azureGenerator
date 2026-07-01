@@ -132,6 +132,7 @@ interface TextAreaChatProps {
     id: string;
     user_id: string;
   };
+  ensureConversation?: () => Promise<void>;
   composerFocusRequest?: {
     id: number;
     draft?: string;
@@ -159,6 +160,7 @@ function TextAreaChat({
   showFullLabels = false,
   onTypeChange,
   conversation,
+  ensureConversation,
   composerFocusRequest,
   seedMultiviewImages,
 }: TextAreaChatProps) {
@@ -1074,6 +1076,7 @@ function TextAreaChat({
 
     setIsGeneratingInputImage(true);
     try {
+      await ensureConversation?.();
       const { data, error } = await supabase.functions.invoke('generate-view', {
         method: 'POST',
         body: {

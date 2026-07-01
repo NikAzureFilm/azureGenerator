@@ -9,6 +9,10 @@ const chatSectionSource = readFileSync(
   new URL('./chat/ChatSection.tsx', import.meta.url),
   'utf8',
 );
+const promptViewSource = readFileSync(
+  new URL('../views/PromptView.tsx', import.meta.url),
+  'utf8',
+);
 
 assert.doesNotMatch(
   source,
@@ -50,4 +54,28 @@ assert.match(
   chatSectionSource,
   /<TextAreaChat[\s\S]*seedMultiviewImages=\{latestMultiviewImages\}/s,
   'chat section should pass the latest multiview images into the composer',
+);
+
+assert.match(
+  source,
+  /ensureConversation\?:\s*\(\)\s*=>\s*Promise<void>/,
+  'composer should accept a hook for persisting draft conversations before input image generation',
+);
+
+assert.match(
+  source,
+  /await ensureConversation\?\.\(\);[\s\S]*supabase\.functions\.invoke\('generate-view'/,
+  'input image generation should persist the draft conversation before calling generate-view',
+);
+
+assert.match(
+  promptViewSource,
+  /ensureConversation=\{ensureConversation\}/,
+  'prompt view should provide the draft conversation persistence hook to the composer',
+);
+
+assert.match(
+  promptViewSource,
+  /\.from\('conversations'\)[\s\S]*\.upsert\(/,
+  'prompt view should tolerate a pre-created conversation when sending the first message',
 );
