@@ -279,6 +279,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                               <CreationThumbnail
                                 conversationId={conversation.id}
                                 userId={conversation.user_id}
+                                updatedAt={conversation.updated_at ?? ''}
                                 title={conversation.title}
                                 className="h-7 w-7"
                                 iconClassName="h-3.5 w-3.5"
