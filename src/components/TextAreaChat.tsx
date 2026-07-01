@@ -100,6 +100,7 @@ import {
 } from '@shared/imageGeneration';
 import {
   buildReferenceImageAccept,
+  getMaxReferenceImages,
   shouldShowReferenceImageControl,
 } from '@/utils/inputImageControls';
 import {
@@ -222,6 +223,8 @@ function TextAreaChat({
   const lastHydratedMultiviewSeedRef = useRef<string | null>(null);
   const isMultiview =
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
+  // CAD (parametric) accepts up to 5 reference images; Max Quality mesh takes 1.
+  const maxReferenceImages = getMaxReferenceImages(type);
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
 
@@ -777,8 +780,20 @@ function TextAreaChat({
     hasInvalidItems =
       newItems.length > filteredImages.length + filteredMeshes.length;
 
+    // Cap reference images: CAD allows up to 5, Max Quality mesh allows 1.
+    const availableImageSlots = Math.max(0, maxReferenceImages - images.length);
+    const imagesToAdd = filteredImages.slice(0, availableImageSlots);
+    const hasExceededImageLimit = filteredImages.length > imagesToAdd.length;
+
     // Show specific errors first, then generic error only if there are truly invalid file types
-    if (hasSmallImages) {
+    if (hasExceededImageLimit) {
+      toast({
+        title: 'Reference image limit reached',
+        description: `You can add up to ${maxReferenceImages} reference image${
+          maxReferenceImages === 1 ? '' : 's'
+        } ${type === 'parametric' ? 'in CAD mode' : 'for Max Quality mesh'}.`,
+      });
+    } else if (hasSmallImages) {
       toast({
         title: 'Image too small',
         description:
@@ -877,8 +892,8 @@ function TextAreaChat({
       }
     });
 
-    // Upload each valid image immediately
-    filteredImages.forEach(async (file) => {
+    // Upload each valid image immediately (respecting the reference-image cap)
+    imagesToAdd.forEach(async (file) => {
       const tempId = crypto.randomUUID();
       const url = URL.createObjectURL(file);
       setImages((prevImages) => [
@@ -962,6 +977,8 @@ function TextAreaChat({
   const openReferenceFilePicker = () => {
     const input = document.createElement('input');
     input.type = 'file';
+    // Allow selecting several reference images at once when more than one is allowed.
+    input.multiple = maxReferenceImages > 1;
     input.accept = buildReferenceImageAccept({
       type,
       imageFormats: VALID_IMAGE_FORMATS,
