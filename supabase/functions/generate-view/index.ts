@@ -172,11 +172,13 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
+    const imageId = crypto.randomUUID();
     const imageUsageCtx = {
       functionName: 'generate-view',
       operation: 'image',
       userId,
       conversationId,
+      referenceId: imageId,
     };
     const selectedImageGenerationModel = normalizeImageGenerationModel(
       imageGenerationModel ?? provider,
@@ -206,8 +208,8 @@ Deno.serve(async (req) => {
     try {
       const consumeResult = await tokenLedger.consume(userData.user.email, {
         tokens: tokenCost,
-        operation: 'chat',
-        referenceId: crypto.randomUUID(),
+        operation: 'image',
+        referenceId: imageId,
         userId,
       });
       if (!consumeResult.ok) {
@@ -320,6 +322,7 @@ Deno.serve(async (req) => {
 
     let imageBytes: Buffer;
     let contentType: string | undefined;
+    let imageGenerationCallId: string | null = null;
     if (selectedProvider === 'openai') {
       try {
         const result = await generateImageWithGptImage2(
@@ -335,6 +338,7 @@ Deno.serve(async (req) => {
         );
         imageBytes = result.imageBytes;
         contentType = result.contentType;
+        imageGenerationCallId = result.imageCallId;
       } catch (error) {
         logError(error, {
           functionName: 'generate-view',
@@ -360,7 +364,6 @@ Deno.serve(async (req) => {
       imageBytes = await generateWithLite();
     }
 
-    const imageId = crypto.randomUUID();
     const path = `${userId}/${conversationId}/${imageId}`;
     contentType = contentType ?? detectImageMediaType(imageBytes);
     const { error: uploadError } = await serviceClient.storage
@@ -371,10 +374,42 @@ Deno.serve(async (req) => {
       throw new Error(`Upload failed: ${uploadError.message}`);
     }
 
+    const imagePrompt = {
+      text: userPrompt || builtPrompt,
+      generated: true,
+      source: 'generate-view',
+      view,
+      mode,
+      provider: selectedProvider,
+      imageGenerationModel: selectedImageGenerationModel,
+      tokenCost,
+      ...(referenceIds.length > 0 && { images: referenceIds }),
+      ...(Array.isArray(refImageLabels) &&
+        refImageLabels.length > 0 && { refImageLabels }),
+    };
+
+    const { error: imageRowError } = await serviceClient.from('images').upsert(
+      {
+        id: imageId,
+        status: 'success',
+        user_id: userId,
+        conversation_id: conversationId,
+        image_generation_call_id: imageGenerationCallId,
+        prompt: imagePrompt,
+      },
+      { onConflict: 'id' },
+    );
+
+    if (imageRowError) {
+      throw new Error(`Image row insert failed: ${imageRowError.message}`);
+    }
+
     await recordGeneratedAsset({
       supabaseClient: serviceClient,
       userId,
       conversationId,
+      sourceTable: 'images',
+      sourceId: imageId,
       kind: 'image',
       bucket: 'images',
       objectKey: path,
@@ -386,6 +421,7 @@ Deno.serve(async (req) => {
         mode,
         provider: selectedProvider,
         imageGenerationModel: selectedImageGenerationModel,
+        tokenCost,
       },
     });
 

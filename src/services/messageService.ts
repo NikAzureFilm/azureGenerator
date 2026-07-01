@@ -7,6 +7,7 @@ import {
   Model,
   normalizeCreativeModel,
 } from '@shared/types';
+import type { Json } from '@shared/database';
 import { HistoryConversation } from '../types/misc.ts';
 import {
   QueryClient,
@@ -86,6 +87,80 @@ function messageInsertedConversationUpdate(
     ['conversations', 'recent'],
     messageSentConversationUpdate(newMessage, conversationId),
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function fetchGeneratedImagePrompts({
+  imageIds,
+  userId,
+  conversationId,
+  imageGenerationModel,
+}: {
+  imageIds: string[];
+  userId: string;
+  conversationId: string;
+  imageGenerationModel?: unknown;
+}): Promise<Map<string, Json>> {
+  const uniqueIds = [...new Set(imageIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return new Map();
+
+  const objectKeys = uniqueIds.map((id) => `${userId}/${conversationId}/${id}`);
+  const { data, error } = await supabase
+    .from('generation_assets')
+    .select('source_id,object_key,metadata')
+    .eq('kind', 'image')
+    .is('deleted_at', null)
+    .in('object_key', objectKeys);
+
+  if (error) return new Map();
+
+  const idSet = new Set(uniqueIds);
+  const prompts = new Map<string, Json>();
+  for (const asset of data ?? []) {
+    const metadata = (isRecord(asset.metadata) ? asset.metadata : {}) as Record<
+      string,
+      Json | undefined
+    >;
+    if (metadata.source !== 'generate-view') continue;
+
+    const sourceId =
+      typeof asset.source_id === 'string' && idSet.has(asset.source_id)
+        ? asset.source_id
+        : null;
+    const objectId =
+      typeof asset.object_key === 'string'
+        ? asset.object_key.split('/').filter(Boolean).at(-1)
+        : null;
+    const id = sourceId ?? (objectId && idSet.has(objectId) ? objectId : null);
+    if (!id) continue;
+
+    const view = stringValue(metadata.view);
+    const mode = stringValue(metadata.mode);
+    const label =
+      mode === 'multiview' && view
+        ? `${view} view image`
+        : mode === 'input'
+          ? 'input image'
+          : 'image';
+
+    const selectedModel = stringValue(imageGenerationModel);
+    prompts.set(id, {
+      ...metadata,
+      generated: true,
+      source: 'generate-view',
+      text: `Generated ${label}`,
+      ...(selectedModel ? { imageGenerationModel: selectedModel } : {}),
+    });
+  }
+
+  return prompts;
 }
 
 export const useMessagesQuery = () => {
@@ -578,13 +653,19 @@ export function useSendContentMutation({
       const databaseOperations = [];
 
       if (content.images && content.images.length > 0) {
+        const generatedImagePrompts = await fetchGeneratedImagePrompts({
+          imageIds: content.images,
+          userId: conversation.user_id,
+          conversationId: conversation.id,
+          imageGenerationModel: content.imageGenerationModel,
+        });
         // Create database entries for images and move them to conversation folder
         const imageOperations = content.images.map(async (imageId) => {
           // Create the image record in the database
           const { error: imageError } = await supabase.from('images').upsert(
             {
               id: imageId,
-              prompt: {
+              prompt: generatedImagePrompts.get(imageId) ?? {
                 text: 'User uploaded image',
               },
               status: 'success',
