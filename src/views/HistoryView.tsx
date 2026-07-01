@@ -294,7 +294,7 @@ export function HistoryView() {
         <div className="mx-auto w-full max-w-6xl px-6 pb-4 pt-10 md:px-20 md:py-4">
           <div className="flex items-center justify-between py-3">
             <h1 className="flex items-center gap-2 px-2 text-2xl font-medium text-adam-neutral-10">
-              Past Creations
+              Past Generations
             </h1>
 
             {/* View Toggle */}
@@ -322,7 +322,7 @@ export function HistoryView() {
                 variant="ghost"
                 size="sm"
                 aria-pressed={viewMode === 'visual'}
-                aria-label="Visual view"
+                aria-label="Grid view"
                 onClick={() => setViewMode('visual')}
                 className={`h-8 px-3 transition-colors duration-150 ${
                   viewMode === 'visual'
@@ -331,7 +331,7 @@ export function HistoryView() {
                 }`}
               >
                 <LayoutGrid className="mr-2 h-4 w-4" />
-                Visual
+                Grid
               </Button>
             </div>
           </div>

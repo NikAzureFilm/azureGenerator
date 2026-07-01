@@ -69,6 +69,7 @@ export function ConversationCard({
           <CreationThumbnail
             conversationId={conversation.id}
             userId={conversation.user_id}
+            updatedAt={conversation.updated_at}
             title={conversation.title}
             className="h-14 w-14"
             iconClassName="h-5 w-5"

@@ -21,11 +21,7 @@ const FEATURE_ROWS = [
   },
   {
     group: '3D generation',
-    rows: [
-      FEATURE_COSTS.ultraMesh,
-      FEATURE_COSTS.multiviewMesh,
-      FEATURE_COSTS.upscaleMesh,
-    ],
+    rows: [FEATURE_COSTS.ultraMesh, FEATURE_COSTS.multiviewMesh],
   },
 ];
 
@@ -43,8 +39,8 @@ export function PricingView() {
             </h1>
             <p className="mt-3 text-sm leading-6 text-adam-text-secondary">
               Tokens are used for image generation, CAD generation, and 3D mesh
-              creation. The table below shows the token cost before you run each
-              workflow.
+              generation. The table below shows the token cost before you run
+              each workflow.
             </p>
           </div>
           <Button asChild className="w-fit rounded-lg">

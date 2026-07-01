@@ -6,6 +6,8 @@ import { useCreationThumbnail } from '@/hooks/useCreationThumbnail';
 interface CreationThumbnailProps {
   conversationId: string;
   userId: string;
+  /** Conversation updated_at — used to invalidate the cached thumbnail. */
+  updatedAt: string;
   title?: string;
   /** Sizing/shape of the thumbnail container (e.g. "h-12 w-12"). */
   className?: string;
@@ -21,6 +23,7 @@ interface CreationThumbnailProps {
 export function CreationThumbnail({
   conversationId,
   userId,
+  updatedAt,
   title,
   className,
   iconClassName,
@@ -50,6 +53,7 @@ export function CreationThumbnail({
   const { thumbnail, isLoading } = useCreationThumbnail({
     conversationId,
     userId,
+    updatedAt,
     enabled: isVisible,
   });
 
@@ -64,7 +68,7 @@ export function CreationThumbnail({
       {thumbnail ? (
         <img
           src={thumbnail}
-          alt={title ? `Preview of ${title}` : 'Creation preview'}
+          alt={title ? `Preview of ${title}` : 'Generation preview'}
           className="h-full w-full object-cover"
         />
       ) : isVisible && isLoading ? (

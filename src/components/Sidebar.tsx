@@ -178,7 +178,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
               <Tooltip>
                 <TooltipTrigger asChild>{children}</TooltipTrigger>
                 <TooltipContent side="right" className="flex flex-col">
-                  <span className="font-semibold">New Creation</span>
+                  <span className="font-semibold">New Generation</span>
                   <span className="text-xs text-muted-foreground">
                     Start a new conversation
                   </span>
@@ -201,7 +201,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                 />
                 {isSidebarOpen && (
                   <div className="text-sm font-semibold leading-[14px] tracking-[-0.14px] text-adam-neutral-200">
-                    New Creation
+                    New Generation
                   </div>
                 )}
               </Button>
@@ -211,9 +211,9 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
             {[
               {
                 icon: LayoutGrid,
-                label: 'Creations',
+                label: 'Generations',
                 href: '/history' as const,
-                description: 'View past creations',
+                description: 'View past generations',
                 submenu: recentConversations,
               },
             ].map(({ icon: Icon, label, href, description, submenu }) => (
@@ -237,7 +237,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                       isSidebarOpen ? 'adam_dark' : 'adam_dark_collapsed'
                     }
                     onClick={() => sidebarNavigate(href)}
-                    className={`${isSidebarOpen ? 'w-full justify-start' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
+                    className={`${isSidebarOpen ? 'w-full justify-start border border-adam-neutral-700 bg-adam-background-2 text-adam-neutral-100' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
                   >
                     <Icon
                       className={`${isSidebarOpen ? 'mr-2' : ''} h-[22px] w-[22px] min-w-[22px]`}
@@ -279,6 +279,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                               <CreationThumbnail
                                 conversationId={conversation.id}
                                 userId={conversation.user_id}
+                                updatedAt={conversation.updated_at ?? ''}
                                 title={conversation.title}
                                 className="h-7 w-7"
                                 iconClassName="h-3.5 w-3.5"

@@ -63,10 +63,10 @@ export function RenameDialogDrawer({
         <DialogContent className="border-[2px] border-adam-neutral-700 bg-adam-background-1 sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-adam-neutral-100">
-              Rename Creation
+              Rename Generation
             </DialogTitle>
             <DialogDescription>
-              Enter a new name for this creation conversation.
+              Enter a new name for this generation.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
@@ -104,10 +104,10 @@ export function RenameDialogDrawer({
       <DrawerContent className="mx-1 border border-adam-neutral-700 bg-adam-background-1">
         <DrawerHeader className="border-b border-adam-neutral-700 text-center">
           <DrawerTitle className="text-adam-neutral-100">
-            Rename Creation
+            Rename Generation
           </DrawerTitle>
           <DrawerDescription>
-            Enter a new name for this creation conversation.
+            Enter a new name for this generation.
           </DrawerDescription>
         </DrawerHeader>
         <div className="p-4">
