@@ -80,6 +80,7 @@ assert.deepEqual(
     parametric: 25,
     parametricCadReasoning: 25,
     generatedInputImage: 22,
+    generatedInputImageNormal: 14,
     generatedInputImageLite: 7,
     multiviewFrontImage: 22,
     multiviewLiteView: 7,

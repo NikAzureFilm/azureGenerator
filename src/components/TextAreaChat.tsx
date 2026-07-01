@@ -1081,6 +1081,7 @@ function TextAreaChat({
           view: 'front',
           prompt,
           provider: getImageGenerationProvider(imageCreatorModel),
+          imageGenerationModel: imageCreatorModel,
           mode: 'input',
           ...(options?.refImageId ? { refImageId: options.refImageId } : {}),
         },

@@ -4,6 +4,7 @@ import { GoogleGenAI } from 'npm:@google/genai';
 import {
   generateImageWithGeminiFlash,
   generateImageWithGeminiFlashEdit,
+  generateImageWithGeminiMultiTurn,
   generateImageWithGptImage2,
 } from '../_shared/imageGen.ts';
 import {
@@ -22,8 +23,14 @@ import {
   RefundableTokenLedger,
   type RefundFailure,
 } from '../_shared/refundableTokenLedger.ts';
-import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
-import { getImageGenerationTokenCost } from '../../../shared/imageGeneration.ts';
+import {
+  getImageGenerationProvider,
+  getImageGenerationTokenCost,
+  getOpenAiImageGenerationQuality,
+  normalizeImageGenerationModel,
+  type ImageGenerationModel,
+  type ImageGenerationProvider,
+} from '../../../shared/imageGeneration.ts';
 import { Buffer } from 'node:buffer';
 import OpenAI from 'npm:openai@^6.34.0';
 import {
@@ -107,6 +114,7 @@ Deno.serve(async (req) => {
       refImageIds,
       refImageLabels,
       provider,
+      imageGenerationModel,
       mode = 'input',
     }: {
       prompt?: string;
@@ -115,7 +123,8 @@ Deno.serve(async (req) => {
       refImageId?: string;
       refImageIds?: string[];
       refImageLabels?: string[];
-      provider?: 'openai' | 'nano-banana';
+      provider?: ImageGenerationProvider;
+      imageGenerationModel?: ImageGenerationModel;
       mode?: ImageGenerationMode;
     } = await req.json();
 
@@ -169,7 +178,12 @@ Deno.serve(async (req) => {
       userId,
       conversationId,
     };
-    const shouldUseOpenAi = provider === 'openai';
+    const selectedImageGenerationModel = normalizeImageGenerationModel(
+      imageGenerationModel ?? provider,
+    );
+    const selectedProvider = getImageGenerationProvider(
+      selectedImageGenerationModel,
+    );
     const builtPrompt = buildImageGenerationPrompt({
       view,
       userPrompt,
@@ -177,9 +191,7 @@ Deno.serve(async (req) => {
       mode,
       referenceLabels: Array.isArray(refImageLabels) ? refImageLabels : [],
     });
-    const tokenCost = shouldUseOpenAi
-      ? FEATURE_COSTS.generatedInputImage.tokens
-      : getImageGenerationTokenCost('nano-banana-2');
+    const tokenCost = getImageGenerationTokenCost(selectedImageGenerationModel);
 
     if (!userData.user.email) {
       return new Response(
@@ -234,10 +246,23 @@ Deno.serve(async (req) => {
       view,
       hasRef: referenceIds.length > 0,
       refCount: referenceIds.length,
-      provider: shouldUseOpenAi ? 'openai' : 'nano-banana',
+      provider: selectedProvider,
+      imageGenerationModel: selectedImageGenerationModel,
       tokenCost,
       mode,
     });
+
+    const generateWithNormal = async (): Promise<Buffer> => {
+      return await generateImageWithGeminiMultiTurn(
+        serviceClient,
+        googleGenAI,
+        userId,
+        conversationId,
+        builtPrompt,
+        referenceIds,
+        imageUsageCtx,
+      );
+    };
 
     const generateWithLite = async (): Promise<Buffer> => {
       if (primaryRefImageId) {
@@ -272,9 +297,30 @@ Deno.serve(async (req) => {
       );
     };
 
+    const generateWithNormalOrLite = async (): Promise<Buffer> => {
+      try {
+        return await generateWithNormal();
+      } catch (error) {
+        logError(error, {
+          functionName: 'generate-view',
+          statusCode: 500,
+          userId,
+          conversationId,
+          additionalContext: {
+            stage: 'nano_banana_pro_fallback',
+            view,
+            refCount: referenceIds.length,
+            mode,
+          },
+        });
+        console.warn('Normal image generation failed; falling back to Lite.');
+        return await generateWithLite();
+      }
+    };
+
     let imageBytes: Buffer;
     let contentType: string | undefined;
-    if (shouldUseOpenAi) {
+    if (selectedProvider === 'openai') {
       try {
         const result = await generateImageWithGptImage2(
           serviceClient,
@@ -284,9 +330,7 @@ Deno.serve(async (req) => {
           builtPrompt,
           referenceIds,
           null,
-          // Supabase Edge Functions have a 150s idle timeout. High quality
-          // gpt-image-2 calls can exceed that for synchronous view generation.
-          'low',
+          getOpenAiImageGenerationQuality(selectedImageGenerationModel),
           imageUsageCtx,
         );
         imageBytes = result.imageBytes;
@@ -302,11 +346,16 @@ Deno.serve(async (req) => {
             view,
             refCount: referenceIds.length,
             mode,
+            imageGenerationModel: selectedImageGenerationModel,
           },
         });
-        console.warn('Premium image generation failed; falling back to Lite.');
-        imageBytes = await generateWithLite();
+        console.warn(
+          'Premium image generation failed; falling back to Normal.',
+        );
+        imageBytes = await generateWithNormalOrLite();
       }
+    } else if (selectedProvider === 'nano-banana-pro') {
+      imageBytes = await generateWithNormalOrLite();
     } else {
       imageBytes = await generateWithLite();
     }
@@ -331,7 +380,13 @@ Deno.serve(async (req) => {
       objectKey: path,
       mimeType: contentType,
       sizeBytes: getBodySizeBytes(imageBytes),
-      metadata: { source: 'generate-view', view, mode },
+      metadata: {
+        source: 'generate-view',
+        view,
+        mode,
+        provider: selectedProvider,
+        imageGenerationModel: selectedImageGenerationModel,
+      },
     });
 
     const { data: signedUploaded, error: signedUploadedError } =

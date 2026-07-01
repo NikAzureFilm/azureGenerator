@@ -50,6 +50,12 @@ export const FEATURE_COSTS = {
     tokens: 22,
     description: 'Create a reference image from a prompt with Premium.',
   },
+  generatedInputImageNormal: {
+    id: 'generated-input-image-normal',
+    label: 'Generated input image - Normal',
+    tokens: 14,
+    description: 'Create a reference image from a prompt with Normal.',
+  },
   generatedInputImageLite: {
     id: 'generated-input-image-lite',
     label: 'Generated input image - Lite',

@@ -48,9 +48,9 @@ assert.equal(
 );
 
 assert.equal(
-  /catch \(error\) \{\s+logError\(error[\s\S]+imageBytes = await generateWithLite\(\);/.test(
+  /catch \(error\) \{\s+logError\(error[\s\S]+imageBytes = await generateWithNormalOrLite\(\);/.test(
     source,
   ),
   true,
-  'generate-view should fall back to Lite for any Premium image failure',
+  'generate-view should fall back to Normal, then Lite, for any Premium image failure',
 );

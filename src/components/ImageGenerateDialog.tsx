@@ -234,7 +234,7 @@ export function ImageGenerateDialog({
           <div className="text-xs text-adam-text-secondary">
             Cost: {formatTokenCost(getImageGenerationTokenCost(model))}
           </div>
-          <div className="grid grid-cols-2 gap-1 rounded-lg bg-adam-neutral-800 p-1">
+          <div className="grid grid-cols-1 gap-1 rounded-lg bg-adam-neutral-800 p-1 sm:grid-cols-3">
             {IMAGE_GENERATION_MODELS.map((option) => {
               const selected = model === option.id;
               return (
@@ -244,7 +244,7 @@ export function ImageGenerateDialog({
                   disabled={busy}
                   onClick={() => onModelChange(option.id)}
                   className={cn(
-                    'rounded-md px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    'min-h-[5.5rem] rounded-md px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                     selected
                       ? 'bg-adam-blue text-white'
                       : 'text-adam-text-secondary hover:bg-adam-neutral-700 hover:text-adam-text-primary',
@@ -255,7 +255,15 @@ export function ImageGenerateDialog({
                   </span>
                   <span
                     className={cn(
-                      'mt-0.5 block text-[10px]',
+                      'mt-1 block text-[10px] leading-4',
+                      selected ? 'text-white/80' : 'text-adam-text-secondary',
+                    )}
+                  >
+                    {option.description}
+                  </span>
+                  <span
+                    className={cn(
+                      'mt-1 block text-[10px]',
                       selected ? 'text-white/80' : 'text-adam-text-secondary',
                     )}
                   >

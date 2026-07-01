@@ -52,6 +52,7 @@ const rows = buildFeatureCostRows(unitPrices);
 const byId = new Map(rows.map((row) => [row.id, row]));
 
 assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 1);
+assert.equal(byId.get('generatedInputImageNormal')?.suggestedTokens, 14);
 assert.equal(byId.get('multiviewFrontImage')?.suggestedTokens, 1);
 assert.equal(byId.get('generatedInputImageLite')?.suggestedTokens, 7);
 assert.equal(byId.get('fastMesh')?.suggestedTokens, 29);

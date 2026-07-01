@@ -33,6 +33,7 @@ const CONFIGURED_TOKENS = {
   parametric: 25,
   parametricCadReasoning: 25,
   generatedInputImage: 22,
+  generatedInputImageNormal: 14,
   generatedInputImageLite: 7,
   multiviewFrontImage: 22,
   multiviewLiteView: 7,
@@ -71,6 +72,16 @@ const FEATURE_BREAKDOWNS = [
       {
         name: 'Premium generated view',
         costUsd: openaiImageCostUsd('low'),
+      },
+    ],
+  },
+  {
+    id: 'generatedInputImageNormal',
+    label: 'Generated input image - Normal',
+    components: [
+      {
+        name: 'Normal generated image',
+        costUsd: geminiImageCostUsd('gemini-3-pro-image-preview'),
       },
     ],
   },

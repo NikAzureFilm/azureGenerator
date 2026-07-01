@@ -1,4 +1,5 @@
 import {
+  getImageGenerationFallbackModel,
   getImageGenerationProvider,
   type ImageGenerationModel,
   type ImageGenerationProvider,
@@ -13,6 +14,7 @@ export type GenerateViewBody = {
   refImageIds?: string[];
   refImageLabels?: string[];
   provider?: ImageGenerationProvider;
+  imageGenerationModel?: ImageGenerationModel;
 };
 
 export type GenerateViewData = {
@@ -30,12 +32,25 @@ export async function invokeGenerateViewWithFallback(
   body: Omit<GenerateViewBody, 'provider'>,
   model: ImageGenerationModel,
 ): Promise<GenerateViewInvokeResult> {
-  const provider = getImageGenerationProvider(model);
-  const firstResult = await invoke({ ...body, provider });
+  let nextModel: ImageGenerationModel | null = model;
+  let lastResult: GenerateViewInvokeResult | null = null;
 
-  if (!firstResult.error || provider !== 'openai') {
-    return firstResult;
+  while (nextModel) {
+    const provider = getImageGenerationProvider(nextModel);
+    lastResult = await invoke({
+      ...body,
+      provider,
+      imageGenerationModel: nextModel,
+    });
+
+    if (!lastResult.error) {
+      return lastResult;
+    }
+
+    nextModel = getImageGenerationFallbackModel(nextModel);
   }
 
-  return await invoke({ ...body, provider: 'nano-banana' });
+  return (
+    lastResult ?? { data: null, error: new Error('No provider attempted') }
+  );
 }

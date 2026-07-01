@@ -23,15 +23,46 @@ assert.equal(result.error, undefined);
 assert.equal(result.data.id, 'image-id');
 assert.deepEqual(
   calls.map((call) => call.provider),
-  ['openai', 'nano-banana'],
-  'Premium generation should retry with Lite after an OpenAI provider failure',
+  ['openai', 'nano-banana-pro'],
+  'Premium generation should retry with Normal after an OpenAI provider failure',
+);
+assert.deepEqual(
+  calls.map((call) => call.imageGenerationModel),
+  ['gpt-image-2', 'nano-banana-pro'],
+  'generate-view should receive the selected image generation model id',
+);
+
+const normalCalls = [];
+const normalResult = await invokeGenerateViewWithFallback(
+  async (body) => {
+    normalCalls.push(body);
+    return {
+      data: { id: 'normal-image-id', url: 'https://example.test/normal.jpg' },
+    };
+  },
+  {
+    conversationId: 'conversation-id',
+    view: 'front',
+    prompt: 'simple centered cylinder',
+    mode: 'input',
+  },
+  'nano-banana-pro',
+);
+
+assert.equal(normalResult.data.id, 'normal-image-id');
+assert.deepEqual(
+  normalCalls.map((call) => call.provider),
+  ['nano-banana-pro'],
+  'Normal generation should route directly to the Normal provider',
 );
 
 const liteCalls = [];
 const liteResult = await invokeGenerateViewWithFallback(
   async (body) => {
     liteCalls.push(body);
-    return { data: { id: 'lite-image-id', url: 'https://example.test/lite.jpg' } };
+    return {
+      data: { id: 'lite-image-id', url: 'https://example.test/lite.jpg' },
+    };
   },
   {
     conversationId: 'conversation-id',
