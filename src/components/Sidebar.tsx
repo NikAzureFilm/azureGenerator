@@ -237,7 +237,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                       isSidebarOpen ? 'adam_dark' : 'adam_dark_collapsed'
                     }
                     onClick={() => sidebarNavigate(href)}
-                    className={`${isSidebarOpen ? 'w-full justify-start border border-adam-neutral-700 bg-adam-background-2 text-adam-neutral-100' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
+                    className={`${isSidebarOpen ? 'ml-[9px] w-[216px] justify-start border border-adam-neutral-700 bg-adam-background-2 text-adam-neutral-100' : 'ml-[1px] h-[46px] w-[46px] p-0'}`}
                   >
                     <Icon
                       className={`${isSidebarOpen ? 'mr-2' : ''} h-[22px] w-[22px] min-w-[22px]`}
