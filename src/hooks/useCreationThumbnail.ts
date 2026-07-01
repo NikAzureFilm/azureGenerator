@@ -4,6 +4,11 @@ import { MeshFileType } from '@shared/types';
 import { compileScadToStl } from '@/utils/compileScadToStl';
 import { downscaleImage } from '@/utils/downscaleImage';
 import { getCachedThumbnail, setCachedThumbnail } from '@/utils/thumbnailCache';
+import {
+  fetchStoredThumbnail,
+  storeThumbnail,
+  thumbnailObjectKey,
+} from '@/utils/thumbnailBucket';
 
 // Throttle heavy thumbnail generation. Mounting many cards at once (the
 // sidebar list + the history list view) would otherwise spin up a dozen
@@ -72,29 +77,38 @@ async function findThumbnailSource(
   return null;
 }
 
-async function renderThumbnail(
-  source: Exclude<ThumbnailSource, null>,
+// Compile a parametric artifact to an STL and render a compressed preview.
+// Parametric creations have no Storage egress (the code is already in the
+// message query), so these are not materialized to the thumbnails bucket.
+async function renderScadThumbnail(code: string): Promise<string> {
+  return withThumbnailSlot(async () => {
+    const stl = await compileScadToStl(code);
+    const { generatePreview } = await import('@/utils/meshUtils');
+    const full = await generatePreview(stl, 'stl');
+    return downscaleImage(full);
+  });
+}
+
+// Download the full mesh and render a compressed preview. This is the
+// expensive path (multi-MB download) we avoid via the thumbnails bucket on all
+// but the first view of a given mesh.
+async function renderMeshThumbnail(
+  meshId: string,
+  fileType: MeshFileType,
   userId: string,
   conversationId: string,
 ): Promise<string> {
   return withThumbnailSlot(async () => {
-    const { generatePreview } = await import('@/utils/meshUtils');
-
-    if (source.kind === 'scad') {
-      const stl = await compileScadToStl(source.code);
-      const full = await generatePreview(stl, 'stl');
-      return downscaleImage(full);
-    }
-
     const { data: blob, error } = await supabase.storage
       .from('meshes')
-      .download(`${userId}/${conversationId}/${source.id}.${source.fileType}`);
+      .download(`${userId}/${conversationId}/${meshId}.${fileType}`);
 
     if (error || !blob) {
       throw error ?? new Error('Mesh file not available');
     }
 
-    const full = await generatePreview(blob, source.fileType);
+    const { generatePreview } = await import('@/utils/meshUtils');
+    const full = await generatePreview(blob, fileType);
     return downscaleImage(full);
   });
 }
@@ -104,14 +118,17 @@ async function renderThumbnail(
  * creation. Parametric artifacts take precedence, falling back to the latest
  * mesh.
  *
- * Caching strategy (important for backend cost at scale):
- *  - Results are persisted in IndexedDB keyed by conversation + updated_at, so
- *    repeat visits do no message query, no storage download, and no render.
- *  - React Query keeps the result in memory for the session (staleTime
- *    Infinity), and dedupes when the same conversation appears in both the
- *    sidebar and the list view.
- *  - The rendered image is downscaled/compressed before caching so it stays a
- *    few KB rather than a multi-MB PNG.
+ * Caching strategy (important for backend cost at scale), fastest tier first:
+ *  1. IndexedDB (per device) keyed by conversation + updated_at — repeat visits
+ *     do no backend calls at all.
+ *  2. The "thumbnails" storage bucket (cross-device) — for meshes, fetch a
+ *     ~5KB WebP instead of re-downloading the multi-MB mesh. The first viewer
+ *     of a mesh renders it and uploads it here for everyone after.
+ *  3. Render from source — download the mesh (or compile the SCAD) and render,
+ *     then downscale/compress so the cached image stays a few KB.
+ *
+ * React Query keeps the result in memory for the session (staleTime Infinity)
+ * and dedupes when the same conversation appears in both the sidebar and list.
  */
 export function useCreationThumbnail({
   conversationId,
@@ -131,19 +148,35 @@ export function useCreationThumbnail({
     gcTime: 1000 * 60 * 30,
     retry: false,
     queryFn: async (): Promise<string | null> => {
-      // 1. Persistent cache hit — no backend calls, no render.
+      // Tier 1: per-device IndexedDB — no backend calls, no render.
       const cached = await getCachedThumbnail(conversationId);
       if (cached && cached.updatedAt === updatedAt) {
         return cached.dataUrl;
       }
 
-      // 2. Find the latest renderable creation, render + compress it.
       const source = await findThumbnailSource(conversationId);
-      const dataUrl = source
-        ? await renderThumbnail(source, userId, conversationId)
-        : null;
+      let dataUrl: string | null = null;
 
-      // 3. Persist (including the "nothing to render" result) for next time.
+      if (source?.kind === 'mesh') {
+        // Tier 2: cross-device thumbnails bucket (~5KB) before the mesh.
+        const objectKey = thumbnailObjectKey(userId, conversationId, source.id);
+        dataUrl = await fetchStoredThumbnail(objectKey);
+
+        if (!dataUrl) {
+          // Tier 3: render from the mesh, then materialize for next time.
+          dataUrl = await renderMeshThumbnail(
+            source.id,
+            source.fileType,
+            userId,
+            conversationId,
+          );
+          void storeThumbnail(objectKey, dataUrl);
+        }
+      } else if (source?.kind === 'scad') {
+        dataUrl = await renderScadThumbnail(source.code);
+      }
+
+      // Persist (including the "nothing to render" null) for next time.
       await setCachedThumbnail(conversationId, { updatedAt, dataUrl });
       return dataUrl;
     },
