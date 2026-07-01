@@ -45,6 +45,7 @@ import { Conversation, ConversationSettings } from '@shared/types';
 import { UserAvatar } from '@/components/chat/UserAvatar';
 import { useProfile } from '@/services/profileService';
 import { getActiveSidebarConversationId } from '@/utils/sidebarActiveConversation';
+import { CreationThumbnail } from '@/components/history/CreationThumbnail';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -265,7 +266,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                                 isActiveConversation ? 'page' : undefined
                               }
                               className={cn(
-                                'block rounded-md border border-transparent p-1 text-xs font-medium text-adam-neutral-400 transition-colors duration-200 ease-in-out [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10',
+                                'flex items-center gap-2 rounded-md border border-transparent p-1 text-xs font-medium text-adam-neutral-400 transition-colors duration-200 ease-in-out [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10',
                                 isActiveConversation &&
                                   'border-adam-blue/70 bg-adam-blue/20 text-adam-neutral-10 shadow-[0_0_0_1px_rgba(15,95,244,0.25)] [@media(hover:hover)]:hover:bg-adam-blue/25 [@media(hover:hover)]:hover:text-adam-neutral-10',
                               )}
@@ -275,6 +276,13 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                                 }
                               }}
                             >
+                              <CreationThumbnail
+                                conversationId={conversation.id}
+                                userId={conversation.user_id}
+                                title={conversation.title}
+                                className="h-7 w-7"
+                                iconClassName="h-3.5 w-3.5"
+                              />
                               <span className="block truncate">
                                 {conversation.title}
                               </span>

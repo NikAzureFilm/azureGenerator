@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/tooltip';
 import { Link } from '@tanstack/react-router';
 import { GoodEarth } from '../icons/ui/GoodEarth';
+import { CreationThumbnail } from './CreationThumbnail';
 
 interface ConversationCardProps {
   conversation: HistoryConversation;
@@ -58,13 +59,20 @@ export function ConversationCard({
       <Link to="/editor/$id" params={{ id: conversation.id }}>
         <Button
           variant="outline"
-          className="flex h-auto w-full items-start justify-between rounded-xl border-[0px] bg-adam-background-2 transition-colors duration-200 ease-out hover:bg-adam-neutral-950"
+          className="flex h-auto w-full items-center justify-start gap-3 rounded-xl border-[0px] bg-adam-background-2 pr-12 transition-colors duration-200 ease-out hover:bg-adam-neutral-950"
           onClick={(event) => {
             if (isEditing) {
               event.stopPropagation();
             }
           }}
         >
+          <CreationThumbnail
+            conversationId={conversation.id}
+            userId={conversation.user_id}
+            title={conversation.title}
+            className="h-14 w-14"
+            iconClassName="h-5 w-5"
+          />
           <div className="min-w-0 flex-1 space-y-2 p-1 text-left">
             <div className="flex items-center gap-3">
               <h3 className="line-clamp-1 text-wrap break-all text-base font-medium text-adam-neutral-50">
