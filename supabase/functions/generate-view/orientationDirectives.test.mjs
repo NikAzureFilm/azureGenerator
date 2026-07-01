@@ -6,6 +6,9 @@ import {
 } from '../_shared/viewPrompt.ts';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+const tokenConsumeBlock = source.match(
+  /tokenLedger\.consume\(userData\.user\.email,\s*\{([\s\S]*?)\}\);/,
+)?.[1];
 
 assert.equal(
   source.includes('refImageLabels'),
@@ -53,4 +56,27 @@ assert.equal(
   ),
   true,
   'generate-view should fall back to Normal, then Lite, for any Premium image failure',
+);
+
+assert.ok(
+  tokenConsumeBlock,
+  'generate-view should charge customer tokens before generating the view image',
+);
+
+assert.match(
+  tokenConsumeBlock,
+  /operation:\s*'chat'/,
+  'generated view images should use a valid customer token ledger operation',
+);
+
+assert.doesNotMatch(
+  tokenConsumeBlock,
+  /operation:\s*'image'/,
+  'generated view images should not send unsupported image operations to the customer token ledger',
+);
+
+assert.match(
+  tokenConsumeBlock,
+  /referenceId:\s*imageId/,
+  'generated view image token charges should still reference the generated image id',
 );

@@ -208,7 +208,7 @@ Deno.serve(async (req) => {
     try {
       const consumeResult = await tokenLedger.consume(userData.user.email, {
         tokens: tokenCost,
-        operation: 'image',
+        operation: 'chat',
         referenceId: imageId,
         userId,
       });
