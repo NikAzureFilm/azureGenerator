@@ -417,10 +417,10 @@ export function VisualCard({
           <AlertDialogContent className="border-[2px] border-adam-neutral-700 bg-adam-background-1">
             <AlertDialogHeader>
               <AlertDialogTitle className="text-adam-neutral-100">
-                Delete Creation
+                Delete Generation
               </AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete this creation? This action
+                Are you sure you want to delete this generation? This action
                 cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>

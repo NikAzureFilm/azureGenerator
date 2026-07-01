@@ -64,7 +64,7 @@ export function CreationThumbnail({
       {thumbnail ? (
         <img
           src={thumbnail}
-          alt={title ? `Preview of ${title}` : 'Creation preview'}
+          alt={title ? `Preview of ${title}` : 'Generation preview'}
           className="h-full w-full object-cover"
         />
       ) : isVisible && isLoading ? (

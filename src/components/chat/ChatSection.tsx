@@ -276,7 +276,7 @@ export function ChatSection({
               onClick={() => {
                 navigate({ to: '/' });
               }}
-              aria-label="New Creation"
+              aria-label="New Generation"
             >
               <CreateIcon className="h-5 w-5 text-adam-text-primary" />
             </Button>
