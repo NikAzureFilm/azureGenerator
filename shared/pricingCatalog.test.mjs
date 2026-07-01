@@ -126,3 +126,4 @@ assert.equal(
 );
 
 assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);
+assert.equal(pricingViewSource.includes('FEATURE_COSTS.upscaleMesh'), false);
