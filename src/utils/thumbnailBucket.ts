@@ -39,18 +39,26 @@ export async function fetchStoredThumbnail(
   }
 }
 
+// Keys uploaded successfully this session, so repeated views (chat + history,
+// scrolling, remounts) don't re-PUT the same object.
+const uploadedKeys = new Set<string>();
+
 /** Uploads a rendered thumbnail. Non-fatal: swallows all errors. */
 export async function storeThumbnail(
   objectKey: string,
   dataUrl: string,
 ): Promise<void> {
+  if (uploadedKeys.has(objectKey)) return;
   try {
     const blob = await (await fetch(dataUrl)).blob();
-    await supabase.storage.from(BUCKET).upload(objectKey, blob, {
-      contentType: 'image/webp',
-      cacheControl: '31536000',
-      upsert: true,
-    });
+    const { error } = await supabase.storage
+      .from(BUCKET)
+      .upload(objectKey, blob, {
+        contentType: 'image/webp',
+        cacheControl: '31536000',
+        upsert: true,
+      });
+    if (!error) uploadedKeys.add(objectKey);
   } catch {
     // Bucket missing / RLS / offline — the in-memory + IndexedDB caches still
     // cover this session, and a later client will materialize it.

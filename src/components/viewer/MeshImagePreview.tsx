@@ -1,13 +1,18 @@
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Box, Frown, HeartCrack, Loader2 } from 'lucide-react';
 
 import { useMeshData } from '@/hooks/useMeshData';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useConversation } from '@/contexts/ConversationContext';
 import { CreativeLoadingBar } from './CreativeLoadingBar';
 import { CreativeModel } from '@shared/types';
+import { downscaleImage } from '@/utils/downscaleImage';
+import { storeThumbnail, thumbnailObjectKey } from '@/utils/thumbnailBucket';
 
 export function MeshImagePreview({ meshId }: { meshId: string }) {
   const isMobile = useIsMobile();
+  const { conversation } = useConversation();
 
   const {
     data: { data: meshData, isLoading: isMeshDataLoading },
@@ -30,6 +35,31 @@ export function MeshImagePreview({ meshId }: { meshId: string }) {
     },
     staleTime: Infinity,
   });
+
+  // Materialize the history/sidebar thumbnail here, at generation/view time,
+  // reusing the preview we already rendered. This means the first time the
+  // creation appears in history the ~5KB WebP is already in the thumbnails
+  // bucket, so history never has to download the full mesh. Fire-and-forget
+  // and deduped per object key; degrades silently if the bucket is missing.
+  useEffect(() => {
+    if (!meshPreview || !conversation?.user_id || !conversation?.id) return;
+
+    let cancelled = false;
+    const objectKey = thumbnailObjectKey(
+      conversation.user_id,
+      conversation.id,
+      meshId,
+    );
+
+    (async () => {
+      const small = await downscaleImage(meshPreview);
+      if (!cancelled) void storeThumbnail(objectKey, small);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [meshPreview, conversation?.user_id, conversation?.id, meshId]);
 
   if (meshData && meshData.status === 'pending' && isMobile) {
     return (
