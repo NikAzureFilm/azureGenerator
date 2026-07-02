@@ -1309,7 +1309,7 @@ function TextAreaChat({
         open={isImageCreatorOpen}
         onOpenChange={setIsImageCreatorOpen}
         title="Create input image"
-        description="The Object Agent creates a clean 3D object reference from your current brief and optional image."
+        description="Create a clean 3D object reference from your current brief and optional image."
         references={
           imageCreatorRef
             ? [

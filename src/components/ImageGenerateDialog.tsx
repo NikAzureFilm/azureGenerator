@@ -1,12 +1,5 @@
-import { ChangeEvent, useRef, useState } from 'react';
-import {
-  Bot,
-  ChevronDown,
-  ImagePlus,
-  Loader2,
-  Sparkles,
-  X,
-} from 'lucide-react';
+import { ChangeEvent, useRef } from 'react';
+import { ImagePlus, Loader2, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -18,11 +11,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 import {
   getImageGenerationTokenCost,
   IMAGE_GENERATION_MODELS,
@@ -84,10 +72,8 @@ export function ImageGenerateDialog({
   maxReferences,
 }: ImageGenerateDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isBriefOpen, setIsBriefOpen] = useState(false);
   const busy = isGenerating || isUploadingReference;
   const canAddMore = maxReferences == null || references.length < maxReferences;
-  const hasBrief = prompt.trim().length > 0;
 
   const handleFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -124,28 +110,6 @@ export function ImageGenerateDialog({
             className="hidden"
             onChange={handleFileSelected}
           />
-          <div className="rounded-lg border border-adam-blue/25 bg-adam-blue/10 p-3">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-adam-blue/20 text-adam-blue">
-                <Bot className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <p className="text-sm font-medium text-adam-text-primary">
-                    3D Object Agent
-                  </p>
-                  <span className="rounded-md bg-adam-neutral-900 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-adam-blue">
-                    locked
-                  </span>
-                </div>
-                <p className="mt-1 text-xs leading-5 text-adam-text-secondary">
-                  Every generated image is constrained to one centered,
-                  fully-rendered 3D object asset with studio lighting, no text,
-                  no scene, and no flat illustration.
-                </p>
-              </div>
-            </div>
-          </div>
           <div className="flex flex-wrap gap-2">
             {references.map((ref) => {
               const removable = ref.removable !== false;
@@ -195,42 +159,19 @@ export function ImageGenerateDialog({
               </button>
             ) : null}
           </div>
-          <Collapsible open={isBriefOpen} onOpenChange={setIsBriefOpen}>
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border border-adam-neutral-700 bg-adam-background-2 px-3 py-2 text-left text-xs text-adam-text-secondary transition-colors hover:bg-adam-bg-secondary-dark"
-              >
-                <span>
-                  {hasBrief ? 'Object brief is set' : 'Optional object brief'}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-4 w-4 transition-transform',
-                    isBriefOpen && 'rotate-180',
-                  )}
-                />
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-2">
-              <Textarea
-                value={prompt}
-                onChange={(event) => onPromptChange(event.target.value)}
-                placeholder={promptPlaceholder}
-                className="min-h-28 resize-none border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary placeholder:text-adam-text-secondary/70"
-                disabled={isGenerating}
-                onKeyDown={(event) => {
-                  if (
-                    (event.metaKey || event.ctrlKey) &&
-                    event.key === 'Enter'
-                  ) {
-                    event.preventDefault();
-                    onGenerate();
-                  }
-                }}
-              />
-            </CollapsibleContent>
-          </Collapsible>
+          <Textarea
+            value={prompt}
+            onChange={(event) => onPromptChange(event.target.value)}
+            placeholder={promptPlaceholder}
+            className="min-h-28 resize-none border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary placeholder:text-adam-text-secondary/70"
+            disabled={isGenerating}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                event.preventDefault();
+                onGenerate();
+              }
+            }}
+          />
           <div className="text-xs text-adam-text-secondary">
             Cost: {formatTokenCost(getImageGenerationTokenCost(model))}
           </div>

@@ -48,6 +48,7 @@ import {
   hasMultiviewSlotPreview,
   markMultiviewSlotBusy,
   markMultiviewStagesQueued,
+  MULTIVIEW_SLOT_ORDER,
   restoreMultiviewSlotAfterFailure,
 } from '@/utils/multiviewReference';
 import { invokeGenerateViewWithFallback } from '@/utils/generateViewWithFallback';
@@ -57,8 +58,6 @@ import {
   formatUploadSize,
   getUploadSizeLimitBytes,
 } from '@/utils/uploadLimits';
-
-const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
 
 const SLOT_LABEL: Record<MultiviewSlot, string> = {
   front: 'Front',
@@ -517,7 +516,7 @@ export function MultiviewComposer({
   const handleGenerateAll = useCallback(async () => {
     if (isPipelineRunning) return;
     const currentSlots = slotsRef.current;
-    if (SLOT_ORDER.some((slot) => currentSlots[slot]?.isBusy)) return;
+    if (MULTIVIEW_SLOT_ORDER.some((slot) => currentSlots[slot]?.isBusy)) return;
     const stages = buildMultiviewGenerationStages(currentSlots);
     if (stages.length === 0) return;
 
@@ -538,7 +537,7 @@ export function MultiviewComposer({
     );
     try {
       const completed: Partial<Record<MultiviewSlot, string>> = {};
-      for (const slot of SLOT_ORDER) {
+      for (const slot of MULTIVIEW_SLOT_ORDER) {
         const state = currentSlots[slot];
         if (state?.id && !state.isBusy) completed[slot] = state.id;
       }
@@ -626,7 +625,9 @@ export function MultiviewComposer({
   );
 
   const handleDownloadAll = useCallback(async () => {
-    const filledSlots = SLOT_ORDER.filter((slot) => !!slots[slot]?.url);
+    const filledSlots = MULTIVIEW_SLOT_ORDER.filter(
+      (slot) => !!slots[slot]?.url,
+    );
     if (filledSlots.length === 0) return;
 
     try {
@@ -651,10 +652,10 @@ export function MultiviewComposer({
   const stagedSlots = buildMultiviewGenerationStages(slots).flat();
   const generateAllCost =
     stagedSlots.length * getImageGenerationTokenCost(imageGenerationModel);
-  const readyCount = SLOT_ORDER.filter(
+  const readyCount = MULTIVIEW_SLOT_ORDER.filter(
     (slot) => !!slots[slot]?.id && !slots[slot]?.isBusy,
   ).length;
-  const anySlotActive = SLOT_ORDER.some(
+  const anySlotActive = MULTIVIEW_SLOT_ORDER.some(
     (slot) => slots[slot]?.isBusy || slots[slot]?.isQueued,
   );
 
@@ -694,7 +695,7 @@ export function MultiviewComposer({
         )}
       </div>
       <div className="grid grid-cols-4 gap-1.5">
-        {SLOT_ORDER.map((slot) => (
+        {MULTIVIEW_SLOT_ORDER.map((slot) => (
           <MultiviewSlotCard
             key={slot}
             slot={slot}
@@ -717,9 +718,11 @@ export function MultiviewComposer({
           title={`Generate ${SLOT_LABEL[dialogState.targetSlot]} view`}
           description={
             dialogState.targetSlot === 'front' &&
-            SLOT_ORDER.some((slot) => slot !== 'front' && !!slots[slot]?.id)
+            MULTIVIEW_SLOT_ORDER.some(
+              (slot) => slot !== 'front' && !!slots[slot]?.id,
+            )
               ? 'The other views were generated from the current Front. A new Front may mismatch them — consider regenerating the other views afterwards.'
-              : 'The Object Agent keeps this angle matched to the same centered 3D object. Chain references (Front, then Back for the sides) are pre-selected. Generation continues in the slot after this dialog closes.'
+              : 'This angle stays matched to the same centered 3D object. Chain references (Front, then Back for the sides) are pre-selected. Generation continues in the slot after this dialog closes.'
           }
           references={dialogState.references}
           onAddReferenceFile={handleAddDialogReference}
@@ -1001,7 +1004,7 @@ export function slotsToMultiviewImages(
   slots: MultiviewSlotMap,
 ): MultiviewImages {
   const out: MultiviewImages = {};
-  for (const slot of SLOT_ORDER) {
+  for (const slot of MULTIVIEW_SLOT_ORDER) {
     const s = slots[slot];
     if (s?.id && !s.isBusy) out[slot] = s.id;
   }
@@ -1009,7 +1012,7 @@ export function slotsToMultiviewImages(
 }
 
 export function hasAnyMultiviewSlot(slots: MultiviewSlotMap): boolean {
-  return SLOT_ORDER.some((s) => !!slots[s]?.id);
+  return MULTIVIEW_SLOT_ORDER.some((s) => !!slots[s]?.id);
 }
 
 export function hasFrontMultiviewSlot(slots: MultiviewSlotMap): boolean {
@@ -1019,5 +1022,7 @@ export function hasFrontMultiviewSlot(slots: MultiviewSlotMap): boolean {
 export function anyMultiviewBusy(slots: MultiviewSlotMap): boolean {
   // Queued slots count as busy: submit stays locked until the Generate-all
   // pipeline finishes or aborts.
-  return SLOT_ORDER.some((s) => !!slots[s]?.isBusy || !!slots[s]?.isQueued);
+  return MULTIVIEW_SLOT_ORDER.some(
+    (s) => !!slots[s]?.isBusy || !!slots[s]?.isQueued,
+  );
 }

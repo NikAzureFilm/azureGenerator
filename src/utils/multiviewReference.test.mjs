@@ -14,12 +14,13 @@ assert.deepEqual(
   getMultiviewImageEntries({
     right: 'right-image-id',
     front: 'front-image-id',
-    left: '',
+    left: 'left-image-id',
     back: 'back-image-id',
   }),
   [
     { slot: 'front', id: 'front-image-id' },
     { slot: 'back', id: 'back-image-id' },
+    { slot: 'left', id: 'left-image-id' },
     { slot: 'right', id: 'right-image-id' },
   ],
   'multiview image entries should be returned in fixed slot order and skip empty IDs',
@@ -133,6 +134,7 @@ assert.deepEqual(
       id: 'front-image-id',
       url: 'https://example.com/front.png',
       isBusy: true,
+      isQueued: false,
       kind: 'upload',
     },
   },
@@ -148,6 +150,7 @@ assert.deepEqual(
   {
     left: {
       isBusy: true,
+      isQueued: false,
       kind: 'generated',
     },
   },

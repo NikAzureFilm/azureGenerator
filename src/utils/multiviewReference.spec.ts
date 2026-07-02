@@ -68,6 +68,26 @@ describe('getMultiviewGenerationReferenceIds', () => {
   });
 });
 
+describe('getMultiviewImageEntries', () => {
+  it('returns entries in the interface slot order', async () => {
+    const { getMultiviewImageEntries } = await import('./multiviewReference');
+
+    expect(
+      getMultiviewImageEntries({
+        left: 'left-id',
+        right: 'right-id',
+        back: 'back-id',
+        front: 'front-id',
+      }),
+    ).toEqual([
+      { slot: 'front', id: 'front-id' },
+      { slot: 'back', id: 'back-id' },
+      { slot: 'left', id: 'left-id' },
+      { slot: 'right', id: 'right-id' },
+    ]);
+  });
+});
+
 describe('buildMultiviewGenerationStages', () => {
   it('stages front, then back, then both sides for an empty board', () => {
     expect(buildMultiviewGenerationStages({})).toEqual([

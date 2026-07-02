@@ -8,7 +8,7 @@ export function normalizeCreativeModel(model: unknown): CreativeModel {
   return model === 'multiview' ? 'multiview' : DEFAULT_CREATIVE_MODEL;
 }
 
-export type MultiviewSlot = 'front' | 'left' | 'back' | 'right';
+export type MultiviewSlot = 'front' | 'back' | 'left' | 'right';
 
 export type MultiviewImages = Partial<Record<MultiviewSlot, string>>;
 
@@ -104,7 +104,7 @@ export type Content = {
   polygonCount?: number;
   // File format preference for quad topology models
   preferredFormat?: 'glb' | 'fbx';
-  // 4-slot labeled images for the 'multiview' model (front/left/back/right)
+  // 4-slot labeled images for the 'multiview' model (front/back/left/right)
   multiviewImages?: MultiviewImages;
   // Optional semantic material classes/triangle ids used by 3MF export.
   semanticMaterialMap?: SemanticMaterialMap;

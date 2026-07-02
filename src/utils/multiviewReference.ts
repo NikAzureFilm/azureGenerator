@@ -12,7 +12,12 @@ export type MultiviewReferenceSlotMap = Partial<
   Record<MultiviewSlot, MultiviewReferenceSlotState>
 >;
 
-const SLOT_ORDER: MultiviewSlot[] = ['front', 'left', 'back', 'right'];
+export const MULTIVIEW_SLOT_ORDER: MultiviewSlot[] = [
+  'front',
+  'back',
+  'left',
+  'right',
+];
 
 const VIEW_GENERATION_PROMPT: Record<MultiviewSlot, string> = {
   front: 'Generate a front view of this 3D object.',
@@ -88,7 +93,7 @@ export function clearQueuedMultiviewSlots(
   slots: MultiviewReferenceSlotMap,
 ): MultiviewReferenceSlotMap {
   const next: MultiviewReferenceSlotMap = { ...slots };
-  for (const slot of SLOT_ORDER) {
+  for (const slot of MULTIVIEW_SLOT_ORDER) {
     const state = next[slot];
     if (!state?.isQueued) continue;
     if (state.id || state.url || state.isBusy) {
@@ -105,7 +110,7 @@ export function getMultiviewImageEntries(
 ): Array<{ slot: MultiviewSlot; id: string }> {
   if (!multiviewImages) return [];
 
-  return SLOT_ORDER.flatMap((slot) => {
+  return MULTIVIEW_SLOT_ORDER.flatMap((slot) => {
     const id = multiviewImages[slot];
     return typeof id === 'string' && id.length > 0 ? [{ slot, id }] : [];
   });
@@ -134,7 +139,7 @@ export function multiviewSlotMapsMatchPreviews(
   left: MultiviewReferenceSlotMap,
   right: MultiviewReferenceSlotMap,
 ): boolean {
-  return SLOT_ORDER.every((slot) => {
+  return MULTIVIEW_SLOT_ORDER.every((slot) => {
     const leftSlot = left[slot];
     const rightSlot = right[slot];
 
@@ -215,7 +220,7 @@ export function getMultiviewGenerationReference({
   slots: MultiviewReferenceSlotMap;
   sourceReferenceId?: string;
 }): string | undefined {
-  const firstFilledSlot = SLOT_ORDER.find((slot) => {
+  const firstFilledSlot = MULTIVIEW_SLOT_ORDER.find((slot) => {
     const state = slots[slot];
     return !!state?.id && !state.isBusy;
   });
