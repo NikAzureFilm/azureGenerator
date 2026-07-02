@@ -82,6 +82,7 @@ assert.deepEqual(
     generatedInputImage: 22,
     generatedInputImageNormal: 14,
     generatedInputImageLite: 7,
+    generatedInputImageNanoLite: 4,
     multiviewFrontImage: 22,
     multiviewLiteView: 7,
     fastMesh: 41,

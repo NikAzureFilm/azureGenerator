@@ -2,6 +2,7 @@ const PARAMETRIC_GENERATION_TOKENS = 25;
 const PREMIUM_IMAGE_TOKENS = 22;
 const NORMAL_IMAGE_TOKENS = 14;
 const LITE_IMAGE_TOKENS = 7;
+const NANO_LITE_IMAGE_TOKENS = 4;
 
 type MetadataLike = Record<string, unknown> | null | undefined;
 
@@ -31,6 +32,9 @@ function imageTokensForModel(model: unknown): number | null {
     case 'nano-banana-pro':
     case 'normal':
       return NORMAL_IMAGE_TOKENS;
+    case 'nano-banana-2-lite':
+    case 'nano-banana-lite':
+      return NANO_LITE_IMAGE_TOKENS;
     case 'nano-banana-2':
     case 'nano-banana':
       return LITE_IMAGE_TOKENS;

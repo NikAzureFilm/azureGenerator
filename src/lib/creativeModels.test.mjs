@@ -113,7 +113,11 @@ assert.equal(
   true,
 );
 assert.equal(
-  generateViewFunctionSource.includes('falling back to Normal'),
+  generateViewFunctionSource.includes('falling back to Nano Banana 2'),
+  true,
+);
+assert.equal(
+  generateViewFunctionSource.includes('GEMINI_FLASH_LITE_IMAGE_MODEL'),
   true,
 );
 assert.equal(

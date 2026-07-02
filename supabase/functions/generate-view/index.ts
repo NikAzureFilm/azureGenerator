@@ -2,6 +2,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { GoogleGenAI } from 'npm:@google/genai';
 import {
+  GEMINI_FLASH_LITE_IMAGE_MODEL,
   generateImageWithGeminiFlash,
   generateImageWithGeminiFlashEdit,
   generateImageWithGeminiMultiTurn,
@@ -266,7 +267,9 @@ Deno.serve(async (req) => {
       );
     };
 
-    const generateWithLite = async (): Promise<Buffer> => {
+    // Shared Gemini Flash path; the model decides the tier — Nano Banana 2
+    // by default, Nano Banana 2 Lite when the lite model id is passed.
+    const generateWithFlash = async (flashModel?: string): Promise<Buffer> => {
       if (primaryRefImageId) {
         const refPaths = referenceIds.map(
           (refId) => `${userId}/${conversationId}/${refId}`,
@@ -289,6 +292,7 @@ Deno.serve(async (req) => {
           builtPrompt,
           signedRefUrls,
           imageUsageCtx,
+          flashModel,
         );
       }
 
@@ -296,9 +300,38 @@ Deno.serve(async (req) => {
         googleGenAI,
         builtPrompt,
         imageUsageCtx,
+        flashModel,
       );
     };
 
+    const generateWithNanoBanana2 = () => generateWithFlash();
+    const generateWithNanoLite = () =>
+      generateWithFlash(GEMINI_FLASH_LITE_IMAGE_MODEL);
+
+    const generateWithNanoBanana2OrLite = async (): Promise<Buffer> => {
+      try {
+        return await generateWithNanoBanana2();
+      } catch (error) {
+        logError(error, {
+          functionName: 'generate-view',
+          statusCode: 500,
+          userId,
+          conversationId,
+          additionalContext: {
+            stage: 'nano_banana_2_fallback',
+            view,
+            refCount: referenceIds.length,
+            mode,
+          },
+        });
+        console.warn(
+          'Nano Banana 2 image generation failed; falling back to Nano Banana 2 Lite.',
+        );
+        return await generateWithNanoLite();
+      }
+    };
+
+    // Legacy Normal tier requests (nano-banana-pro) keep their own chain.
     const generateWithNormalOrLite = async (): Promise<Buffer> => {
       try {
         return await generateWithNormal();
@@ -315,8 +348,10 @@ Deno.serve(async (req) => {
             mode,
           },
         });
-        console.warn('Normal image generation failed; falling back to Lite.');
-        return await generateWithLite();
+        console.warn(
+          'Normal image generation failed; falling back to Nano Banana 2.',
+        );
+        return await generateWithNanoBanana2OrLite();
       }
     };
 
@@ -354,14 +389,16 @@ Deno.serve(async (req) => {
           },
         });
         console.warn(
-          'Premium image generation failed; falling back to Normal.',
+          'Image Gen 2 generation failed; falling back to Nano Banana 2.',
         );
-        imageBytes = await generateWithNormalOrLite();
+        imageBytes = await generateWithNanoBanana2OrLite();
       }
     } else if (selectedProvider === 'nano-banana-pro') {
       imageBytes = await generateWithNormalOrLite();
+    } else if (selectedProvider === 'nano-banana-lite') {
+      imageBytes = await generateWithNanoLite();
     } else {
-      imageBytes = await generateWithLite();
+      imageBytes = await generateWithNanoBanana2OrLite();
     }
 
     const path = `${userId}/${conversationId}/${imageId}`;

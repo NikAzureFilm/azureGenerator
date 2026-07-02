@@ -37,10 +37,13 @@ assert.equal(openaiImageCostUsd('high', 2), 0.422);
 assert.deepEqual(GEMINI_IMAGE_PRICES, {
   'gemini-3.1-flash-image-preview': 0.067,
   'gemini-3.1-flash-image': 0.067,
+  'gemini-3.1-flash-lite-image-preview': 0.0336,
+  'gemini-3.1-flash-lite-image': 0.0336,
   'gemini-3-pro-image-preview': 0.134,
   'gemini-3-pro-image': 0.134,
 });
 assert.equal(geminiImageCostUsd('gemini-3.1-flash-image-preview'), 0.067);
+assert.equal(geminiImageCostUsd('gemini-3.1-flash-lite-image'), 0.0336);
 assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview'), 0.134);
 assert.equal(geminiImageCostUsd('gemini-3-pro-image-preview', 2), 0.268);
 assert.equal(geminiImageCostUsd('unknown-google-image-model'), 0.067);
