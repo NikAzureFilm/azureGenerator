@@ -2,7 +2,7 @@
  * Utility functions for handling files
  */
 
-import { Message } from '@shared/types';
+import type { Message } from '@shared/types';
 
 /**
  * Creates a safe filename from a given string by removing/replacing invalid characters
@@ -99,7 +99,13 @@ export function isMeaningfulTitle(title?: string): boolean {
   if (!title?.trim()) return false;
 
   const trimmed = title.trim();
-  const defaultTitles = ['Chat', 'New Chat', 'Untitled', 'Conversation'];
+  const defaultTitles = [
+    'Chat',
+    'New Chat',
+    'New Conversation',
+    'Untitled',
+    'Conversation',
+  ];
 
   return !defaultTitles.includes(trimmed);
 }

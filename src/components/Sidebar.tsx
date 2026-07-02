@@ -46,6 +46,7 @@ import { UserAvatar } from '@/components/chat/UserAvatar';
 import { useProfile } from '@/services/profileService';
 import { getActiveSidebarConversationId } from '@/utils/sidebarActiveConversation';
 import { CreationThumbnail } from '@/components/history/CreationThumbnail';
+import { isMeaningfulTitle } from '@/utils/file-utils';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -88,6 +89,10 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
       return data;
     },
   });
+
+  const visibleRecentConversations = recentConversations.filter(
+    (conversation) => isMeaningfulTitle(conversation.title),
+  );
 
   const handleSignOut = async () => {
     try {
@@ -214,7 +219,7 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
                 label: 'Generations',
                 href: '/history' as const,
                 description: 'View past generations',
-                submenu: recentConversations,
+                submenu: visibleRecentConversations,
               },
             ].map(({ icon: Icon, label, href, description, submenu }) => (
               <div key={label} className="space-y-1">
