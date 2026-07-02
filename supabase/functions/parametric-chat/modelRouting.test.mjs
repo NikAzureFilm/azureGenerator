@@ -75,13 +75,28 @@ assert.match(
 );
 assert.match(
   source,
-  /for \(const codeModel of getCodeGenerationModelCandidates\(model\)\)/,
-  'parametric chat code generation should try the primary model and configured fallback models',
+  /new GoogleGenAI\(\{\s*apiKey: GOOGLE_API_KEY/s,
+  'parametric chat should configure the direct Google provider for Gemini code generation',
+);
+assert.match(
+  source,
+  /for \(const providerCandidate of getCodeGenerationProviderCandidates\(\s*model,\s*\)\)/s,
+  'parametric chat code generation should try provider candidates, not alternate model ids',
+);
+assert.match(
+  source,
+  /providerCandidate\.provider === 'google'[\s\S]*googleGenAI\.models\.generateContent/,
+  'parametric chat should call the direct Gemini API before falling back to OpenRouter',
+);
+assert.match(
+  source,
+  /provider: 'google'[\s\S]*model: providerCandidate\.usageModel/,
+  'direct Gemini code generation usage should be logged as the Google provider',
 );
 assert.doesNotMatch(
   source,
-  /getCodeGenerationModelCandidates\(model\)\[0\]/,
-  'parametric chat should not discard configured code-generation fallback models',
+  /getCodeGenerationModelCandidates\(model\)/,
+  'parametric chat should not use model fallback routing for code generation',
 );
 assert.match(
   source,

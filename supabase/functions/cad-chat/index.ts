@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
+import { GoogleGenAI } from 'npm:@google/genai';
 import {
   getAnonSupabaseClient,
   type SupabaseClient,
@@ -13,7 +14,7 @@ import { initSentry, logError } from '../_shared/sentry.ts';
 import { CadJobArtifact, Content, Model } from '@shared/types.ts';
 import { getCadBackendTokenCost } from '../../../shared/tokenCosts.ts';
 import {
-  getCodeGenerationModelCandidates,
+  getCodeGenerationProviderCandidates,
   normalizeParametricGenerationModel,
 } from '../../../shared/parametricRouting.ts';
 import {
@@ -32,6 +33,7 @@ declare const EdgeRuntime: {
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '';
 const TEXT_TO_CAD_WORKER_URL = Deno.env.get('TEXT_TO_CAD_WORKER_URL')?.trim();
 const TEXT_TO_CAD_WORKER_TOKEN = Deno.env
   .get('TEXT_TO_CAD_WORKER_TOKEN')
@@ -41,6 +43,10 @@ const RATE_LIMIT_MAX_REQUESTS = Number(
   Deno.env.get('CAD_CHAT_RATE_LIMIT') ?? '10',
 );
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+const googleGenAI = new GoogleGenAI({
+  apiKey: GOOGLE_API_KEY,
+});
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -53,20 +59,93 @@ function workerConfigured(): boolean {
   return Boolean(TEXT_TO_CAD_WORKER_URL && TEXT_TO_CAD_WORKER_TOKEN);
 }
 
+type GoogleGenerateContentResult = {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  text?: string;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+  };
+};
+
+function extractGoogleGeneratedText(result: GoogleGenerateContentResult) {
+  const partsText =
+    result.candidates?.[0]?.content?.parts
+      ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim() ?? '';
+  if (partsText) return partsText;
+  return typeof result.text === 'string' ? result.text.trim() : '';
+}
+
 async function generateBuild123dSource(
   promptText: string,
   model: string,
   previousError?: string,
   ctx?: { userId: string; conversationId: string; referenceId: string },
 ): Promise<string> {
-  if (!OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY is not configured.');
-  }
-
-  const candidates = getCodeGenerationModelCandidates(model);
+  const candidates = getCodeGenerationProviderCandidates(model);
   let lastError = 'CAD source generation failed.';
 
   for (const candidate of candidates) {
+    if (candidate.provider === 'google') {
+      if (!GOOGLE_API_KEY) {
+        lastError = 'GOOGLE_API_KEY is not configured.';
+        continue;
+      }
+
+      try {
+        const result = (await googleGenAI.models.generateContent({
+          model: candidate.model,
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: buildCadUserPrompt(promptText, previousError) }],
+            },
+          ],
+          config: {
+            systemInstruction: buildCadSystemPrompt(),
+            temperature: 0.2,
+          },
+        })) as GoogleGenerateContentResult;
+
+        if (ctx) {
+          const usage = result.usageMetadata;
+          EdgeRuntime.waitUntil(
+            logLlmUsage({
+              functionName: 'cad-chat',
+              operation: 'cad',
+              provider: 'google',
+              model: candidate.usageModel,
+              userId: ctx.userId,
+              conversationId: ctx.conversationId,
+              referenceId: ctx.referenceId,
+              inputTokens: usage?.promptTokenCount ?? 0,
+              outputTokens: usage?.candidatesTokenCount ?? 0,
+            }),
+          );
+        }
+
+        const text = extractGoogleGeneratedText(result);
+        if (!text) {
+          lastError = 'Google returned an empty CAD source.';
+          continue;
+        }
+
+        return extractPythonSource(text);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        continue;
+      }
+    }
+
+    if (!OPENROUTER_API_KEY) {
+      lastError = 'OPENROUTER_API_KEY is not configured.';
+      continue;
+    }
+
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: {
@@ -76,7 +155,7 @@ async function generateBuild123dSource(
         'X-Title': 'AzureFilm Generator',
       },
       body: JSON.stringify({
-        model: candidate,
+        model: candidate.model,
         messages: [
           { role: 'system', content: buildCadSystemPrompt() },
           {
@@ -114,7 +193,7 @@ async function generateBuild123dSource(
           functionName: 'cad-chat',
           operation: 'cad',
           provider: 'openrouter',
-          model: candidate,
+          model: candidate.usageModel,
           userId: ctx.userId,
           conversationId: ctx.conversationId,
           referenceId: ctx.referenceId,

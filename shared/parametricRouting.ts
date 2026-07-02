@@ -1,12 +1,14 @@
 export const GEMINI_35_FLASH_MODEL = 'google/gemini-3.5-flash';
 export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
-export const OPENAI_GPT_5_5_MODEL = 'openai/gpt-5.5';
-export const CLAUDE_HAIKU_45_MODEL = 'anthropic/claude-haiku-4.5';
 export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_35_FLASH_MODEL;
-export const CODE_GENERATION_FALLBACK_MODELS = [
-  OPENAI_GPT_5_5_MODEL,
-  CLAUDE_HAIKU_45_MODEL,
-];
+
+export type CodeGenerationProvider = 'google' | 'openrouter';
+
+export type CodeGenerationProviderCandidate = {
+  provider: CodeGenerationProvider;
+  model: string;
+  usageModel: string;
+};
 
 const PARAMETRIC_GENERATION_MODELS = new Set<string>([
   GEMINI_35_FLASH_MODEL,
@@ -21,11 +23,30 @@ export function normalizeParametricGenerationModel(model: unknown): string {
   return DEFAULT_CODE_GENERATION_MODEL;
 }
 
-export function getCodeGenerationModelCandidates(model: string): string[] {
+export function getCodeGenerationProviderCandidates(
+  model: unknown,
+): CodeGenerationProviderCandidate[] {
+  const normalized = normalizeParametricGenerationModel(model);
+  if (normalized.startsWith('google/')) {
+    return [
+      {
+        provider: 'google',
+        model: normalized.slice('google/'.length),
+        usageModel: normalized,
+      },
+      {
+        provider: 'openrouter',
+        model: normalized,
+        usageModel: normalized,
+      },
+    ];
+  }
+
   return [
-    ...new Set([
-      normalizeParametricGenerationModel(model),
-      ...CODE_GENERATION_FALLBACK_MODELS,
-    ]),
+    {
+      provider: 'openrouter',
+      model: normalized,
+      usageModel: normalized,
+    },
   ];
 }

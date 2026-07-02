@@ -1,4 +1,5 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { GoogleGenAI } from 'npm:@google/genai';
 import {
   Message,
   Model,
@@ -28,7 +29,7 @@ import {
 } from '../../../shared/tokenCosts.ts';
 import {
   DEFAULT_CODE_GENERATION_MODEL,
-  getCodeGenerationModelCandidates,
+  getCodeGenerationProviderCandidates,
   normalizeParametricGenerationModel,
 } from '../../../shared/parametricRouting.ts';
 import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
@@ -55,12 +56,17 @@ const logRefundFailure = ({ error, charge }: RefundFailure) => {
 // OpenRouter API configuration
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 1024;
 const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
 const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000;
+
+const googleGenAI = new GoogleGenAI({
+  apiKey: GOOGLE_API_KEY,
+});
 
 // Models whose OpenRouter listing serves at least one provider that does NOT
 // support tool calling. For these we set `provider: { require_parameters: true }`
@@ -358,6 +364,27 @@ interface OpenRouterRequest {
   // Ask OpenRouter to emit a terminal usage chunk (token counts + its own
   // billed cost) in the SSE stream.
   usage?: { include: boolean };
+}
+
+type GoogleGenerateContentResult = {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  text?: string;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+  };
+};
+
+function extractGoogleGeneratedText(result: GoogleGenerateContentResult) {
+  const partsText =
+    result.candidates?.[0]?.content?.parts
+      ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim() ?? '';
+  if (partsText) return partsText;
+  return typeof result.text === 'string' ? result.text.trim() : '';
 }
 
 function applyCompletionTokenLimit(
@@ -1412,8 +1439,88 @@ Deno.serve(async (req) => {
                 return out;
               };
 
-              for (const codeModel of getCodeGenerationModelCandidates(model)) {
+              for (const providerCandidate of getCodeGenerationProviderCandidates(
+                model,
+              )) {
                 rawCode = '';
+
+                if (providerCandidate.provider === 'google') {
+                  if (!GOOGLE_API_KEY) {
+                    console.warn(
+                      'GOOGLE_API_KEY is not configured; trying code-generation fallback provider.',
+                    );
+                    continue;
+                  }
+
+                  try {
+                    const result = (await googleGenAI.models.generateContent({
+                      model: providerCandidate.model,
+                      contents: [
+                        {
+                          role: 'user',
+                          parts: [
+                            {
+                              text: codeMessages
+                                .map((message) =>
+                                  typeof message.content === 'string'
+                                    ? `${message.role}: ${message.content}`
+                                    : JSON.stringify(message.content),
+                                )
+                                .join('\n\n'),
+                            },
+                          ],
+                        },
+                      ],
+                      config: {
+                        systemInstruction: STRICT_CODE_PROMPT,
+                      },
+                    })) as GoogleGenerateContentResult;
+
+                    const usage = result.usageMetadata;
+                    EdgeRuntime.waitUntil(
+                      logLlmUsage({
+                        functionName: 'parametric-chat',
+                        operation: 'parametric',
+                        provider: 'google',
+                        model: providerCandidate.usageModel,
+                        userId: userData.user?.id,
+                        conversationId,
+                        referenceId: newMessageId,
+                        inputTokens: usage?.promptTokenCount ?? 0,
+                        outputTokens: usage?.candidatesTokenCount ?? 0,
+                      }),
+                    );
+
+                    rawCode = extractGoogleGeneratedText(result);
+                    if (hasRenderableScadCode(stripCodeFences(rawCode))) {
+                      codeGenFailed = false;
+                      break;
+                    }
+
+                    console.warn(
+                      `Code generation with ${providerCandidate.provider}:${providerCandidate.model} did not return renderable OpenSCAD; trying fallback.`,
+                    );
+                    continue;
+                  } catch (e) {
+                    console.error(
+                      `Code generation failed for ${providerCandidate.provider}:${providerCandidate.model}:`,
+                      e,
+                    );
+                    const userFacingMessage = asUserFacingGenerationMessage(e);
+                    if (userFacingMessage) {
+                      lastUserFacingCodeGenMessage = userFacingMessage;
+                    }
+                    continue;
+                  }
+                }
+
+                if (!OPENROUTER_API_KEY) {
+                  lastUserFacingCodeGenMessage =
+                    'CAD generation could not start because OpenRouter is not configured and the direct provider did not complete the request.';
+                  continue;
+                }
+
+                const codeModel = providerCandidate.model;
 
                 // Code generation request logic (SSE streaming)
                 // Note: no `provider.require_parameters` here — code-gen doesn't
@@ -1550,7 +1657,7 @@ Deno.serve(async (req) => {
                             functionName: 'parametric-chat',
                             operation: 'parametric',
                             provider: 'openrouter',
-                            model: codeModel,
+                            model: providerCandidate.usageModel,
                             userId: userData.user?.id,
                             conversationId,
                             referenceId: newMessageId,
