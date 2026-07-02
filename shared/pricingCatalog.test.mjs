@@ -9,6 +9,8 @@ import {
   getAnnualDiscountPercent,
 } from './pricingCatalog.ts';
 import {
+  CAD_GENERATION_TOKEN_COST,
+  CAD_PREMIUM_GENERATION_TOKEN_COST,
   FEATURE_COSTS,
   TOKEN_INTERNAL_USD_COST,
   TOKEN_USD_VALUE,
@@ -26,6 +28,7 @@ const pricingViewSource = readFileSync(
 assert.equal(TOKEN_INTERNAL_USD_COST, 0.01);
 assert.equal(TOKEN_USD_VALUE, 0.03);
 assert.equal(TOKEN_USD_VALUE / TOKEN_INTERNAL_USD_COST, 3);
+assert.equal(CAD_GENERATION_TOKEN_COST, CAD_PREMIUM_GENERATION_TOKEN_COST);
 assert.equal(tokensForProviderCost(0), 0);
 assert.equal(tokensForProviderCost(0.07), 7);
 assert.equal(tokensForProviderCost(0.3), 30);

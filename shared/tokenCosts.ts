@@ -5,7 +5,7 @@ export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
 export const CAD_LITE_GENERATION_TOKEN_COST = 15;
 export const CAD_PREMIUM_GENERATION_TOKEN_COST = 50;
-export const CAD_GENERATION_TOKEN_COST = CAD_LITE_GENERATION_TOKEN_COST;
+export const CAD_GENERATION_TOKEN_COST = CAD_PREMIUM_GENERATION_TOKEN_COST;
 
 export function tokensForProviderCost(providerCostUsd: number): number {
   return Math.max(

@@ -7,7 +7,7 @@ import {
   normalizeParametricGenerationModel,
 } from './parametricRouting.ts';
 
-assert.equal(DEFAULT_CODE_GENERATION_MODEL, 'google/gemini-3.5-flash');
+assert.equal(DEFAULT_CODE_GENERATION_MODEL, 'anthropic/claude-fable-5');
 assert.equal(GEMINI_35_FLASH_MODEL, 'google/gemini-3.5-flash');
 assert.equal(CLAUDE_FABLE_5_MODEL, 'anthropic/claude-fable-5');
 
@@ -47,11 +47,6 @@ for (const model of [
     DEFAULT_CODE_GENERATION_MODEL,
   );
   assert.deepEqual(getCodeGenerationProviderCandidates(model), [
-    {
-      provider: 'google',
-      model: 'gemini-3.5-flash',
-      usageModel: DEFAULT_CODE_GENERATION_MODEL,
-    },
     {
       provider: 'openrouter',
       model: DEFAULT_CODE_GENERATION_MODEL,

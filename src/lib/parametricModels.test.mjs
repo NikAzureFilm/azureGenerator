@@ -35,7 +35,7 @@ const liteModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.5-flash',
 );
 
-assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
+assert.equal(DEFAULT_PARAMETRIC_MODEL, 'anthropic/claude-fable-5');
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
   ['anthropic/claude-fable-5', 'google/gemini-3.5-flash'],

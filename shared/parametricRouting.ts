@@ -1,6 +1,6 @@
 export const GEMINI_35_FLASH_MODEL = 'google/gemini-3.5-flash';
 export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
-export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_35_FLASH_MODEL;
+export const DEFAULT_CODE_GENERATION_MODEL = CLAUDE_FABLE_5_MODEL;
 
 export type CodeGenerationProvider = 'google' | 'openrouter';
 
