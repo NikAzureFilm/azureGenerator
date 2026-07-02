@@ -25,19 +25,19 @@ export const IMAGE_GENERATION_MODELS: Array<{
 }> = [
   {
     id: 'gpt-image-2',
-    name: 'Image Gen 2',
+    name: 'Premium',
     description: 'Slow and usually better generations.',
     provider: 'openai',
   },
   {
     id: 'nano-banana-2',
-    name: 'Nano Banana 2',
+    name: 'Normal',
     description: 'Balanced speed and quality for most generations.',
     provider: 'nano-banana',
   },
   {
     id: 'nano-banana-2-lite',
-    name: 'Nano Banana 2 Lite',
+    name: 'Light',
     description: 'Fastest and lowest-cost generations.',
     provider: 'nano-banana-lite',
   },

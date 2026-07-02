@@ -1145,11 +1145,11 @@ function TextAreaChat({
   };
 
   const openImageCreator = useCallback(() => {
-    setImageCreatorPrompt(input.trim());
+    setImageCreatorPrompt('');
     setImageCreatorModel(selectedImageGenerationModel);
     setImageCreatorRef(null);
     setIsImageCreatorOpen(true);
-  }, [input, selectedImageGenerationModel]);
+  }, [selectedImageGenerationModel]);
 
   const handleImageCreatorAddRef = async (file: File) => {
     if (!VALID_IMAGE_FORMATS.includes(file.type)) {

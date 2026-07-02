@@ -285,13 +285,10 @@ export function MultiviewComposer({
       setDialogState({
         targetSlot: slot,
         references: buildReferencesForSlot(slot),
-        prompt: buildMultiviewGenerationPrompt({
-          targetSlot: slot,
-          prompt,
-        }),
+        prompt: '',
       });
     },
-    [buildReferencesForSlot, prompt],
+    [buildReferencesForSlot],
   );
 
   const openPreviewDialog = useCallback(
@@ -495,23 +492,23 @@ export function MultiviewComposer({
     if (!dialogState) return;
     const { targetSlot, references } = dialogState;
     const trimmedPrompt = dialogState.prompt.trim();
-    if (!trimmedPrompt && references.length === 0) {
-      toast({
-        title: 'Need a prompt or a reference',
-        description: 'Type a description or add at least one reference image.',
-      });
-      return;
-    }
+    const dialogPrompt = [prompt.trim(), trimmedPrompt]
+      .filter(Boolean)
+      .join(' ');
+    const generationPrompt = buildMultiviewGenerationPrompt({
+      targetSlot,
+      prompt: dialogPrompt,
+    });
 
     // Close immediately — progress lives in the slot card.
     setDialogState(null);
     void generateSlot(targetSlot, {
-      prompt: trimmedPrompt,
+      prompt: generationPrompt,
       references,
     }).catch(() => {
       // generateSlot already restored the slot and toasted.
     });
-  }, [dialogState, generateSlot, toast]);
+  }, [dialogState, generateSlot, prompt]);
 
   const handleGenerateAll = useCallback(async () => {
     if (isPipelineRunning) return;

@@ -16,7 +16,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   IMAGE_GENERATION_MODELS.map((model) => model.name),
-  ['Image Gen 2', 'Nano Banana 2', 'Nano Banana 2 Lite'],
+  ['Premium', 'Normal', 'Light'],
 );
 assert.deepEqual(
   IMAGE_GENERATION_MODELS.map((model) => model.description),

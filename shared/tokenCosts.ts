@@ -48,9 +48,9 @@ export const FEATURE_COSTS = {
   },
   generatedInputImage: {
     id: 'generated-input-image',
-    label: 'Generated input image - Image Gen 2',
+    label: 'Generated input image - Premium',
     tokens: 22,
-    description: 'Create a reference image from a prompt with Image Gen 2.',
+    description: 'Create a reference image from a prompt with Premium.',
   },
   // Legacy tier — no longer offered in the picker; kept so stored
   // nano-banana-pro generations keep resolving to their charged cost.
@@ -62,13 +62,13 @@ export const FEATURE_COSTS = {
   },
   generatedInputImageLite: {
     id: 'generated-input-image-lite',
-    label: 'Generated input image - Nano Banana 2',
+    label: 'Generated input image - Normal',
     tokens: 7,
-    description: 'Create a reference image from a prompt with Nano Banana 2.',
+    description: 'Create a reference image from a prompt with Normal.',
   },
   generatedInputImageNanoLite: {
     id: 'generated-input-image-nano-lite',
-    label: 'Generated input image - Nano Banana 2 Lite',
+    label: 'Generated input image - Light',
     tokens: 4,
     description:
       'Create the fastest, lowest-cost reference image from a prompt.',
