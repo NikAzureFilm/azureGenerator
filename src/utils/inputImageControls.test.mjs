@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   buildReferenceImageAccept,
+  getMaxReferenceImages,
   shouldShowGeneratedInputImageControl,
   shouldShowReferenceImageControl,
 } from './inputImageControls.ts';
@@ -76,3 +77,9 @@ assert.equal(
   }),
   false,
 );
+
+// CAD (parametric) accepts up to 5 reference images.
+assert.equal(getMaxReferenceImages('parametric'), 5);
+
+// Max Quality mesh (creative) is limited to a single reference image.
+assert.equal(getMaxReferenceImages('creative'), 1);

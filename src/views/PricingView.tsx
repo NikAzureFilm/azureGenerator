@@ -18,6 +18,7 @@ const FEATURE_ROWS = [
     rows: [
       FEATURE_COSTS.generatedInputImage,
       FEATURE_COSTS.generatedInputImageLite,
+      FEATURE_COSTS.generatedInputImageNanoLite,
     ],
   },
   {

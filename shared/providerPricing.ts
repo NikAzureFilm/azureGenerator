@@ -66,11 +66,17 @@ export const OPENAI_IMAGE_PRICES = {
 } as const satisfies Record<'low' | 'medium' | 'high', number>;
 
 // Gemini image output costs differ by image model. The app uses
-// gemini-3.1-flash-image-preview for generated input/reference images and
-// gemini-3-pro-image-preview for mesh-mode multi-turn image generation.
+// gemini-3.1-flash-image-preview (Nano Banana 2) for generated
+// input/reference images, gemini-3.1-flash-lite-image (Nano Banana 2 Lite)
+// for the lowest-cost tier, and gemini-3-pro-image-preview for mesh-mode
+// multi-turn image generation.
 export const GEMINI_IMAGE_PRICES = {
   'gemini-3.1-flash-image-preview': 0.067,
   'gemini-3.1-flash-image': 0.067,
+  // Verified against Google's published Nano Banana 2 Lite pricing:
+  // $0.0336 per 1K-resolution image.
+  'gemini-3.1-flash-lite-image-preview': 0.0336,
+  'gemini-3.1-flash-lite-image': 0.0336,
   'gemini-3-pro-image-preview': 0.134,
   'gemini-3-pro-image': 0.134,
 } as const satisfies Record<string, number>;

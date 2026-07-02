@@ -144,8 +144,11 @@ export function ChatSection({
         return message.content.multiviewImages;
       }
     }
-    return undefined;
-  }, [messages]);
+    // Fall back to the draft mapping persisted while views were generated
+    // but not yet submitted.
+    const draft = conversation.settings?.multiviewImages;
+    return draft?.front ? draft : undefined;
+  }, [messages, conversation.settings]);
 
   // Get the current version number based on assistant messages only
   const getCurrentVersion = useCallback(
@@ -246,6 +249,22 @@ export function ChatSection({
             ? conversation.settings
             : {}),
           imageGenerationModel: nextModel,
+        },
+      });
+    },
+    [conversation, updateConversation],
+  );
+
+  const persistMultiviewDraft = useCallback(
+    (images: MultiviewImages) => {
+      if (!updateConversation) return;
+      updateConversation({
+        ...conversation,
+        settings: {
+          ...(typeof conversation.settings === 'object'
+            ? conversation.settings
+            : {}),
+          multiviewImages: images,
         },
       });
     },
@@ -398,6 +417,7 @@ export function ChatSection({
             conversation={conversation}
             composerFocusRequest={composerFocusRequest}
             seedMultiviewImages={latestMultiviewImages}
+            persistMultiviewDraft={persistMultiviewDraft}
           />
         </div>
       )}

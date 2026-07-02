@@ -6,6 +6,8 @@ import Anthropic from 'npm:@anthropic-ai/sdk';
 import OpenAI from 'npm:openai@^6.34.0';
 import {
   generateImageWithFalFlux,
+  generateImageWithGeminiFlash,
+  generateImageWithGeminiFlashEdit,
   generateImageWithGeminiMultiTurn,
   generateImageWithGptImage2,
   INSTRUCTIONS_3D as instructions3D,
@@ -19,6 +21,7 @@ import {
 } from '@shared/types.ts';
 import {
   getImageGenerationProvider,
+  getOpenAiImageGenerationQuality,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
 } from '../../../shared/imageGeneration.ts';
@@ -390,6 +393,8 @@ async function generateMeshImage(
   const selectedProvider = getImageGenerationProvider(
     selectedImageGenerationModel,
   );
+  let openAiQuality: GptImageQuality =
+    QUALITY_BY_MESH_MODEL[sentryStage.meshModel];
 
   const imageUsageCtx = {
     functionName: 'mesh',
@@ -399,15 +404,79 @@ async function generateMeshImage(
     referenceId: generatedImageId,
   };
 
-  let provider: 'gpt-image-2' | 'nano-banana-pro' | 'flux';
+  let provider: 'gpt-image-2' | 'nano-banana-pro' | 'nano-banana' | 'flux';
   let result: {
     imageBytes: Buffer;
     imageCallId: string | null;
     contentType: 'image/jpeg' | 'image/png';
   };
 
+  const generateGeminiProResult = async () => {
+    const imageBytes = await generateImageWithGeminiMultiTurn(
+      supabaseClient,
+      googleGenAI,
+      userId,
+      conversationId,
+      prompt,
+      gptImageReferenceImages,
+      imageUsageCtx,
+    );
+    return {
+      imageBytes,
+      imageCallId: null,
+      contentType: 'image/png' as const,
+    };
+  };
+
+  const generateGeminiFlashResult = async () => {
+    if (gptImageReferenceImages.length > 0) {
+      const refPaths = gptImageReferenceImages.map(
+        (imageId) => `${userId}/${conversationId}/${imageId}`,
+      );
+      const { data: signedRefs, error: signedRefError } =
+        await supabaseClient.storage
+          .from('images')
+          .createSignedUrls(refPaths, 60 * 60);
+      const signedRefUrls =
+        signedRefs
+          ?.filter((signedRef) => !signedRef.error && signedRef.signedUrl)
+          .map((signedRef) => reformatSignedUrl(signedRef.signedUrl)) ?? [];
+      if (signedRefError || signedRefUrls.length === 0) {
+        throw new Error(
+          `Failed to sign reference image: ${signedRefError?.message ?? 'unknown'}`,
+        );
+      }
+
+      const imageBytes = await generateImageWithGeminiFlashEdit(
+        googleGenAI,
+        prompt,
+        signedRefUrls,
+        imageUsageCtx,
+      );
+      return {
+        imageBytes,
+        imageCallId: null,
+        contentType: 'image/png' as const,
+      };
+    }
+
+    const imageBytes = await generateImageWithGeminiFlash(
+      googleGenAI,
+      prompt,
+      imageUsageCtx,
+    );
+    return {
+      imageBytes,
+      imageCallId: null,
+      contentType: 'image/png' as const,
+    };
+  };
+
   if (selectedProvider === 'openai') {
     try {
+      openAiQuality = getOpenAiImageGenerationQuality(
+        selectedImageGenerationModel,
+      );
       result = await generateImageWithGptImage2(
         supabaseClient,
         openAI,
@@ -416,7 +485,7 @@ async function generateMeshImage(
         prompt,
         gptImageReferenceImages,
         priorImageCallId,
-        QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
+        openAiQuality,
         imageUsageCtx,
       );
       provider = 'gpt-image-2';
@@ -432,17 +501,7 @@ async function generateMeshImage(
         },
       });
       try {
-        const imageBytes = await generateImageWithGeminiMultiTurn(
-          supabaseClient,
-          googleGenAI,
-          userId,
-          conversationId,
-          prompt,
-          gptImageReferenceImages,
-          imageUsageCtx,
-        );
-        // Gemini Multi-Turn returns png.
-        result = { imageBytes, imageCallId: null, contentType: 'image/png' };
+        result = await generateGeminiProResult();
         provider = 'nano-banana-pro';
       } catch (geminiError) {
         logError(geminiError, {
@@ -456,44 +515,54 @@ async function generateMeshImage(
           },
         });
         try {
-          const imageBytes = await generateImageWithFalFlux(
-            supabaseClient,
-            userId,
-            conversationId,
-            prompt,
-            gptImageReferenceImages,
-            imageUsageCtx,
-          );
-          // Flux returns png per its output_format config.
-          result = { imageBytes, imageCallId: null, contentType: 'image/png' };
-          provider = 'flux';
-        } catch (fluxError) {
-          logError(fluxError, {
+          result = await generateGeminiFlashResult();
+          provider = 'nano-banana';
+        } catch (flashError) {
+          logError(flashError, {
             ...sentryContext,
             additionalContext: {
-              stage: 'flux_fallback',
+              stage: 'nano_banana_flash_fallback',
               selectedImageGenerationModel,
               hasFreshUserImages,
               priorImageCallIdStatus,
               ...sentryStage,
             },
           });
-          throw fluxError;
+          try {
+            const imageBytes = await generateImageWithFalFlux(
+              supabaseClient,
+              userId,
+              conversationId,
+              prompt,
+              gptImageReferenceImages,
+              imageUsageCtx,
+            );
+            // Flux returns png per its output_format config.
+            result = {
+              imageBytes,
+              imageCallId: null,
+              contentType: 'image/png',
+            };
+            provider = 'flux';
+          } catch (fluxError) {
+            logError(fluxError, {
+              ...sentryContext,
+              additionalContext: {
+                stage: 'flux_fallback',
+                selectedImageGenerationModel,
+                hasFreshUserImages,
+                priorImageCallIdStatus,
+                ...sentryStage,
+              },
+            });
+            throw fluxError;
+          }
         }
       }
     }
-  } else {
+  } else if (selectedProvider === 'nano-banana-pro') {
     try {
-      const imageBytes = await generateImageWithGeminiMultiTurn(
-        supabaseClient,
-        googleGenAI,
-        userId,
-        conversationId,
-        prompt,
-        gptImageReferenceImages,
-        imageUsageCtx,
-      );
-      result = { imageBytes, imageCallId: null, contentType: 'image/png' };
+      result = await generateGeminiProResult();
       provider = 'nano-banana-pro';
     } catch (geminiError) {
       logError(geminiError, {
@@ -507,30 +576,102 @@ async function generateMeshImage(
         },
       });
       try {
-        result = await generateImageWithGptImage2(
-          supabaseClient,
-          openAI,
-          userId,
-          conversationId,
-          prompt,
-          gptImageReferenceImages,
-          priorImageCallId,
-          QUALITY_BY_MESH_MODEL[sentryStage.meshModel],
-          imageUsageCtx,
-        );
-        provider = 'gpt-image-2';
-      } catch (gptImageError) {
-        logError(gptImageError, {
+        result = await generateGeminiFlashResult();
+        provider = 'nano-banana';
+      } catch (flashError) {
+        logError(flashError, {
           ...sentryContext,
           additionalContext: {
-            stage: 'gpt_image_2_fallback',
+            stage: 'nano_banana_flash_fallback',
             selectedImageGenerationModel,
             hasFreshUserImages,
             priorImageCallIdStatus,
             ...sentryStage,
           },
         });
-        throw gptImageError;
+        try {
+          result = await generateImageWithGptImage2(
+            supabaseClient,
+            openAI,
+            userId,
+            conversationId,
+            prompt,
+            gptImageReferenceImages,
+            priorImageCallId,
+            openAiQuality,
+            imageUsageCtx,
+          );
+          provider = 'gpt-image-2';
+        } catch (gptImageError) {
+          logError(gptImageError, {
+            ...sentryContext,
+            additionalContext: {
+              stage: 'gpt_image_2_fallback',
+              selectedImageGenerationModel,
+              hasFreshUserImages,
+              priorImageCallIdStatus,
+              ...sentryStage,
+            },
+          });
+          throw gptImageError;
+        }
+      }
+    }
+  } else {
+    try {
+      result = await generateGeminiFlashResult();
+      provider = 'nano-banana';
+    } catch (flashError) {
+      logError(flashError, {
+        ...sentryContext,
+        additionalContext: {
+          stage: 'nano_banana_flash_primary',
+          selectedImageGenerationModel,
+          hasFreshUserImages,
+          priorImageCallIdStatus,
+          ...sentryStage,
+        },
+      });
+      try {
+        result = await generateGeminiProResult();
+        provider = 'nano-banana-pro';
+      } catch (geminiError) {
+        logError(geminiError, {
+          ...sentryContext,
+          additionalContext: {
+            stage: 'nano_banana_pro_fallback',
+            selectedImageGenerationModel,
+            hasFreshUserImages,
+            priorImageCallIdStatus,
+            ...sentryStage,
+          },
+        });
+        try {
+          result = await generateImageWithGptImage2(
+            supabaseClient,
+            openAI,
+            userId,
+            conversationId,
+            prompt,
+            gptImageReferenceImages,
+            priorImageCallId,
+            openAiQuality,
+            imageUsageCtx,
+          );
+          provider = 'gpt-image-2';
+        } catch (gptImageError) {
+          logError(gptImageError, {
+            ...sentryContext,
+            additionalContext: {
+              stage: 'gpt_image_2_fallback',
+              selectedImageGenerationModel,
+              hasFreshUserImages,
+              priorImageCallIdStatus,
+              ...sentryStage,
+            },
+          });
+          throw gptImageError;
+        }
       }
     }
   }
@@ -543,9 +684,7 @@ async function generateMeshImage(
   debugLog(
     `[mesh] image_gen provider=${provider} meshModel=${sentryStage.meshModel}` +
       (sentryStage.subStage ? ` subStage=${sentryStage.subStage}` : '') +
-      (provider === 'gpt-image-2'
-        ? ` quality=${QUALITY_BY_MESH_MODEL[sentryStage.meshModel]}`
-        : '') +
+      (provider === 'gpt-image-2' ? ` quality=${openAiQuality}` : '') +
       ` selected=${selectedImageGenerationModel}` +
       ` contentType=${result.contentType}` +
       ` callId=${result.imageCallId ?? 'none'}`,

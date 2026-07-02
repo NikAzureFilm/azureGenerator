@@ -2,8 +2,10 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { GoogleGenAI } from 'npm:@google/genai';
 import {
+  GEMINI_FLASH_LITE_IMAGE_MODEL,
   generateImageWithGeminiFlash,
   generateImageWithGeminiFlashEdit,
+  generateImageWithGeminiMultiTurn,
   generateImageWithGptImage2,
 } from '../_shared/imageGen.ts';
 import {
@@ -22,8 +24,14 @@ import {
   RefundableTokenLedger,
   type RefundFailure,
 } from '../_shared/refundableTokenLedger.ts';
-import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
-import { getImageGenerationTokenCost } from '../../../shared/imageGeneration.ts';
+import {
+  getImageGenerationProvider,
+  getImageGenerationTokenCost,
+  getOpenAiImageGenerationQuality,
+  normalizeImageGenerationModel,
+  type ImageGenerationModel,
+  type ImageGenerationProvider,
+} from '../../../shared/imageGeneration.ts';
 import { Buffer } from 'node:buffer';
 import OpenAI from 'npm:openai@^6.34.0';
 import {
@@ -107,6 +115,7 @@ Deno.serve(async (req) => {
       refImageIds,
       refImageLabels,
       provider,
+      imageGenerationModel,
       mode = 'input',
     }: {
       prompt?: string;
@@ -115,7 +124,8 @@ Deno.serve(async (req) => {
       refImageId?: string;
       refImageIds?: string[];
       refImageLabels?: string[];
-      provider?: 'openai' | 'nano-banana';
+      provider?: ImageGenerationProvider;
+      imageGenerationModel?: ImageGenerationModel;
       mode?: ImageGenerationMode;
     } = await req.json();
 
@@ -163,13 +173,20 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
+    const imageId = crypto.randomUUID();
     const imageUsageCtx = {
       functionName: 'generate-view',
       operation: 'image',
       userId,
       conversationId,
+      referenceId: imageId,
     };
-    const shouldUseOpenAi = provider === 'openai';
+    const selectedImageGenerationModel = normalizeImageGenerationModel(
+      imageGenerationModel ?? provider,
+    );
+    const selectedProvider = getImageGenerationProvider(
+      selectedImageGenerationModel,
+    );
     const builtPrompt = buildImageGenerationPrompt({
       view,
       userPrompt,
@@ -177,9 +194,7 @@ Deno.serve(async (req) => {
       mode,
       referenceLabels: Array.isArray(refImageLabels) ? refImageLabels : [],
     });
-    const tokenCost = shouldUseOpenAi
-      ? FEATURE_COSTS.generatedInputImage.tokens
-      : getImageGenerationTokenCost('nano-banana-2');
+    const tokenCost = getImageGenerationTokenCost(selectedImageGenerationModel);
 
     if (!userData.user.email) {
       return new Response(
@@ -195,7 +210,7 @@ Deno.serve(async (req) => {
       const consumeResult = await tokenLedger.consume(userData.user.email, {
         tokens: tokenCost,
         operation: 'chat',
-        referenceId: crypto.randomUUID(),
+        referenceId: imageId,
         userId,
       });
       if (!consumeResult.ok) {
@@ -234,12 +249,27 @@ Deno.serve(async (req) => {
       view,
       hasRef: referenceIds.length > 0,
       refCount: referenceIds.length,
-      provider: shouldUseOpenAi ? 'openai' : 'nano-banana',
+      provider: selectedProvider,
+      imageGenerationModel: selectedImageGenerationModel,
       tokenCost,
       mode,
     });
 
-    const generateWithLite = async (): Promise<Buffer> => {
+    const generateWithNormal = async (): Promise<Buffer> => {
+      return await generateImageWithGeminiMultiTurn(
+        serviceClient,
+        googleGenAI,
+        userId,
+        conversationId,
+        builtPrompt,
+        referenceIds,
+        imageUsageCtx,
+      );
+    };
+
+    // Shared Gemini Flash path; the model decides the tier — Nano Banana 2
+    // by default, Nano Banana 2 Lite when the lite model id is passed.
+    const generateWithFlash = async (flashModel?: string): Promise<Buffer> => {
       if (primaryRefImageId) {
         const refPaths = referenceIds.map(
           (refId) => `${userId}/${conversationId}/${refId}`,
@@ -262,6 +292,7 @@ Deno.serve(async (req) => {
           builtPrompt,
           signedRefUrls,
           imageUsageCtx,
+          flashModel,
         );
       }
 
@@ -269,12 +300,65 @@ Deno.serve(async (req) => {
         googleGenAI,
         builtPrompt,
         imageUsageCtx,
+        flashModel,
       );
+    };
+
+    const generateWithNanoBanana2 = () => generateWithFlash();
+    const generateWithNanoLite = () =>
+      generateWithFlash(GEMINI_FLASH_LITE_IMAGE_MODEL);
+
+    const generateWithNanoBanana2OrLite = async (): Promise<Buffer> => {
+      try {
+        return await generateWithNanoBanana2();
+      } catch (error) {
+        logError(error, {
+          functionName: 'generate-view',
+          statusCode: 500,
+          userId,
+          conversationId,
+          additionalContext: {
+            stage: 'nano_banana_2_fallback',
+            view,
+            refCount: referenceIds.length,
+            mode,
+          },
+        });
+        console.warn(
+          'Nano Banana 2 image generation failed; falling back to Nano Banana 2 Lite.',
+        );
+        return await generateWithNanoLite();
+      }
+    };
+
+    // Legacy Normal tier requests (nano-banana-pro) keep their own chain.
+    const generateWithNormalOrLite = async (): Promise<Buffer> => {
+      try {
+        return await generateWithNormal();
+      } catch (error) {
+        logError(error, {
+          functionName: 'generate-view',
+          statusCode: 500,
+          userId,
+          conversationId,
+          additionalContext: {
+            stage: 'nano_banana_pro_fallback',
+            view,
+            refCount: referenceIds.length,
+            mode,
+          },
+        });
+        console.warn(
+          'Normal image generation failed; falling back to Nano Banana 2.',
+        );
+        return await generateWithNanoBanana2OrLite();
+      }
     };
 
     let imageBytes: Buffer;
     let contentType: string | undefined;
-    if (shouldUseOpenAi) {
+    let imageGenerationCallId: string | null = null;
+    if (selectedProvider === 'openai') {
       try {
         const result = await generateImageWithGptImage2(
           serviceClient,
@@ -284,13 +368,12 @@ Deno.serve(async (req) => {
           builtPrompt,
           referenceIds,
           null,
-          // Supabase Edge Functions have a 150s idle timeout. High quality
-          // gpt-image-2 calls can exceed that for synchronous view generation.
-          'low',
+          getOpenAiImageGenerationQuality(selectedImageGenerationModel),
           imageUsageCtx,
         );
         imageBytes = result.imageBytes;
         contentType = result.contentType;
+        imageGenerationCallId = result.imageCallId;
       } catch (error) {
         logError(error, {
           functionName: 'generate-view',
@@ -302,16 +385,22 @@ Deno.serve(async (req) => {
             view,
             refCount: referenceIds.length,
             mode,
+            imageGenerationModel: selectedImageGenerationModel,
           },
         });
-        console.warn('Premium image generation failed; falling back to Lite.');
-        imageBytes = await generateWithLite();
+        console.warn(
+          'Image Gen 2 generation failed; falling back to Nano Banana 2.',
+        );
+        imageBytes = await generateWithNanoBanana2OrLite();
       }
+    } else if (selectedProvider === 'nano-banana-pro') {
+      imageBytes = await generateWithNormalOrLite();
+    } else if (selectedProvider === 'nano-banana-lite') {
+      imageBytes = await generateWithNanoLite();
     } else {
-      imageBytes = await generateWithLite();
+      imageBytes = await generateWithNanoBanana2OrLite();
     }
 
-    const imageId = crypto.randomUUID();
     const path = `${userId}/${conversationId}/${imageId}`;
     contentType = contentType ?? detectImageMediaType(imageBytes);
     const { error: uploadError } = await serviceClient.storage
@@ -322,16 +411,55 @@ Deno.serve(async (req) => {
       throw new Error(`Upload failed: ${uploadError.message}`);
     }
 
+    const imagePrompt = {
+      text: userPrompt || builtPrompt,
+      generated: true,
+      source: 'generate-view',
+      view,
+      mode,
+      provider: selectedProvider,
+      imageGenerationModel: selectedImageGenerationModel,
+      tokenCost,
+      ...(referenceIds.length > 0 && { images: referenceIds }),
+      ...(Array.isArray(refImageLabels) &&
+        refImageLabels.length > 0 && { refImageLabels }),
+    };
+
+    const { error: imageRowError } = await serviceClient.from('images').upsert(
+      {
+        id: imageId,
+        status: 'success',
+        user_id: userId,
+        conversation_id: conversationId,
+        image_generation_call_id: imageGenerationCallId,
+        prompt: imagePrompt,
+      },
+      { onConflict: 'id' },
+    );
+
+    if (imageRowError) {
+      throw new Error(`Image row insert failed: ${imageRowError.message}`);
+    }
+
     await recordGeneratedAsset({
       supabaseClient: serviceClient,
       userId,
       conversationId,
+      sourceTable: 'images',
+      sourceId: imageId,
       kind: 'image',
       bucket: 'images',
       objectKey: path,
       mimeType: contentType,
       sizeBytes: getBodySizeBytes(imageBytes),
-      metadata: { source: 'generate-view', view, mode },
+      metadata: {
+        source: 'generate-view',
+        view,
+        mode,
+        provider: selectedProvider,
+        imageGenerationModel: selectedImageGenerationModel,
+        tokenCost,
+      },
     });
 
     const { data: signedUploaded, error: signedUploadedError } =

@@ -35,3 +35,16 @@ export function buildReferenceImageAccept({
   const modelFormats = type === 'creative' ? creativeMeshExtensions : ['.stl'];
   return [...imageFormats, ...modelFormats].join(', ');
 }
+
+// Maximum reference images that can be attached at once.
+// CAD (parametric) accepts several angles; Max Quality mesh takes a single ref.
+export const MAX_REFERENCE_IMAGES = {
+  parametric: 5,
+  creative: 1,
+} as const;
+
+export function getMaxReferenceImages(type: CreationType): number {
+  return type === 'parametric'
+    ? MAX_REFERENCE_IMAGES.parametric
+    : MAX_REFERENCE_IMAGES.creative;
+}

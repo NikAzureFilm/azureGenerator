@@ -518,6 +518,134 @@ function matchesGenerationSearch(row: GenerationRow, search?: string | null) {
   return haystack.includes(q);
 }
 
+type ImageAssetMatch = {
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+};
+
+type ProviderUsageCandidate = {
+  reference_id: string | null;
+  user_id: string | null;
+  conversation_id: string | null;
+  created_at: string;
+  model: string | null;
+  cost_usd: number | string | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function imageObjectKey(row: GenerationRow): string {
+  return `${row.user_id}/${row.conversation_id}/${row.id}`;
+}
+
+function imageIdFromObjectKey(objectKey: string): string | null {
+  const parts = objectKey.split('/').filter(Boolean);
+  return parts.length > 0 ? (parts[parts.length - 1] ?? null) : null;
+}
+
+function isGenerateViewAsset(asset: ImageAssetMatch | undefined): boolean {
+  return asset?.metadata.source === 'generate-view';
+}
+
+function imagePromptWithGeneratedSource(
+  row: GenerationRow,
+  asset: ImageAssetMatch | undefined,
+): unknown {
+  if (!asset || !isGenerateViewAsset(asset)) return row.prompt;
+  const metadata = asset.metadata;
+
+  const prompt = isRecord(row.prompt) ? row.prompt : {};
+  const existingText = stringValue(prompt.text);
+  if (existingText && existingText !== 'User uploaded image') return row.prompt;
+
+  const view = stringValue(metadata.view);
+  const mode = stringValue(metadata.mode);
+  const label =
+    mode === 'multiview' && view
+      ? `${view} view image`
+      : mode === 'input'
+        ? 'input image'
+        : 'image';
+
+  return {
+    ...metadata,
+    generated: true,
+    source: 'generate-view',
+    text: `Generated ${label}`,
+  };
+}
+
+async function fetchImageAssetMatches(
+  supa: ReturnType<typeof getAdminClient>,
+  rows: GenerationRow[],
+): Promise<Map<string, ImageAssetMatch>> {
+  const imageRows = rows.filter((row) => row.kind === 'image');
+  const ids = [...new Set(imageRows.map((row) => row.id).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const idSet = new Set(ids);
+  const objectKeys = [...new Set(imageRows.map(imageObjectKey))];
+  const matches = new Map<string, ImageAssetMatch>();
+
+  const [sourceResult, objectResult] = await Promise.all([
+    supa
+      .from('generation_assets')
+      .select('source_id,object_key,metadata,created_at')
+      .eq('kind', 'image')
+      .is('deleted_at', null)
+      .in('source_id', ids),
+    supa
+      .from('generation_assets')
+      .select('source_id,object_key,metadata,created_at')
+      .eq('kind', 'image')
+      .is('deleted_at', null)
+      .in('object_key', objectKeys),
+  ]);
+
+  const addRows = (
+    data:
+      | Array<{
+          source_id: string | null;
+          object_key: string | null;
+          metadata: unknown;
+          created_at: string | null;
+        }>
+      | null
+      | undefined,
+  ) => {
+    for (const asset of data ?? []) {
+      const sourceId =
+        asset.source_id && idSet.has(asset.source_id) ? asset.source_id : null;
+      const objectId =
+        asset.object_key != null
+          ? imageIdFromObjectKey(asset.object_key)
+          : null;
+      const id =
+        sourceId ?? (objectId && idSet.has(objectId) ? objectId : null);
+      if (!id) continue;
+      matches.set(id, {
+        metadata: isRecord(asset.metadata) ? asset.metadata : {},
+        created_at: asset.created_at ?? null,
+      });
+    }
+  };
+
+  if (!sourceResult.error) {
+    addRows(sourceResult.data as Parameters<typeof addRows>[0]);
+  }
+  if (!objectResult.error) {
+    addRows(objectResult.data as Parameters<typeof addRows>[0]);
+  }
+
+  return matches;
+}
+
 async function fetchGenerationsPageDirect({
   search = null,
   kind = null,
@@ -639,32 +767,37 @@ async function addGenerationEconomics(
       tokens_used: displayGenerationTokens({
         kind: row.kind,
         tokens_used: row.tokens_used ?? null,
+        prompt: row.prompt,
       }),
     }));
   const ids = [...new Set(rows.map((row) => row.id).filter(Boolean))];
   if (ids.length === 0) return withEmptyEconomics();
 
-  const [usageResult, tokenResult] = await Promise.all([
+  const [usageResult, tokenResult, imageAssetMatches] = await Promise.all([
     supa
       .from('provider_usage')
-      .select('reference_id,cost_usd')
+      .select('reference_id,cost_usd,model')
       .in('reference_id', ids),
     supa
       .from('token_transactions')
       .select('reference_id,amount')
       .in('reference_id', ids),
+    fetchImageAssetMatches(supa, rows),
   ]);
 
   const costs = new Map<string, number>();
+  const providerModels = new Map<string, string | null>();
   if (!usageResult.error) {
     for (const row of (usageResult.data ?? []) as Array<{
       reference_id: string | null;
       cost_usd: number | string | null;
+      model: string | null;
     }>) {
       if (!row.reference_id) continue;
       const cost = Number(row.cost_usd ?? 0);
       if (!Number.isFinite(cost)) continue;
       costs.set(row.reference_id, (costs.get(row.reference_id) ?? 0) + cost);
+      providerModels.set(row.reference_id, row.model ?? null);
     }
   }
 
@@ -686,19 +819,133 @@ async function addGenerationEconomics(
 
   const enriched = rows.map((row) => ({
     ...row,
-    actual_cost_usd: costs.has(row.id) ? (costs.get(row.id) ?? 0) : null,
+    prompt:
+      row.kind === 'image'
+        ? imagePromptWithGeneratedSource(row, imageAssetMatches.get(row.id))
+        : row.prompt,
+    actual_cost_usd: costs.has(row.id)
+      ? (costs.get(row.id) ?? 0)
+      : (row.actual_cost_usd ?? null),
     tokens_used: exactTokens.has(row.id)
       ? (exactTokens.get(row.id) ?? 0)
-      : null,
+      : (row.tokens_used ?? null),
   }));
 
-  const withLegacyMatches = await addLegacyTokenMatches(supa, enriched);
+  const withLegacyImageUsage = await addLegacyImageUsageMatches(
+    supa,
+    enriched,
+    imageAssetMatches,
+    providerModels,
+  );
+  const withLegacyMatches = await addLegacyTokenMatches(
+    supa,
+    withLegacyImageUsage,
+  );
   return withLegacyMatches.map((row) => ({
     ...row,
     tokens_used: displayGenerationTokens({
       kind: row.kind,
       tokens_used: row.tokens_used ?? null,
+      prompt: row.prompt,
+      provider_model: providerModels.get(row.id) ?? null,
+      asset_metadata: imageAssetMatches.get(row.id)?.metadata,
     }),
+  }));
+}
+
+async function addLegacyImageUsageMatches(
+  supa: ReturnType<typeof getAdminClient>,
+  rows: GenerationRow[],
+  imageAssetMatches: Map<string, ImageAssetMatch>,
+  providerModels: Map<string, string | null>,
+): Promise<GenerationRow[]> {
+  const missing = rows.filter(
+    (row) =>
+      row.kind === 'image' &&
+      row.actual_cost_usd == null &&
+      isGenerateViewAsset(imageAssetMatches.get(row.id)),
+  );
+  if (missing.length === 0) return rows;
+
+  const userIds = [
+    ...new Set(missing.map((row) => row.user_id).filter(Boolean)),
+  ];
+  if (userIds.length === 0) return rows;
+
+  const rowIds = new Set(rows.map((row) => row.id));
+  const times = missing.map((row) => new Date(row.created_at).getTime());
+  const assetTimes = missing
+    .map((row) => imageAssetMatches.get(row.id)?.created_at)
+    .filter(Boolean)
+    .map((createdAt) => new Date(createdAt as string).getTime());
+  const allTimes = [...times, ...assetTimes].filter(Number.isFinite);
+  if (allTimes.length === 0) return rows;
+
+  const minCreated = Math.min(...allTimes);
+  const maxCreated = Math.max(...allTimes);
+  const { data, error } = await supa
+    .from('provider_usage')
+    .select(
+      'reference_id,user_id,conversation_id,created_at,model,cost_usd,operation',
+    )
+    .in('user_id', userIds)
+    .eq('operation', 'image')
+    .gte('created_at', new Date(minCreated - 10 * 60_000).toISOString())
+    .lte('created_at', new Date(maxCreated + 10 * 60_000).toISOString())
+    .order('created_at', { ascending: true });
+  if (error) return rows;
+
+  const candidates = (
+    (data ?? []) as Array<
+      ProviderUsageCandidate & { operation?: string | null }
+    >
+  ).filter(
+    (candidate) =>
+      !candidate.reference_id || !rowIds.has(candidate.reference_id),
+  );
+  const used = new Set<number>();
+  const inferredCosts = new Map<string, number>();
+
+  for (const row of missing) {
+    const rowTime = new Date(row.created_at).getTime();
+    const assetTime = imageAssetMatches.get(row.id)?.created_at
+      ? new Date(imageAssetMatches.get(row.id)?.created_at as string).getTime()
+      : rowTime;
+    const targetTime = Number.isFinite(assetTime) ? assetTime : rowTime;
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((candidate, index) => {
+      if (used.has(index)) return;
+      if (
+        candidate.user_id !== row.user_id ||
+        candidate.conversation_id !== row.conversation_id
+      ) {
+        return;
+      }
+      const cost = Number(candidate.cost_usd ?? 0);
+      if (!Number.isFinite(cost)) return;
+      const distance = Math.abs(
+        new Date(candidate.created_at).getTime() - targetTime,
+      );
+      if (distance <= 10 * 60_000 && distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex >= 0) {
+      const candidate = candidates[bestIndex];
+      const cost = Number(candidate.cost_usd ?? 0);
+      used.add(bestIndex);
+      inferredCosts.set(row.id, cost);
+      providerModels.set(row.id, candidate.model ?? null);
+    }
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    actual_cost_usd: row.actual_cost_usd ?? inferredCosts.get(row.id) ?? null,
   }));
 }
 

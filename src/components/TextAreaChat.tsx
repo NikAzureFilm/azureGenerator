@@ -100,6 +100,7 @@ import {
 } from '@shared/imageGeneration';
 import {
   buildReferenceImageAccept,
+  getMaxReferenceImages,
   shouldShowReferenceImageControl,
 } from '@/utils/inputImageControls';
 import {
@@ -131,6 +132,10 @@ interface TextAreaChatProps {
     id: string;
     user_id: string;
   };
+  ensureConversation?: () => Promise<void>;
+  // Persists the current multiview slot→image mapping on the (draft)
+  // conversation so finished views survive a reload before submit.
+  persistMultiviewDraft?: (images: MultiviewImages) => Promise<void> | void;
   composerFocusRequest?: {
     id: number;
     draft?: string;
@@ -158,6 +163,8 @@ function TextAreaChat({
   showFullLabels = false,
   onTypeChange,
   conversation,
+  ensureConversation,
+  persistMultiviewDraft,
   composerFocusRequest,
   seedMultiviewImages,
 }: TextAreaChatProps) {
@@ -220,8 +227,11 @@ function TextAreaChat({
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
   const lastHydratedMultiviewSeedRef = useRef<string | null>(null);
+  const lastPersistedMultiviewKeyRef = useRef<string>('');
   const isMultiview =
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
+  // CAD (parametric) accepts up to 5 reference images; Max Quality mesh takes 1.
+  const maxReferenceImages = getMaxReferenceImages(type);
   const selectedImageGenerationModel =
     normalizeImageGenerationModel(imageGenerationModel);
 
@@ -290,6 +300,8 @@ function TextAreaChat({
       if (anyMultiviewBusy(currentSlots)) return currentSlots;
 
       lastHydratedMultiviewSeedRef.current = seedMultiviewImagesKey;
+      // Seeded state is already persisted — don't write it back.
+      lastPersistedMultiviewKeyRef.current = seedMultiviewImagesKey;
       return multiviewSlotMapsMatchPreviews(currentSlots, hydratedSlots)
         ? currentSlots
         : hydratedSlots;
@@ -301,6 +313,21 @@ function TextAreaChat({
     seedMultiviewImagesKey,
     seedMultiviewUrlQueries,
   ]);
+
+  // Persist finished views on the draft conversation as they land, so a
+  // reload mid-flow rehydrates them instead of orphaning charged images.
+  useEffect(() => {
+    if (!isMultiview || !persistMultiviewDraft) return;
+    const images = slotsToMultiviewImages(multiviewSlots);
+    const key = getMultiviewImageEntries(images)
+      .map(({ slot, id }) => `${slot}:${id}`)
+      .join('|');
+    if (!key || key === lastPersistedMultiviewKeyRef.current) return;
+    lastPersistedMultiviewKeyRef.current = key;
+    void Promise.resolve(persistMultiviewDraft(images)).catch((error) => {
+      console.error('Failed to persist multiview draft images:', error);
+    });
+  }, [isMultiview, multiviewSlots, persistMultiviewDraft]);
 
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {
@@ -777,8 +804,20 @@ function TextAreaChat({
     hasInvalidItems =
       newItems.length > filteredImages.length + filteredMeshes.length;
 
+    // Cap reference images: CAD allows up to 5, Max Quality mesh allows 1.
+    const availableImageSlots = Math.max(0, maxReferenceImages - images.length);
+    const imagesToAdd = filteredImages.slice(0, availableImageSlots);
+    const hasExceededImageLimit = filteredImages.length > imagesToAdd.length;
+
     // Show specific errors first, then generic error only if there are truly invalid file types
-    if (hasSmallImages) {
+    if (hasExceededImageLimit) {
+      toast({
+        title: 'Reference image limit reached',
+        description: `You can add up to ${maxReferenceImages} reference image${
+          maxReferenceImages === 1 ? '' : 's'
+        } ${type === 'parametric' ? 'in CAD mode' : 'for Max Quality mesh'}.`,
+      });
+    } else if (hasSmallImages) {
       toast({
         title: 'Image too small',
         description:
@@ -877,8 +916,8 @@ function TextAreaChat({
       }
     });
 
-    // Upload each valid image immediately
-    filteredImages.forEach(async (file) => {
+    // Upload each valid image immediately (respecting the reference-image cap)
+    imagesToAdd.forEach(async (file) => {
       const tempId = crypto.randomUUID();
       const url = URL.createObjectURL(file);
       setImages((prevImages) => [
@@ -962,6 +1001,8 @@ function TextAreaChat({
   const openReferenceFilePicker = () => {
     const input = document.createElement('input');
     input.type = 'file';
+    // Allow selecting several reference images at once when more than one is allowed.
+    input.multiple = maxReferenceImages > 1;
     input.accept = buildReferenceImageAccept({
       type,
       imageFormats: VALID_IMAGE_FORMATS,
@@ -1057,6 +1098,7 @@ function TextAreaChat({
 
     setIsGeneratingInputImage(true);
     try {
+      await ensureConversation?.();
       const { data, error } = await supabase.functions.invoke('generate-view', {
         method: 'POST',
         body: {
@@ -1064,6 +1106,7 @@ function TextAreaChat({
           view: 'front',
           prompt,
           provider: getImageGenerationProvider(imageCreatorModel),
+          imageGenerationModel: imageCreatorModel,
           mode: 'input',
           ...(options?.refImageId ? { refImageId: options.refImageId } : {}),
         },
@@ -1314,6 +1357,7 @@ function TextAreaChat({
             imageGenerationModel={selectedImageGenerationModel}
             onImageGenerationModelChange={setImageGenerationModel}
             disabled={disabled || isLoading}
+            ensureConversation={ensureConversation}
           />
         </div>
       ) : null}

@@ -17,8 +17,10 @@ import { cn } from '@/lib/utils';
 import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
+  getImageGenerationTokenCost,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
+import { formatTokenCost } from '@shared/tokenCosts';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -39,10 +41,13 @@ import {
 } from '@/components/ImageGenerateDialog';
 import {
   buildMultiviewGenerationPrompt,
+  buildMultiviewGenerationStages,
+  clearQueuedMultiviewSlots,
   getMultiviewGenerationMode,
-  getMultiviewGenerationReferenceIds,
+  getMultiviewReferenceChainSlots,
   hasMultiviewSlotPreview,
   markMultiviewSlotBusy,
+  markMultiviewStagesQueued,
   restoreMultiviewSlotAfterFailure,
 } from '@/utils/multiviewReference';
 import { invokeGenerateViewWithFallback } from '@/utils/generateViewWithFallback';
@@ -127,10 +132,16 @@ async function downloadImageUrl(url: string, filenameBase: string) {
   }
 }
 
+function isInsufficientTokensError(error: unknown): boolean {
+  const context = (error as { context?: { status?: number } } | null)?.context;
+  return context?.status === 402;
+}
+
 export interface MultiviewSlotState {
   id?: string; // storage image id once uploaded/generated
   url?: string; // preview URL for display
   isBusy?: boolean; // currently uploading or generating
+  isQueued?: boolean; // staged by Generate all, waiting for its reference
   kind?: 'upload' | 'generated';
 }
 
@@ -147,6 +158,9 @@ interface MultiviewComposerProps {
   imageGenerationModel?: ImageGenerationModel;
   onImageGenerationModelChange?: (model: ImageGenerationModel) => void;
   disabled?: boolean;
+  // Persists the draft conversation row before a generation writes DB rows
+  // that reference it (same contract as the input-image flow).
+  ensureConversation?: () => Promise<void>;
 }
 
 interface DialogState {
@@ -164,22 +178,30 @@ export function MultiviewComposer({
   imageGenerationModel = DEFAULT_IMAGE_GENERATION_MODEL,
   onImageGenerationModelChange,
   disabled = false,
+  ensureConversation,
 }: MultiviewComposerProps) {
   const { toast } = useToast();
   const { billing } = useAuth();
   const maxUploadBytes = getUploadSizeLimitBytes(getLevel(billing));
-  const firstFilledSlot = SLOT_ORDER.find((s) => {
-    const state = slots[s];
-    return !!state?.id && !state.isBusy;
-  });
+  // Front anchors the reference chain; it is the only slot that ever carries
+  // the Reference badge.
+  const frontReady = !!slots.front?.id && !slots.front?.isBusy;
+  const referenceSlot: MultiviewSlot | undefined = frontReady
+    ? 'front'
+    : undefined;
 
   const [dialogState, setDialogState] = useState<DialogState | null>(null);
   const [isUploadingDialogRef, setIsUploadingDialogRef] = useState(false);
-  const [isGeneratingDialog, setIsGeneratingDialog] = useState(false);
+  const [isPipelineRunning, setIsPipelineRunning] = useState(false);
   const [previewSlot, setPreviewSlot] = useState<MultiviewSlot | null>(null);
   const previewState = previewSlot ? slots[previewSlot] : undefined;
   const isPreviewOpen = !!previewSlot && hasMultiviewSlotPreview(previewState);
-  const previewIsReference = !!previewSlot && previewSlot === firstFilledSlot;
+  const previewIsReference = !!previewSlot && previewSlot === referenceSlot;
+
+  // Latest slots for async pipelines — stage reference ids must be resolved
+  // at fire time, not from a stale closure.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
 
   const updateSlot = useCallback(
     (slot: MultiviewSlot, next: MultiviewSlotState | undefined) => {
@@ -242,9 +264,10 @@ export function MultiviewComposer({
 
   const buildReferencesForSlot = useCallback(
     (target: MultiviewSlot): ImageGenerateReference[] => {
+      // Pre-fill from the reference chain (Back ← Front; sides ← Front +
+      // Back) instead of every filled slot.
       const refs: ImageGenerateReference[] = [];
-      for (const slot of SLOT_ORDER) {
-        if (slot === target) continue;
+      for (const slot of getMultiviewReferenceChainSlots(target)) {
         const state = slots[slot];
         if (!state?.id || !state.url || state.isBusy) continue;
         refs.push({
@@ -355,7 +378,121 @@ export function MultiviewComposer({
     );
   }, []);
 
-  const handleDialogGenerate = useCallback(async () => {
+  // Fire-and-forget generation for one slot — shared by the per-view dialog
+  // and the Generate-all pipeline. Progress lives in the slot card; failures
+  // toast and restore the slot, then rethrow for the pipeline's abort rules.
+  const generateSlot = useCallback(
+    async (
+      targetSlot: MultiviewSlot,
+      opts: {
+        prompt: string;
+        references?: ImageGenerateReference[];
+        refs?: { ids: string[]; labels: string[] };
+      },
+    ): Promise<{ id: string; url: string }> => {
+      const previousTargetSlot = slotsRef.current[targetSlot];
+      onSlotsChange((currentSlots) =>
+        markMultiviewSlotBusy({
+          slots: currentSlots,
+          targetSlot,
+          kind: 'generated',
+        }),
+      );
+      try {
+        // The generated image row references the conversation — make sure
+        // the draft conversation exists before charging tokens.
+        await ensureConversation?.();
+
+        const dialogReferences = opts.references ?? [];
+        let refImageIds: string[];
+        let refImageLabels: string[];
+        if (opts.refs) {
+          refImageIds = opts.refs.ids;
+          refImageLabels = opts.refs.labels;
+        } else if (dialogReferences.length > 0) {
+          refImageIds = dialogReferences.map((ref) => ref.id);
+          refImageLabels = dialogReferences.map(
+            (ref) => ref.label ?? 'Additional reference',
+          );
+        } else {
+          const chainRefs = getMultiviewReferenceChainSlots(targetSlot).flatMap(
+            (slot) => {
+              const state = slotsRef.current[slot];
+              return state?.id && !state.isBusy
+                ? [{ id: state.id, label: SLOT_LABEL[slot] }]
+                : [];
+            },
+          );
+          refImageIds = chainRefs.map((ref) => ref.id);
+          refImageLabels = chainRefs.map((ref) => ref.label);
+        }
+
+        const trimmedPrompt = opts.prompt.trim();
+        const generationPrompt =
+          trimmedPrompt ||
+          buildMultiviewGenerationPrompt({
+            targetSlot,
+            prompt: '',
+          });
+        const { data, error } = await invokeGenerateViewWithFallback(
+          (body) =>
+            supabase.functions.invoke('generate-view', {
+              method: 'POST',
+              body,
+            }),
+          {
+            conversationId,
+            view: targetSlot,
+            prompt: generationPrompt,
+            refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
+            refImageLabels:
+              refImageLabels.length > 0 ? refImageLabels : undefined,
+            mode: getMultiviewGenerationMode(),
+          },
+          imageGenerationModel,
+        );
+        if (error) throw error;
+        if (!data?.id || !data?.url) {
+          throw new Error('No image returned from generator');
+        }
+        updateSlot(targetSlot, {
+          id: data.id,
+          url: data.url,
+          isBusy: false,
+          kind: 'generated',
+        });
+        return { id: data.id, url: data.url };
+      } catch (error) {
+        console.error('Error generating view:', error);
+        onSlotsChange((currentSlots) =>
+          restoreMultiviewSlotAfterFailure({
+            slots: currentSlots,
+            targetSlot,
+            previousSlot: previousTargetSlot,
+          }),
+        );
+        toast({
+          title: `${SLOT_LABEL[targetSlot]} generation failed`,
+          description:
+            error instanceof Error
+              ? error.message
+              : 'Could not generate view. Try again.',
+          variant: 'destructive',
+        });
+        throw error;
+      }
+    },
+    [
+      conversationId,
+      ensureConversation,
+      imageGenerationModel,
+      onSlotsChange,
+      toast,
+      updateSlot,
+    ],
+  );
+
+  const handleDialogGenerate = useCallback(() => {
     if (!dialogState) return;
     const { targetSlot, references } = dialogState;
     const trimmedPrompt = dialogState.prompt.trim();
@@ -367,92 +504,84 @@ export function MultiviewComposer({
       return;
     }
 
-    setIsGeneratingDialog(true);
-    const previousTargetSlot = slots[targetSlot];
-    onSlotsChange((currentSlots) =>
-      markMultiviewSlotBusy({
-        slots: currentSlots,
-        targetSlot,
-        kind: 'generated',
-      }),
+    // Close immediately — progress lives in the slot card.
+    setDialogState(null);
+    void generateSlot(targetSlot, {
+      prompt: trimmedPrompt,
+      references,
+    }).catch(() => {
+      // generateSlot already restored the slot and toasted.
+    });
+  }, [dialogState, generateSlot, toast]);
+
+  const handleGenerateAll = useCallback(async () => {
+    if (isPipelineRunning) return;
+    const currentSlots = slotsRef.current;
+    if (SLOT_ORDER.some((slot) => currentSlots[slot]?.isBusy)) return;
+    const stages = buildMultiviewGenerationStages(currentSlots);
+    if (stages.length === 0) return;
+
+    // Snapshot the prompt once — editing the prompt bar mid-pipeline must
+    // not make later views describe a different object than Front.
+    const promptSnapshot = prompt.trim();
+    if (stages.some((stage) => stage.includes('front')) && !promptSnapshot) {
+      toast({
+        title: 'Type a prompt first',
+        description: 'Generate all needs a prompt to create the Front view.',
+      });
+      return;
+    }
+
+    setIsPipelineRunning(true);
+    onSlotsChange((current) =>
+      markMultiviewStagesQueued({ slots: current, stages }),
     );
     try {
-      const refImageIds =
-        references.length > 0
-          ? references.map((ref) => ref.id)
-          : getMultiviewGenerationReferenceIds({
-              slots,
-              targetSlot,
-            });
-      const refImageLabels =
-        references.length > 0
-          ? references.map((ref) => ref.label ?? 'Additional reference')
-          : undefined;
-      const generationPrompt =
-        trimmedPrompt ||
-        buildMultiviewGenerationPrompt({
-          targetSlot,
-          prompt: '',
-        });
-      const { data, error } = await invokeGenerateViewWithFallback(
-        (body) =>
-          supabase.functions.invoke('generate-view', {
-            method: 'POST',
-            body,
-          }),
-        {
-          conversationId,
-          view: targetSlot,
-          prompt: generationPrompt,
-          refImageIds: refImageIds.length > 0 ? refImageIds : undefined,
-          refImageLabels:
-            refImageLabels && refImageLabels.length > 0
-              ? refImageLabels
-              : undefined,
-          mode: getMultiviewGenerationMode(),
-        },
-        imageGenerationModel,
-      );
-      if (error) throw error;
-      if (!data?.id || !data?.url) {
-        throw new Error('No image returned from generator');
+      const completed: Partial<Record<MultiviewSlot, string>> = {};
+      for (const slot of SLOT_ORDER) {
+        const state = currentSlots[slot];
+        if (state?.id && !state.isBusy) completed[slot] = state.id;
       }
-      updateSlot(targetSlot, {
-        id: data.id as string,
-        url: data.url as string,
-        isBusy: false,
-        kind: 'generated',
-      });
-      setDialogState(null);
-    } catch (error) {
-      console.error('Error generating view:', error);
-      onSlotsChange((currentSlots) =>
-        restoreMultiviewSlotAfterFailure({
-          slots: currentSlots,
-          targetSlot,
-          previousSlot: previousTargetSlot,
-        }),
-      );
-      toast({
-        title: 'Generation failed',
-        description:
-          error instanceof Error
-            ? error.message
-            : 'Could not generate view. Try again.',
-        variant: 'destructive',
-      });
+
+      for (const stage of stages) {
+        const results = await Promise.allSettled(
+          stage.map(async (slot) => {
+            const chainRefs = getMultiviewReferenceChainSlots(slot).flatMap(
+              (refSlot) => {
+                const id = completed[refSlot];
+                return id ? [{ id, label: SLOT_LABEL[refSlot] }] : [];
+              },
+            );
+            const { id } = await generateSlot(slot, {
+              prompt: buildMultiviewGenerationPrompt({
+                targetSlot: slot,
+                prompt: promptSnapshot,
+              }),
+              refs: {
+                ids: chainRefs.map((ref) => ref.id),
+                labels: chainRefs.map((ref) => ref.label),
+              },
+            });
+            completed[slot] = id;
+          }),
+        );
+
+        const failures = results.flatMap((result) =>
+          result.status === 'rejected' ? [result.reason] : [],
+        );
+        if (failures.length === 0) continue;
+        const frontFailed = stage.includes('front');
+        const outOfTokens = failures.some(isInsufficientTokensError);
+        if (frontFailed || outOfTokens) {
+          // Dependents can't run without their reference or budget.
+          break;
+        }
+      }
     } finally {
-      setIsGeneratingDialog(false);
+      setIsPipelineRunning(false);
+      onSlotsChange(clearQueuedMultiviewSlots);
     }
-  }, [
-    dialogState,
-    conversationId,
-    imageGenerationModel,
-    onSlotsChange,
-    slots,
-    updateSlot,
-    toast,
-  ]);
+  }, [generateSlot, isPipelineRunning, onSlotsChange, prompt, toast]);
 
   const handleRemove = useCallback(
     async (slot: MultiviewSlot) => {
@@ -519,6 +648,16 @@ export function MultiviewComposer({
     }
   }, [slots, toast]);
 
+  const stagedSlots = buildMultiviewGenerationStages(slots).flat();
+  const generateAllCost =
+    stagedSlots.length * getImageGenerationTokenCost(imageGenerationModel);
+  const readyCount = SLOT_ORDER.filter(
+    (slot) => !!slots[slot]?.id && !slots[slot]?.isBusy,
+  ).length;
+  const anySlotActive = SLOT_ORDER.some(
+    (slot) => slots[slot]?.isBusy || slots[slot]?.isQueued,
+  );
+
   return (
     <div className="flex flex-col gap-2 p-2">
       <div className="flex items-center gap-2">
@@ -526,10 +665,33 @@ export function MultiviewComposer({
           Multiview · 4 angles
         </span>
         <span className="text-[10px] text-adam-text-secondary/70">
-          {firstFilledSlot
-            ? `${SLOT_LABEL[firstFilledSlot]} is the reference for the other views`
+          {frontReady
+            ? 'Front is the reference for the other views'
             : 'Add Front first — it becomes the reference for the others'}
         </span>
+        <div className="flex-1" />
+        {anySlotActive ? (
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-adam-blue/15 px-2 py-1 text-[10px] font-medium text-adam-blue">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Generating · {readyCount}/4 ready
+          </span>
+        ) : stagedSlots.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => void handleGenerateAll()}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 rounded-md bg-adam-blue px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-adam-blue/90 disabled:opacity-50"
+          >
+            <Sparkles className="h-3 w-3" />
+            {stagedSlots.length === 4
+              ? 'Generate all'
+              : 'Generate remaining'} · {formatTokenCost(generateAllCost)}
+          </button>
+        ) : (
+          <span className="text-[10px] font-medium text-adam-text-secondary">
+            ✓ All views ready
+          </span>
+        )}
       </div>
       <div className="grid grid-cols-4 gap-1.5">
         {SLOT_ORDER.map((slot) => (
@@ -543,7 +705,8 @@ export function MultiviewComposer({
             onRemove={handleRemove}
             onPreview={openPreviewDialog}
             onDownload={handleDownloadSlot}
-            isReference={slot === firstFilledSlot}
+            isReference={slot === referenceSlot}
+            generateLocked={slot !== 'front' && !frontReady}
           />
         ))}
       </div>
@@ -552,7 +715,12 @@ export function MultiviewComposer({
           open={dialogState !== null}
           onOpenChange={handleDialogOpenChange}
           title={`Generate ${SLOT_LABEL[dialogState.targetSlot]} view`}
-          description="The Object Agent keeps this angle matched to the same centered 3D object. Other filled views are pre-selected as references."
+          description={
+            dialogState.targetSlot === 'front' &&
+            SLOT_ORDER.some((slot) => slot !== 'front' && !!slots[slot]?.id)
+              ? 'The other views were generated from the current Front. A new Front may mismatch them — consider regenerating the other views afterwards.'
+              : 'The Object Agent keeps this angle matched to the same centered 3D object. Chain references (Front, then Back for the sides) are pre-selected. Generation continues in the slot after this dialog closes.'
+          }
           references={dialogState.references}
           onAddReferenceFile={handleAddDialogReference}
           onRemoveReference={handleRemoveDialogReference}
@@ -562,7 +730,7 @@ export function MultiviewComposer({
           promptPlaceholder="Describe the 3D object (optional if references are provided)"
           model={imageGenerationModel}
           onModelChange={(next) => onImageGenerationModelChange?.(next)}
-          isGenerating={isGeneratingDialog}
+          isGenerating={false}
           onGenerate={handleDialogGenerate}
           generateLabel={`Generate ${SLOT_LABEL[dialogState.targetSlot]}`}
         />
@@ -632,6 +800,8 @@ interface MultiviewSlotCardProps {
   onPreview: (slot: MultiviewSlot) => void;
   onDownload: (slot: MultiviewSlot) => void | Promise<void>;
   isReference?: boolean;
+  // Generation is locked until the Front reference exists.
+  generateLocked?: boolean;
 }
 
 function MultiviewSlotCard({
@@ -644,15 +814,17 @@ function MultiviewSlotCard({
   onPreview,
   onDownload,
   isReference = false,
+  generateLocked = false,
 }: MultiviewSlotCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isHover, setIsHover] = useState(false);
 
   const hasImage = hasMultiviewSlotPreview(state);
   const isBusy = !!state?.isBusy;
+  const isQueued = !!state?.isQueued && !isBusy;
 
   const openFilePicker = () => {
-    if (disabled || isBusy) return;
+    if (disabled || isBusy || isQueued) return;
     inputRef.current?.click();
   };
 
@@ -708,8 +880,20 @@ function MultiviewSlotCard({
         </div>
       )}
 
+      {/* Queued state — staged by Generate all, waiting for its reference */}
+      {isQueued && !hasImage && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-2">
+          <span className="text-[11px] font-medium text-adam-text-secondary">
+            {SLOT_LABEL[slot]}
+          </span>
+          <span className="rounded bg-adam-neutral-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-adam-text-secondary">
+            Queued
+          </span>
+        </div>
+      )}
+
       {/* Empty state actions */}
-      {!hasImage && !isBusy && (
+      {!hasImage && !isBusy && !isQueued && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-2">
           <span className="text-[11px] font-medium text-adam-text-secondary">
             {SLOT_LABEL[slot]}
@@ -733,13 +917,15 @@ function MultiviewSlotCard({
                 <button
                   type="button"
                   onClick={() => onGenerate(slot)}
-                  disabled={disabled}
+                  disabled={disabled || generateLocked}
                   className="flex h-6 w-6 items-center justify-center rounded-md border border-adam-neutral-700 bg-adam-neutral-800 text-adam-text-secondary hover:text-adam-blue disabled:opacity-50"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>Generate with AI</TooltipContent>
+              <TooltipContent>
+                {generateLocked ? 'Add Front first' : 'Generate with AI'}
+              </TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -831,5 +1017,7 @@ export function hasFrontMultiviewSlot(slots: MultiviewSlotMap): boolean {
 }
 
 export function anyMultiviewBusy(slots: MultiviewSlotMap): boolean {
-  return SLOT_ORDER.some((s) => !!slots[s]?.isBusy);
+  // Queued slots count as busy: submit stays locked until the Generate-all
+  // pipeline finishes or aborts.
+  return SLOT_ORDER.some((s) => !!slots[s]?.isBusy || !!slots[s]?.isQueued);
 }

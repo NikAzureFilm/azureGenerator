@@ -100,17 +100,21 @@ export function HistoryView() {
 
       if (error) throw error;
 
-      supabase.storage
-        .from('images')
-        .list(`${user?.id}/${conversationId}`)
-        .then(({ data: list }) => {
-          if (list) {
-            const filesToRemove = list.map(
-              (file) => `${user?.id}/${conversationId}/${file.name}`,
-            );
-            supabase.storage.from('images').remove(filesToRemove);
-          }
-        });
+      // Best-effort cleanup of the conversation's stored assets across every
+      // conversation-scoped bucket so deletes don't leak storage.
+      const prefix = `${user?.id}/${conversationId}`;
+      for (const bucket of ['images', 'meshes', 'thumbnails', 'previews']) {
+        supabase.storage
+          .from(bucket)
+          .list(prefix)
+          .then(({ data: list }) => {
+            if (list && list.length > 0) {
+              supabase.storage
+                .from(bucket)
+                .remove(list.map((file) => `${prefix}/${file.name}`));
+            }
+          });
+      }
     },
     onMutate: async (conversationId) => {
       await queryClient.cancelQueries({ queryKey: ['conversations'] });

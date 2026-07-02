@@ -64,6 +64,16 @@ const FEATURE_BREAKDOWNS = [
     ],
   },
   {
+    id: 'generatedInputImageNormal',
+    label: 'Generated input image - Normal',
+    components: [
+      {
+        name: 'Normal generated image',
+        costUsd: geminiImageCostUsd('gemini-3-pro-image-preview'),
+      },
+    ],
+  },
+  {
     id: 'generatedInputImageLite',
     label: 'Generated input image - Lite',
     components: [

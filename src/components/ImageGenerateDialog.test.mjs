@@ -24,6 +24,18 @@ assert.match(
   'dialog copy should make the always-3D-object behavior clear',
 );
 
+assert.match(
+  source,
+  /grid-cols-1[\s\S]*sm:grid-cols-3/,
+  'image model choices should fit three Premium, Normal, and Lite tiers responsively',
+);
+
+assert.match(
+  source,
+  /\{option\.description\}/,
+  'image model choices should show their speed and quality descriptions',
+);
+
 assert.doesNotMatch(
   source,
   /<Textarea[\s\S]*?<\/Textarea>[\s\S]*?<Collapsible/,

@@ -4,6 +4,7 @@ export interface MultiviewReferenceSlotState {
   id?: string;
   url?: string;
   isBusy?: boolean;
+  isQueued?: boolean;
   kind?: 'upload' | 'generated';
 }
 
@@ -20,6 +21,22 @@ const VIEW_GENERATION_PROMPT: Record<MultiviewSlot, string> = {
   right: 'Generate a right-side profile view of this 3D object.',
 };
 
+// The reference chain: Front anchors everything. Back is generated from
+// Front; the side views are generated from Front + Back. Front itself is
+// generated from the prompt alone.
+const REFERENCE_CHAIN: Record<MultiviewSlot, MultiviewSlot[]> = {
+  front: [],
+  back: ['front'],
+  left: ['front', 'back'],
+  right: ['front', 'back'],
+};
+
+export function getMultiviewReferenceChainSlots(
+  targetSlot: MultiviewSlot,
+): MultiviewSlot[] {
+  return REFERENCE_CHAIN[targetSlot];
+}
+
 export function getMultiviewGenerationReferenceIds({
   slots,
   targetSlot,
@@ -27,11 +44,60 @@ export function getMultiviewGenerationReferenceIds({
   slots: MultiviewReferenceSlotMap;
   targetSlot: MultiviewSlot;
 }): string[] {
-  return SLOT_ORDER.flatMap((slot) => {
-    if (slot === targetSlot) return [];
+  return REFERENCE_CHAIN[targetSlot].flatMap((slot) => {
     const state = slots[slot];
     return state?.id && !state.isBusy ? [state.id] : [];
   });
+}
+
+export type MultiviewGenerationStage = MultiviewSlot[];
+
+// Stages for "Generate all": only idle, empty slots are staged, so the
+// pipeline never overwrites an existing view and cannot be double-fired
+// while slots are queued or generating.
+export function buildMultiviewGenerationStages(
+  slots: MultiviewReferenceSlotMap,
+): MultiviewGenerationStage[] {
+  const stageable = (slot: MultiviewSlot) => {
+    const state = slots[slot];
+    return !state?.id && !state?.isBusy && !state?.isQueued;
+  };
+  const stages: MultiviewGenerationStage[] = [];
+  if (stageable('front')) stages.push(['front']);
+  if (stageable('back')) stages.push(['back']);
+  const sides = (['left', 'right'] as MultiviewSlot[]).filter(stageable);
+  if (sides.length > 0) stages.push(sides);
+  return stages;
+}
+
+export function markMultiviewStagesQueued({
+  slots,
+  stages,
+}: {
+  slots: MultiviewReferenceSlotMap;
+  stages: MultiviewGenerationStage[];
+}): MultiviewReferenceSlotMap {
+  const next: MultiviewReferenceSlotMap = { ...slots };
+  for (const slot of stages.flat()) {
+    next[slot] = { ...next[slot], isQueued: true };
+  }
+  return next;
+}
+
+export function clearQueuedMultiviewSlots(
+  slots: MultiviewReferenceSlotMap,
+): MultiviewReferenceSlotMap {
+  const next: MultiviewReferenceSlotMap = { ...slots };
+  for (const slot of SLOT_ORDER) {
+    const state = next[slot];
+    if (!state?.isQueued) continue;
+    if (state.id || state.url || state.isBusy) {
+      next[slot] = { ...state, isQueued: false };
+    } else {
+      delete next[slot];
+    }
+  }
+  return next;
 }
 
 export function getMultiviewImageEntries(
@@ -76,6 +142,7 @@ export function multiviewSlotMapsMatchPreviews(
       leftSlot?.id === rightSlot?.id &&
       leftSlot?.url === rightSlot?.url &&
       !!leftSlot?.isBusy === !!rightSlot?.isBusy &&
+      !!leftSlot?.isQueued === !!rightSlot?.isQueued &&
       leftSlot?.kind === rightSlot?.kind
     );
   });
@@ -117,6 +184,7 @@ export function markMultiviewSlotBusy({
     [targetSlot]: {
       ...previousSlot,
       isBusy: true,
+      isQueued: false,
       kind: previousSlot?.kind ?? kind,
     },
   };

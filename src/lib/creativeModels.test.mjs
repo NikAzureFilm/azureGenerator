@@ -37,7 +37,9 @@ const textAreaChatSource = readFileSync(
   'utf8',
 );
 const multiviewComposerSource = readFileSync(
-  fileURLToPath(new URL('../components/MultiviewComposer.tsx', import.meta.url)),
+  fileURLToPath(
+    new URL('../components/MultiviewComposer.tsx', import.meta.url),
+  ),
   'utf8',
 );
 const chatSectionSource = readFileSync(
@@ -50,7 +52,10 @@ const messageServiceSource = readFileSync(
 );
 const messageUtilsSource = readFileSync(
   fileURLToPath(
-    new URL('../../supabase/functions/_shared/messageUtils.ts', import.meta.url),
+    new URL(
+      '../../supabase/functions/_shared/messageUtils.ts',
+      import.meta.url,
+    ),
   ),
   'utf8',
 );
@@ -104,11 +109,15 @@ assert.equal(
   false,
 );
 assert.equal(
-  generateViewFunctionSource.includes("'low',"),
+  generateViewFunctionSource.includes('getOpenAiImageGenerationQuality'),
   true,
 );
 assert.equal(
-  generateViewFunctionSource.includes('falling back to Lite'),
+  generateViewFunctionSource.includes('falling back to Nano Banana 2'),
+  true,
+);
+assert.equal(
+  generateViewFunctionSource.includes('GEMINI_FLASH_LITE_IMAGE_MODEL'),
   true,
 );
 assert.equal(
@@ -148,10 +157,7 @@ assert.equal(
   true,
 );
 assert.equal(messageUtilsSource.includes('labeled multiview'), true);
-assert.equal(
-  creativeChatSource.includes('isDirectMultiviewMeshRequest'),
-  true,
-);
+assert.equal(creativeChatSource.includes('isDirectMultiviewMeshRequest'), true);
 assert.equal(
   creativeChatSource.includes('direct_multiview_mesh_request'),
   true,

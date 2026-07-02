@@ -20,6 +20,8 @@ const debugLog = (...args: unknown[]) => {
 };
 
 const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+// Nano Banana 2 Lite — Google's lowest-cost image model.
+export const GEMINI_FLASH_LITE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
 const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5.5';
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
@@ -380,12 +382,13 @@ export const generateImageWithGeminiFlash = async (
   googleGenAI: GoogleGenAI,
   prompt: string,
   usageCtx?: ImageUsageCtx,
+  model: string = GEMINI_FLASH_IMAGE_MODEL,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
-  debugLog(`Generating image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+  debugLog(`Generating image with ${model}`);
 
   const result = await googleGenAI.models.generateContent({
-    model: GEMINI_FLASH_IMAGE_MODEL,
+    model,
     contents: [{ text: enforcedPrompt }],
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
@@ -408,9 +411,9 @@ export const generateImageWithGeminiFlash = async (
   }
 
   const imageBytes = Buffer.from(generatedImageData, 'base64');
-  debugLog(`Successfully generated image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+  debugLog(`Successfully generated image with ${model}`);
   if (usageCtx) {
-    await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+    await logGeminiImage({ ...usageCtx, model });
   }
 
   return imageBytes;
@@ -425,9 +428,10 @@ export const generateImageWithGeminiFlashEdit = async (
   prompt: string,
   imageUrls: string | string[],
   usageCtx?: ImageUsageCtx,
+  model: string = GEMINI_FLASH_IMAGE_MODEL,
 ): Promise<Buffer> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
-  debugLog(`Editing image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+  debugLog(`Editing image with ${model}`);
   const normalizedImageUrls = Array.isArray(imageUrls)
     ? imageUrls
     : [imageUrls];
@@ -462,7 +466,7 @@ export const generateImageWithGeminiFlashEdit = async (
     );
 
     const result = await googleGenAI.models.generateContent({
-      model: GEMINI_FLASH_IMAGE_MODEL,
+      model,
       contents: [{ text: enforcedPrompt }, ...imageParts],
       config: {
         responseModalities: [Modality.TEXT, Modality.IMAGE],
@@ -485,9 +489,9 @@ export const generateImageWithGeminiFlashEdit = async (
     }
 
     const imageBytes = Buffer.from(generatedImageData, 'base64');
-    debugLog(`Successfully edited image with ${GEMINI_FLASH_IMAGE_MODEL}`);
+    debugLog(`Successfully edited image with ${model}`);
     if (usageCtx) {
-      await logGeminiImage({ ...usageCtx, model: GEMINI_FLASH_IMAGE_MODEL });
+      await logGeminiImage({ ...usageCtx, model });
     }
 
     return imageBytes;
