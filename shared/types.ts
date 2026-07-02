@@ -164,6 +164,9 @@ export type GenerationStatus = Database['public']['Enums']['generation-status'];
 export type ConversationSettings = {
   model?: Model;
   imageGenerationModel?: ImageGenerationModel;
+  // Draft multiview slot→image mapping, persisted as views are generated or
+  // uploaded so a reload before submit rehydrates them.
+  multiviewImages?: MultiviewImages;
 } | null;
 
 export type Profile = Database['public']['Tables']['profiles']['Row'];

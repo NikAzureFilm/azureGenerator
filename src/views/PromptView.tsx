@@ -6,12 +6,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import TextAreaChat from '@/components/TextAreaChat';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   Content,
   Conversation,
   DEFAULT_CREATIVE_MODEL,
   Model,
+  MultiviewImages,
 } from '@shared/types';
 import { MessageItem } from '../types/misc.ts';
 import { LimitReachedMessage } from '@/components/LimitReachedMessage';
@@ -104,11 +105,16 @@ export function PromptView() {
     },
   });
 
+  // Multiview views generated before submit are kept on the draft
+  // conversation's settings so a reload can rehydrate them.
+  const multiviewDraftImagesRef = useRef<MultiviewImages | null>(null);
+
   const ensureConversation = useCallback(async () => {
     if (!user?.id) {
       throw new Error('Sign in to generate an input image');
     }
 
+    const multiviewImages = multiviewDraftImagesRef.current;
     const { error } = await supabase.from('conversations').upsert(
       {
         id: newConversationId,
@@ -118,6 +124,7 @@ export function PromptView() {
         settings: {
           model,
           imageGenerationModel,
+          ...(multiviewImages?.front ? { multiviewImages } : {}),
         },
       },
       { onConflict: 'id' },
@@ -125,6 +132,14 @@ export function PromptView() {
 
     if (error) throw error;
   }, [imageGenerationModel, model, newConversationId, type, user?.id]);
+
+  const persistMultiviewDraft = useCallback(
+    async (images: MultiviewImages) => {
+      multiviewDraftImagesRef.current = images;
+      await ensureConversation();
+    },
+    [ensureConversation],
+  );
 
   // Trigger fade in on mount
   useEffect(() => {
@@ -315,6 +330,7 @@ export function PromptView() {
                   showFullLabels={true}
                   onTypeChange={handleTypeChange}
                   ensureConversation={ensureConversation}
+                  persistMultiviewDraft={persistMultiviewDraft}
                 />
               </SelectedItemsContext.Provider>
               <div className="relative">

@@ -133,6 +133,9 @@ interface TextAreaChatProps {
     user_id: string;
   };
   ensureConversation?: () => Promise<void>;
+  // Persists the current multiview slot→image mapping on the (draft)
+  // conversation so finished views survive a reload before submit.
+  persistMultiviewDraft?: (images: MultiviewImages) => Promise<void> | void;
   composerFocusRequest?: {
     id: number;
     draft?: string;
@@ -161,6 +164,7 @@ function TextAreaChat({
   onTypeChange,
   conversation,
   ensureConversation,
+  persistMultiviewDraft,
   composerFocusRequest,
   seedMultiviewImages,
 }: TextAreaChatProps) {
@@ -223,6 +227,7 @@ function TextAreaChat({
   // Multiview 4-slot state (only used when model === 'multiview')
   const [multiviewSlots, setMultiviewSlots] = useState<MultiviewSlotMap>({});
   const lastHydratedMultiviewSeedRef = useRef<string | null>(null);
+  const lastPersistedMultiviewKeyRef = useRef<string>('');
   const isMultiview =
     MULTIVIEW_ENABLED && type === 'creative' && model === 'multiview';
   // CAD (parametric) accepts up to 5 reference images; Max Quality mesh takes 1.
@@ -295,6 +300,8 @@ function TextAreaChat({
       if (anyMultiviewBusy(currentSlots)) return currentSlots;
 
       lastHydratedMultiviewSeedRef.current = seedMultiviewImagesKey;
+      // Seeded state is already persisted — don't write it back.
+      lastPersistedMultiviewKeyRef.current = seedMultiviewImagesKey;
       return multiviewSlotMapsMatchPreviews(currentSlots, hydratedSlots)
         ? currentSlots
         : hydratedSlots;
@@ -306,6 +313,21 @@ function TextAreaChat({
     seedMultiviewImagesKey,
     seedMultiviewUrlQueries,
   ]);
+
+  // Persist finished views on the draft conversation as they land, so a
+  // reload mid-flow rehydrates them instead of orphaning charged images.
+  useEffect(() => {
+    if (!isMultiview || !persistMultiviewDraft) return;
+    const images = slotsToMultiviewImages(multiviewSlots);
+    const key = getMultiviewImageEntries(images)
+      .map(({ slot, id }) => `${slot}:${id}`)
+      .join('|');
+    if (!key || key === lastPersistedMultiviewKeyRef.current) return;
+    lastPersistedMultiviewKeyRef.current = key;
+    void Promise.resolve(persistMultiviewDraft(images)).catch((error) => {
+      console.error('Failed to persist multiview draft images:', error);
+    });
+  }, [isMultiview, multiviewSlots, persistMultiviewDraft]);
 
   // Quads vs Polys toggle state (only for ultra model)
   const [meshTopology, setMeshTopology] = useState<'quads' | 'polys'>(() => {
@@ -829,8 +851,9 @@ function TextAreaChat({
       try {
         // For parametric mode STL files, extract bounding box and generate multi-angle renders
         if (type === 'parametric' && fileType === 'stl') {
-          const { parseSTL, renderMultipleAngles } =
-            await import('@/utils/meshUtils');
+          const { parseSTL, renderMultipleAngles } = await import(
+            '@/utils/meshUtils'
+          );
           const { geometry, boundingBox } = await parseSTL(file);
           setMeshBoundingBox(boundingBox);
           setMeshFilename(file.name);
@@ -1335,6 +1358,7 @@ function TextAreaChat({
             imageGenerationModel={selectedImageGenerationModel}
             onImageGenerationModelChange={setImageGenerationModel}
             disabled={disabled || isLoading}
+            ensureConversation={ensureConversation}
           />
         </div>
       ) : null}
