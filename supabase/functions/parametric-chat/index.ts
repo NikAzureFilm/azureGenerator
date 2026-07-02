@@ -1398,50 +1398,12 @@ Deno.serve(async (req) => {
                 ...finalUserMessage,
               ];
 
-              const codeModel = getCodeGenerationModelCandidates(model)[0];
-
-              // Code generation request logic (SSE streaming)
-              // Note: no `provider.require_parameters` here — code-gen doesn't
-              // send tools, so all providers in the pool are eligible.
-              const codeRequestBody: OpenRouterRequest = {
-                model: codeModel,
-                messages: [
-                  { role: 'system', content: STRICT_CODE_PROMPT },
-                  ...codeMessages,
-                ],
-                stream: true,
-                usage: { include: true },
-              };
-              applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
-
-              const codeReasoningEnabled =
-                thinking || usesAutomaticReasoning(codeModel);
-              if (isGeminiCodeGenerationModel(codeModel)) {
-                codeRequestBody.reasoning = {
-                  effort: 'minimal',
-                  exclude: true,
-                };
-                applyCompletionTokenLimit(
-                  codeRequestBody,
-                  codeModel,
-                  GEMINI_CODE_GENERATION_TOKEN_LIMIT,
-                );
-              } else if (codeReasoningEnabled) {
-                codeRequestBody.reasoning = {
-                  max_tokens: getReasoningTokenLimit(codeModel),
-                };
-                applyCompletionTokenLimit(
-                  codeRequestBody,
-                  codeModel,
-                  getReasoningCompletionTokenLimit(codeModel, 60000),
-                );
-              }
-
               // Kick off title generation alongside the streamed code.
               const titlePromise = generateTitleFromMessages(messagesToSend);
 
               let rawCode = '';
-              let codeGenFailed = false;
+              let codeGenFailed = true;
+              let lastUserFacingCodeGenMessage: string | null = null;
 
               const stripCodeFences = (s: string): string => {
                 let out = s;
@@ -1450,158 +1412,217 @@ Deno.serve(async (req) => {
                 return out;
               };
 
-              // Draws from the same request deadline as the agent fetch —
-              // whatever budget remains after the outer stream is ours.
-              // A hung upstream aborts in userland so the catch below
-              // marks this tool call `error` instead of being SIGKILLed.
-              const codeGenAbort = new AbortController();
-              const codeGenTimeout = setTimeout(
-                () =>
-                  codeGenAbort.abort(new Error('code-gen upstream timeout')),
-                remainingBudgetMs(),
-              );
-              try {
-                const codeResponse = await fetchOpenRouterChatCompletion(
-                  codeRequestBody,
-                  codeGenAbort.signal,
-                );
+              for (const codeModel of getCodeGenerationModelCandidates(model)) {
+                rawCode = '';
 
-                if (!codeResponse.ok) {
-                  const t = await codeResponse.text();
-                  const userFacingMessage = getUserFacingOpenRouterMessage(
-                    t,
-                    codeResponse.status,
+                // Code generation request logic (SSE streaming)
+                // Note: no `provider.require_parameters` here — code-gen doesn't
+                // send tools, so all providers in the pool are eligible.
+                const codeRequestBody: OpenRouterRequest = {
+                  model: codeModel,
+                  messages: [
+                    { role: 'system', content: STRICT_CODE_PROMPT },
+                    ...codeMessages,
+                  ],
+                  stream: true,
+                  usage: { include: true },
+                };
+                applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
+
+                const codeReasoningEnabled =
+                  thinking || usesAutomaticReasoning(codeModel);
+                if (isGeminiCodeGenerationModel(codeModel)) {
+                  codeRequestBody.reasoning = {
+                    effort: 'minimal',
+                    exclude: true,
+                  };
+                  applyCompletionTokenLimit(
+                    codeRequestBody,
+                    codeModel,
+                    GEMINI_CODE_GENERATION_TOKEN_LIMIT,
                   );
-                  if (userFacingMessage) {
-                    throw new UserFacingGenerationError(userFacingMessage);
-                  }
-                  throw new Error(
-                    `Code gen error for ${codeModel}: ${codeResponse.status} - ${t}`,
+                } else if (codeReasoningEnabled) {
+                  codeRequestBody.reasoning = {
+                    max_tokens: getReasoningTokenLimit(codeModel),
+                  };
+                  applyCompletionTokenLimit(
+                    codeRequestBody,
+                    codeModel,
+                    getReasoningCompletionTokenLimit(codeModel, 60000),
                   );
                 }
 
-                const codeReader = codeResponse.body?.getReader();
-                if (!codeReader) throw new Error('No code response body');
+                // Draws from the same request deadline as the agent fetch —
+                // whatever budget remains after the outer stream is ours.
+                // A hung upstream aborts in userland so the catch below
+                // marks this tool call `error` instead of being SIGKILLed.
+                const codeGenAbort = new AbortController();
+                const codeGenTimeout = setTimeout(
+                  () =>
+                    codeGenAbort.abort(new Error('code-gen upstream timeout')),
+                  remainingBudgetMs(),
+                );
+                try {
+                  const codeResponse = await fetchOpenRouterChatCompletion(
+                    codeRequestBody,
+                    codeGenAbort.signal,
+                  );
 
-                const codeDecoder = new TextDecoder();
-                let codeBuffer = '';
-                // Throttle SSE flushes to avoid O(n^2) memory blow-up on long
-                // generations — without this, each of hundreds of deltas
-                // re-serializes the full accumulated artifact.
-                let lastFlushTime = 0;
-                let lastFlushedLen = 0;
-                const FLUSH_INTERVAL_MS = 120;
+                  if (!codeResponse.ok) {
+                    const t = await codeResponse.text();
+                    const userFacingMessage = getUserFacingOpenRouterMessage(
+                      t,
+                      codeResponse.status,
+                    );
+                    if (userFacingMessage) {
+                      throw new UserFacingGenerationError(userFacingMessage);
+                    }
+                    throw new Error(
+                      `Code gen error for ${codeModel}: ${codeResponse.status} - ${t}`,
+                    );
+                  }
 
-                while (true) {
-                  const { done, value } = await codeReader.read();
-                  if (done) break;
+                  const codeReader = codeResponse.body?.getReader();
+                  if (!codeReader) throw new Error('No code response body');
 
-                  codeBuffer += codeDecoder.decode(value, { stream: true });
-                  const codeLines = codeBuffer.split('\n');
-                  codeBuffer = codeLines.pop() || '';
+                  const codeDecoder = new TextDecoder();
+                  let codeBuffer = '';
+                  // Throttle SSE flushes to avoid O(n^2) memory blow-up on long
+                  // generations — without this, each of hundreds of deltas
+                  // re-serializes the full accumulated artifact.
+                  let lastFlushTime = 0;
+                  let lastFlushedLen = 0;
+                  const FLUSH_INTERVAL_MS = 120;
 
-                  for (const line of codeLines) {
-                    // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
-                    // and anything that isn't a `data:` event.
-                    if (!line.startsWith('data: ')) continue;
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
+                  while (true) {
+                    const { done, value } = await codeReader.read();
+                    if (done) break;
 
-                    let chunk: {
-                      error?: { message?: string };
-                      usage?: {
-                        prompt_tokens?: number;
-                        completion_tokens?: number;
-                        cost?: number;
+                    codeBuffer += codeDecoder.decode(value, { stream: true });
+                    const codeLines = codeBuffer.split('\n');
+                    codeBuffer = codeLines.pop() || '';
+
+                    for (const line of codeLines) {
+                      // Skip empty lines, SSE comments (`: OPENROUTER PROCESSING`),
+                      // and anything that isn't a `data:` event.
+                      if (!line.startsWith('data: ')) continue;
+                      const data = line.slice(6);
+                      if (data === '[DONE]') continue;
+
+                      let chunk: {
+                        error?: { message?: string };
+                        usage?: {
+                          prompt_tokens?: number;
+                          completion_tokens?: number;
+                          cost?: number;
+                        };
+                        choices?: Array<{
+                          delta?: { content?: string };
+                        }>;
                       };
-                      choices?: Array<{
-                        delta?: { content?: string };
-                      }>;
-                    };
-                    try {
-                      chunk = JSON.parse(data);
-                    } catch (e) {
-                      // Malformed chunk — log and skip, don't abort the stream.
-                      console.error('Error parsing code SSE chunk:', e);
-                      continue;
-                    }
-
-                    // Surfaced API errors must abort code-gen so the outer
-                    // catch can mark the tool call as failed — never swallow.
-                    if (chunk.error) {
-                      const upstreamMessage =
-                        chunk.error.message ||
-                        `OpenRouter error: ${JSON.stringify(chunk.error)}`;
-                      const userFacingMessage =
-                        getUserFacingOpenRouterMessage(upstreamMessage);
-                      if (userFacingMessage) {
-                        throw new UserFacingGenerationError(userFacingMessage);
+                      try {
+                        chunk = JSON.parse(data);
+                      } catch (e) {
+                        // Malformed chunk — log and skip, don't abort the stream.
+                        console.error('Error parsing code SSE chunk:', e);
+                        continue;
                       }
-                      throw new Error(upstreamMessage);
-                    }
 
-                    if (chunk.usage) {
-                      EdgeRuntime.waitUntil(
-                        logLlmUsage({
-                          functionName: 'parametric-chat',
-                          operation: 'parametric',
-                          provider: 'openrouter',
-                          model: codeModel,
-                          userId: userData.user?.id,
-                          conversationId,
-                          referenceId: newMessageId,
-                          inputTokens: chunk.usage.prompt_tokens ?? 0,
-                          outputTokens: chunk.usage.completion_tokens ?? 0,
-                          costUsdOverride:
-                            typeof chunk.usage.cost === 'number'
-                              ? chunk.usage.cost
-                              : undefined,
-                        }),
-                      );
-                    }
+                      // Surfaced API errors must abort code-gen so the outer
+                      // catch can mark the tool call as failed — never swallow.
+                      if (chunk.error) {
+                        const upstreamMessage =
+                          chunk.error.message ||
+                          `OpenRouter error: ${JSON.stringify(chunk.error)}`;
+                        const userFacingMessage =
+                          getUserFacingOpenRouterMessage(upstreamMessage);
+                        if (userFacingMessage) {
+                          throw new UserFacingGenerationError(
+                            userFacingMessage,
+                          );
+                        }
+                        throw new Error(upstreamMessage);
+                      }
 
-                    const deltaContent = chunk.choices?.[0]?.delta?.content;
-                    if (typeof deltaContent === 'string' && deltaContent) {
-                      rawCode += deltaContent;
-                      const now = Date.now();
-                      if (
-                        now - lastFlushTime >= FLUSH_INTERVAL_MS &&
-                        rawCode.length > lastFlushedLen
-                      ) {
-                        const streamed = stripCodeFences(rawCode);
-                        if (hasRenderableScadCode(streamed)) {
-                          content = {
-                            ...content,
-                            artifact: {
-                              title: 'Generated Object',
-                              version: 'v1',
-                              code: streamed,
-                              parameters: [],
-                            },
-                          };
-                          streamMessage(controller, {
-                            ...newMessageData,
-                            content,
-                          });
-                          lastFlushTime = now;
-                          lastFlushedLen = rawCode.length;
+                      if (chunk.usage) {
+                        EdgeRuntime.waitUntil(
+                          logLlmUsage({
+                            functionName: 'parametric-chat',
+                            operation: 'parametric',
+                            provider: 'openrouter',
+                            model: codeModel,
+                            userId: userData.user?.id,
+                            conversationId,
+                            referenceId: newMessageId,
+                            inputTokens: chunk.usage.prompt_tokens ?? 0,
+                            outputTokens: chunk.usage.completion_tokens ?? 0,
+                            costUsdOverride:
+                              typeof chunk.usage.cost === 'number'
+                                ? chunk.usage.cost
+                                : undefined,
+                          }),
+                        );
+                      }
+
+                      const deltaContent = chunk.choices?.[0]?.delta?.content;
+                      if (typeof deltaContent === 'string' && deltaContent) {
+                        rawCode += deltaContent;
+                        const now = Date.now();
+                        if (
+                          now - lastFlushTime >= FLUSH_INTERVAL_MS &&
+                          rawCode.length > lastFlushedLen
+                        ) {
+                          const streamed = stripCodeFences(rawCode);
+                          if (hasRenderableScadCode(streamed)) {
+                            content = {
+                              ...content,
+                              artifact: {
+                                title: 'Generated Object',
+                                version: 'v1',
+                                code: streamed,
+                                parameters: [],
+                              },
+                            };
+                            streamMessage(controller, {
+                              ...newMessageData,
+                              content,
+                            });
+                            lastFlushTime = now;
+                            lastFlushedLen = rawCode.length;
+                          }
                         }
                       }
                     }
                   }
+
+                  if (hasRenderableScadCode(stripCodeFences(rawCode))) {
+                    codeGenFailed = false;
+                    break;
+                  }
+
+                  console.warn(
+                    `Code generation with ${codeModel} did not return renderable OpenSCAD; trying fallback.`,
+                  );
+                } catch (e) {
+                  console.error(`Code generation failed for ${codeModel}:`, e);
+                  const userFacingMessage = asUserFacingGenerationMessage(e);
+                  if (userFacingMessage) {
+                    lastUserFacingCodeGenMessage = userFacingMessage;
+                  }
+                } finally {
+                  clearTimeout(codeGenTimeout);
                 }
-              } catch (e) {
-                console.error('Code generation failed:', e);
-                const userFacingMessage = asUserFacingGenerationMessage(e);
-                if (userFacingMessage && !content.artifact) {
-                  content = {
-                    ...content,
-                    text: userFacingMessage,
-                  };
-                }
-                codeGenFailed = true;
-              } finally {
-                clearTimeout(codeGenTimeout);
+              }
+
+              if (
+                codeGenFailed &&
+                lastUserFacingCodeGenMessage &&
+                !content.artifact
+              ) {
+                content = {
+                  ...content,
+                  text: lastUserFacingCodeGenMessage,
+                };
               }
 
               const code = stripCodeFences(rawCode.trim()).trim();

@@ -75,6 +75,16 @@ assert.match(
 );
 assert.match(
   source,
+  /for \(const codeModel of getCodeGenerationModelCandidates\(model\)\)/,
+  'parametric chat code generation should try the primary model and configured fallback models',
+);
+assert.doesNotMatch(
+  source,
+  /getCodeGenerationModelCandidates\(model\)\[0\]/,
+  'parametric chat should not discard configured code-generation fallback models',
+);
+assert.match(
+  source,
   /function getUserFacingOpenRouterMessage/,
   'parametric chat should convert actionable OpenRouter failures into user-facing messages',
 );
