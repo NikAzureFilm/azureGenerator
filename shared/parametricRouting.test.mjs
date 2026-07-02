@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  CLAUDE_FABLE_5_MODEL,
   CODE_GENERATION_FALLBACK_MODELS,
   DEFAULT_CODE_GENERATION_MODEL,
   getCodeGenerationModelCandidates,
@@ -7,13 +8,17 @@ import {
 } from './parametricRouting.ts';
 
 assert.equal(DEFAULT_CODE_GENERATION_MODEL, 'google/gemini-3.1-pro-preview');
+assert.equal(CLAUDE_FABLE_5_MODEL, 'anthropic/claude-fable-5');
 assert.deepEqual(CODE_GENERATION_FALLBACK_MODELS, []);
 
+for (const model of [DEFAULT_CODE_GENERATION_MODEL, CLAUDE_FABLE_5_MODEL]) {
+  assert.equal(normalizeParametricGenerationModel(model), model);
+  assert.deepEqual(getCodeGenerationModelCandidates(model), [model]);
+}
+
 for (const model of [
-  'google/gemini-3.1-pro-preview',
   'google/gemini-3.5-flash',
   'openai/gpt-5.5',
-  'anthropic/claude-fable-5',
   'quality',
   '',
 ]) {

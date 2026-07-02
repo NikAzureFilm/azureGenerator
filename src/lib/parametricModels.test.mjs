@@ -31,16 +31,24 @@ const modelSelectorSource = readFileSync(
 const geminiModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.1-pro-preview',
 );
+const fableModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'anthropic/claude-fable-5',
+);
 
 assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.1-pro-preview');
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.1-pro-preview'],
+  ['google/gemini-3.1-pro-preview', 'anthropic/claude-fable-5'],
 );
 assert.ok(geminiModel);
 assert.equal(geminiModel.name, 'Gemini 3.1 Pro');
 assert.equal(geminiModel.tokenCost, 25);
 assert.notEqual(geminiModel.disabled, true);
+assert.ok(fableModel);
+assert.equal(fableModel.name, 'Claude Fable 5');
+assert.equal(fableModel.provider, 'Anthropic');
+assert.equal(fableModel.tokenCost, 25);
+assert.notEqual(fableModel.disabled, true);
 assert.equal(
   PARAMETRIC_MODELS.some(
     (model) => model.name === 'Premium' || model.name === 'Lite',
@@ -57,7 +65,7 @@ assert.equal(
 );
 assert.equal(
   normalizeParametricChatModel('anthropic/claude-fable-5'),
-  DEFAULT_PARAMETRIC_MODEL,
+  'anthropic/claude-fable-5',
 );
 assert.equal(
   normalizeParametricChatModel('google/gemini-3.1-pro-preview'),
