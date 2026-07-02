@@ -6,6 +6,8 @@ import {
   useState,
 } from 'react';
 import {
+  Check,
+  ChevronDown,
   Download,
   ImagePlus,
   Loader2,
@@ -18,6 +20,7 @@ import { MultiviewSlot, MultiviewImages } from '@shared/types';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   getImageGenerationTokenCost,
+  IMAGE_GENERATION_MODELS,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
 import { formatTokenCost } from '@shared/tokenCosts';
@@ -35,6 +38,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   ImageGenerateDialog,
   type ImageGenerateReference,
@@ -655,6 +664,15 @@ export function MultiviewComposer({
   const anySlotActive = MULTIVIEW_SLOT_ORDER.some(
     (slot) => slots[slot]?.isBusy || slots[slot]?.isQueued,
   );
+  const selectedModel =
+    IMAGE_GENERATION_MODELS.find(
+      (option) => option.id === imageGenerationModel,
+    ) ??
+    IMAGE_GENERATION_MODELS.find(
+      (option) => option.id === DEFAULT_IMAGE_GENERATION_MODEL,
+    ) ??
+    IMAGE_GENERATION_MODELS[0];
+  const modelSelectDisabled = disabled || anySlotActive;
 
   return (
     <div className="flex flex-col gap-2 p-2">
@@ -668,6 +686,46 @@ export function MultiviewComposer({
             : 'Add Front first — it becomes the reference for the others'}
         </span>
         <div className="flex-1" />
+        {onImageGenerationModelChange ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                disabled={modelSelectDisabled}
+                className="inline-flex items-center gap-1 rounded-md border border-adam-neutral-700 bg-adam-neutral-900 px-2 py-1 text-[10px] font-medium text-adam-text-secondary transition-colors hover:text-adam-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                title="Image model used for these views"
+              >
+                <span className="text-adam-text-secondary/70">Model</span>
+                <span className="text-adam-text-primary">
+                  {selectedModel.name}
+                </span>
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              {IMAGE_GENERATION_MODELS.map((option) => {
+                const isSelected = option.id === imageGenerationModel;
+                return (
+                  <DropdownMenuItem
+                    key={option.id}
+                    onSelect={() => onImageGenerationModelChange(option.id)}
+                    className="flex flex-col items-start gap-0.5"
+                  >
+                    <span className="flex w-full items-center justify-between gap-2 text-xs font-medium text-adam-text-primary">
+                      {option.name}
+                      {isSelected ? (
+                        <Check className="h-3.5 w-3.5 text-adam-blue" />
+                      ) : null}
+                    </span>
+                    <span className="text-[10px] leading-4 text-adam-text-secondary">
+                      {option.description}
+                    </span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         {anySlotActive ? (
           <span className="inline-flex items-center gap-1.5 rounded-md bg-adam-blue/15 px-2 py-1 text-[10px] font-medium text-adam-blue">
             <Loader2 className="h-3 w-3 animate-spin" />
