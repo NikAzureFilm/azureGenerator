@@ -1,10 +1,10 @@
-export const GEMINI_31_PRO_MODEL = 'google/gemini-3.1-pro-preview';
+export const GEMINI_35_FLASH_MODEL = 'google/gemini-3.5-flash';
 export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
-export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_31_PRO_MODEL;
+export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_35_FLASH_MODEL;
 export const CODE_GENERATION_FALLBACK_MODELS: string[] = [];
 
 const PARAMETRIC_GENERATION_MODELS = new Set<string>([
-  GEMINI_31_PRO_MODEL,
+  GEMINI_35_FLASH_MODEL,
   CLAUDE_FABLE_5_MODEL,
 ]);
 

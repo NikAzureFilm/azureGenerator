@@ -16,10 +16,10 @@ assert.match(
 assert.match(
   source,
   /await tokenLedger\.refundReference\(\s*chatReferenceId,\s*logRefundFailure,\s*\)/s,
-  'successful CAD builds should refund the initial chat precharge so the total CAD generation cost stays 25',
+  'successful CAD builds should refund the initial chat precharge so the model-specific CAD generation cost is charged once',
 );
 assert.match(
   source,
   /tokens: getParametricBuildTokenCost\(model\)/,
-  'the CAD build transaction itself should be 25 tokens for admin generation rows',
+  'the CAD build transaction itself should use the selected model token cost for admin generation rows',
 );

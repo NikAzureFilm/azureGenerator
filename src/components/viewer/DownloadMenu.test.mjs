@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const source = readFileSync(new URL('./DownloadMenu.tsx', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('./DownloadMenu.tsx', import.meta.url),
+  'utf8',
+);
 
 assert.doesNotMatch(
   source,
@@ -43,4 +46,16 @@ assert.match(
   source,
   /role="status"[\s\S]*Preparing \.3MF/,
   '3MF downloads should render a visible accessible busy indicator while the export is prepared',
+);
+
+assert.match(
+  source,
+  /setIsColorPrintDialogOpen\(true\)/,
+  'the .3MF color print menu item should open the preview dialog instead of downloading directly',
+);
+
+assert.match(
+  source,
+  /<ThreeMfColorPrintDialog[\s\S]*onDownload=\{\(\{ colorCount, colorDetail, coloredMesh \}\) =>\s*download3MF\(colorCount, \{ colorDetail, coloredMesh \}\)/,
+  'the color print dialog should hand its previewed mesh and settings to the 3MF download path',
 );

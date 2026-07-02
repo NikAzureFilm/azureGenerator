@@ -11,6 +11,10 @@ import type { Mesh as ItkMesh } from 'itk-wasm';
 
 export const DEFAULT_THREE_MF_COLOR_COUNT = 4;
 export const MAX_THREE_MF_COLOR_COUNT = 16;
+// Color detail ("sensitivity") for the multi-color export: 0 keeps large,
+// rough color regions, 100 preserves per-triangle/texture detail. 50 matches
+// the historical fixed behavior exactly.
+export const DEFAULT_THREE_MF_COLOR_DETAIL = 50;
 
 const CORE_NAMESPACE =
   'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
@@ -143,7 +147,9 @@ type RepairedSceneGeometry = {
 
 type IndexedTriangle = Pick<ThreeMfTriangle, 'v1' | 'v2' | 'v3'>;
 
-type IndexedTriangleGeometry<TTriangle extends IndexedTriangle = IndexedTriangle> = {
+type IndexedTriangleGeometry<
+  TTriangle extends IndexedTriangle = IndexedTriangle,
+> = {
   vertices: VectorTuple[];
   triangles: TTriangle[];
 };
@@ -184,6 +190,64 @@ export function clampThreeMfColorCount(value: number): number {
   }
 
   return Math.min(MAX_THREE_MF_COLOR_COUNT, Math.max(1, Math.round(value)));
+}
+
+export type ThreeMfColorDetailSettings = {
+  smoothingIterations: number;
+  smallColorIslandTriangleCount: number;
+  similarColorIslandDistanceSquared: number;
+  /** Subdivide textured triangles for color detail even without a target palette. */
+  forceTextureDetail: boolean;
+  textureDetailSubdivisionPixelSpan: number;
+  textureDetailMaxSubdivisionLevel: number;
+};
+
+export function clampThreeMfColorDetail(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_THREE_MF_COLOR_DETAIL;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+export function getThreeMfColorDetailSettings(
+  colorDetail: number,
+): ThreeMfColorDetailSettings {
+  const detail = clampThreeMfColorDetail(colorDetail);
+  // Piecewise-linear between the roughest setting (0), the historical fixed
+  // behavior (50) and the most detailed setting (100), so the default slider
+  // position reproduces existing exports bit-for-bit.
+  const blend = (rough: number, base: number, fine: number): number =>
+    detail <= 50
+      ? rough + ((base - rough) * detail) / 50
+      : base + ((fine - base) * (detail - 50)) / 50;
+
+  return {
+    smoothingIterations: Math.round(blend(5, 3, 0)),
+    smallColorIslandTriangleCount: Math.round(
+      blend(120, SMALL_COLOR_ISLAND_TRIANGLE_COUNT, 0),
+    ),
+    similarColorIslandDistanceSquared: blend(
+      0.2,
+      SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED,
+      0,
+    ),
+    forceTextureDetail: detail > 50,
+    textureDetailSubdivisionPixelSpan: Math.round(
+      blend(
+        TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN,
+        TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN,
+        20,
+      ),
+    ),
+    textureDetailMaxSubdivisionLevel: Math.round(
+      blend(
+        TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL,
+        TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL,
+        5,
+      ),
+    ),
+  };
 }
 
 export function buildThreeMfContentTypesXml(): string {
@@ -396,23 +460,40 @@ function repeatFlushVolumeVector(filamentCount: number): string[] {
   return Array.from({ length: filamentCount * 2 }, () => '140');
 }
 
-export async function createThreeMfBlobFromScene({
+export type ThreeMfColoredMesh = {
+  /**
+   * Vertices in three.js (y-up) world coordinates. The 3MF z-up axis
+   * conversion happens when the mesh is packaged into a blob, so this same
+   * data can drive an on-screen preview directly.
+   */
+  vertices: VectorTuple[];
+  triangles: ThreeMfTriangle[];
+  palette: string[];
+};
+
+export async function computeThreeMfColoredMesh({
   scene,
-  filename,
   colorCount,
+  colorDetail = DEFAULT_THREE_MF_COLOR_DETAIL,
   semanticMaterialMap,
   targetMaterialPalette,
 }: {
   scene: THREE.Scene;
-  filename: string;
   colorCount: number;
+  colorDetail?: number;
   semanticMaterialMap?: ThreeMfSemanticMaterialMap | null;
   targetMaterialPalette?: ThreeMfTargetMaterialPalette | null;
-}): Promise<Blob> {
+}): Promise<ThreeMfColoredMesh> {
   const targetColorCount = clampThreeMfColorCount(colorCount);
+  const detailSettings = getThreeMfColorDetailSettings(colorDetail);
   const sourceGeometry = applySemanticMaterialMap(
     extractSceneGeometry(scene, {
-      preserveTextureDetail: Boolean(targetMaterialPalette),
+      preserveTextureDetail:
+        Boolean(targetMaterialPalette) || detailSettings.forceTextureDetail,
+      textureDetailSubdivisionPixelSpan:
+        detailSettings.textureDetailSubdivisionPixelSpan,
+      textureDetailMaxSubdivisionLevel:
+        detailSettings.textureDetailMaxSubdivisionLevel,
     }),
     semanticMaterialMap,
   );
@@ -476,7 +557,7 @@ export async function createThreeMfBlobFromScene({
   let outputTriangles =
     semanticAssignments || hasAuthoritativeSemanticMaterialIds
       ? recoveredTriangles
-      : smoothTriangleColorIndexes(recoveredTriangles, palette);
+      : smoothTriangleColorIndexes(recoveredTriangles, palette, detailSettings);
   if (shouldRecoverTargetPaletteRegions) {
     outputTriangles = recoverRaisedBadgeLetterRegions(
       outputTriangles,
@@ -489,11 +570,25 @@ export async function createThreeMfBlobFromScene({
     outputTriangles,
   );
 
-  const objectModelXml = buildThreeMfModelXml({
-    modelName: filename,
-    vertices: convertThreeJsVerticesToThreeMfVertices(geometry.vertices),
+  return {
+    vertices: geometry.vertices,
     triangles,
     palette: usedPalette.map(colorToHex),
+  };
+}
+
+export async function createThreeMfBlobFromColoredMesh({
+  coloredMesh,
+  filename,
+}: {
+  coloredMesh: ThreeMfColoredMesh;
+  filename: string;
+}): Promise<Blob> {
+  const objectModelXml = buildThreeMfModelXml({
+    modelName: filename,
+    vertices: convertThreeJsVerticesToThreeMfVertices(coloredMesh.vertices),
+    triangles: coloredMesh.triangles,
+    palette: coloredMesh.palette,
   });
 
   const packageParts = {
@@ -505,7 +600,7 @@ export async function createThreeMfBlobFromScene({
     modelSettingsConfig: buildThreeMfModelSettingsConfig(filename),
     sliceInfoConfig: buildThreeMfSliceInfoConfig(),
     projectSettingsConfig: buildThreeMfProjectSettingsConfig(
-      usedPalette.map(colorToHex),
+      coloredMesh.palette,
     ),
   };
   validateThreeMfPackageParts(packageParts);
@@ -513,6 +608,32 @@ export async function createThreeMfBlobFromScene({
   const blob = await createThreeMfPackage(packageParts);
   await validateThreeMfBlob(blob);
   return blob;
+}
+
+export async function createThreeMfBlobFromScene({
+  scene,
+  filename,
+  colorCount,
+  colorDetail = DEFAULT_THREE_MF_COLOR_DETAIL,
+  semanticMaterialMap,
+  targetMaterialPalette,
+}: {
+  scene: THREE.Scene;
+  filename: string;
+  colorCount: number;
+  colorDetail?: number;
+  semanticMaterialMap?: ThreeMfSemanticMaterialMap | null;
+  targetMaterialPalette?: ThreeMfTargetMaterialPalette | null;
+}): Promise<Blob> {
+  const coloredMesh = await computeThreeMfColoredMesh({
+    scene,
+    colorCount,
+    colorDetail,
+    semanticMaterialMap,
+    targetMaterialPalette,
+  });
+
+  return createThreeMfBlobFromColoredMesh({ coloredMesh, filename });
 }
 
 function convertThreeJsVerticesToThreeMfVertices(
@@ -912,8 +1033,12 @@ function extractSceneGeometry(
   scene: THREE.Scene,
   {
     preserveTextureDetail = false,
+    textureDetailSubdivisionPixelSpan = TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN,
+    textureDetailMaxSubdivisionLevel = TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL,
   }: {
     preserveTextureDetail?: boolean;
+    textureDetailSubdivisionPixelSpan?: number;
+    textureDetailMaxSubdivisionLevel?: number;
   } = {},
 ): SceneGeometry {
   const vertices: VectorTuple[] = [];
@@ -947,6 +1072,8 @@ function extractSceneGeometry(
           uvAttribute,
           position,
           matrixWorld,
+          subdivisionPixelSpan: textureDetailSubdivisionPixelSpan,
+          maxSubdivisionLevel: textureDetailMaxSubdivisionLevel,
         })
       : null;
 
@@ -1109,7 +1236,8 @@ async function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
 ): Promise<RepairedSceneGeometry> {
   const fallbackGeometry = repairSceneGeometryTopology(geometry);
-  const manifoldGeometry = await repairSceneGeometryWithManifoldFilter(geometry);
+  const manifoldGeometry =
+    await repairSceneGeometryWithManifoldFilter(geometry);
   if (!manifoldGeometry) {
     return fallbackGeometry;
   }
@@ -1187,9 +1315,8 @@ function repairSceneGeometryTopology(
     weldedGeometry.vertices,
     repairedTriangles,
   );
-  const orientedTriangles = orientRepairedTrianglesConsistently(
-    sealedTriangles,
-  );
+  const orientedTriangles =
+    orientRepairedTrianglesConsistently(sealedTriangles);
   const outputTriangles =
     countSameDirectionSharedTriangleEdges(orientedTriangles) <=
     countSameDirectionSharedTriangleEdges(sealedTriangles)
@@ -1237,7 +1364,10 @@ async function repairSceneGeometryWithManifoldFilter(
       ? removeManifoldFilterArtifactTriangles(repairedGeometry, geometry)
       : null;
   } catch (error) {
-    console.warn('3MF manifold repair filter failed; using local repair only.', error);
+    console.warn(
+      '3MF manifold repair filter failed; using local repair only.',
+      error,
+    );
     return null;
   }
 }
@@ -1287,7 +1417,9 @@ function removeManifoldFilterArtifactTriangles(
               [triangle.v1, triangle.v2],
               [triangle.v2, triangle.v3],
               [triangle.v3, triangle.v1],
-            ].some(([a, b]) => getEdgeKey(a, b) === getEdgeKey(edgeUse.a, edgeUse.b))
+            ].some(
+              ([a, b]) => getEdgeKey(a, b) === getEdgeKey(edgeUse.a, edgeUse.b),
+            )
               ? triangleIndex
               : -1,
           )
@@ -1363,7 +1495,9 @@ function buildItkTriangleMesh(
   return mesh;
 }
 
-function convertItkTriangleMesh(mesh: ItkMesh | undefined): RepairedSceneGeometry | null {
+function convertItkTriangleMesh(
+  mesh: ItkMesh | undefined,
+): RepairedSceneGeometry | null {
   if (!mesh?.points || !mesh.cells || mesh.numberOfPoints <= 0) {
     return null;
   }
@@ -1403,10 +1537,14 @@ function convertItkTriangleMesh(mesh: ItkMesh | undefined): RepairedSceneGeometr
 function orientRepairedTrianglesConsistently(
   triangles: RepairedSceneGeometry['triangles'],
 ): RepairedSceneGeometry['triangles'] {
-  const adjacency = Array.from({ length: triangles.length }, () => [] as Array<{
-    neighborIndex: number;
-    shouldFlipRelative: boolean;
-  }>);
+  const adjacency = Array.from(
+    { length: triangles.length },
+    () =>
+      [] as Array<{
+        neighborIndex: number;
+        shouldFlipRelative: boolean;
+      }>,
+  );
   const edgeUses = new Map<
     string,
     Array<{ triangleIndex: number; direction: 1 | -1 }>
@@ -1445,7 +1583,11 @@ function orientRepairedTrianglesConsistently(
   }
 
   const shouldFlip = new Array<boolean | undefined>(triangles.length);
-  for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
+  for (
+    let triangleIndex = 0;
+    triangleIndex < triangles.length;
+    triangleIndex += 1
+  ) {
     if (shouldFlip[triangleIndex] !== undefined) {
       continue;
     }
@@ -1459,8 +1601,7 @@ function orientRepairedTrianglesConsistently(
       for (const { neighborIndex, shouldFlipRelative } of adjacency[
         currentIndex
       ]) {
-        const neighborShouldFlip =
-          currentShouldFlip !== shouldFlipRelative;
+        const neighborShouldFlip = currentShouldFlip !== shouldFlipRelative;
         if (shouldFlip[neighborIndex] === undefined) {
           shouldFlip[neighborIndex] = neighborShouldFlip;
           stack.push(neighborIndex);
@@ -1514,7 +1655,12 @@ function fillBoundaryTriangleLoops(
     }
     const loopEdgeKeys = getLoopEdgeKeys(loop);
     if (
-      !shouldFillBoundaryLoop(vertices, triangles, loop, candidateCapTriangles) ||
+      !shouldFillBoundaryLoop(
+        vertices,
+        triangles,
+        loop,
+        candidateCapTriangles,
+      ) ||
       !isBoundaryLoopCapTopologySafe(
         candidateCapTriangles,
         sourceEdgeUseCounts,
@@ -1548,7 +1694,9 @@ function orientCapTrianglesForSharedEdges(
   sourceTriangles: RepairedSceneGeometry['triangles'],
   capTriangles: RepairedSceneGeometry['triangles'],
 ): RepairedSceneGeometry['triangles'] {
-  const orientedCapTriangles = capTriangles.map((triangle) => ({ ...triangle }));
+  const orientedCapTriangles = capTriangles.map((triangle) => ({
+    ...triangle,
+  }));
   for (let iteration = 0; iteration < 2; iteration += 1) {
     let changed = false;
     for (
@@ -1588,10 +1736,7 @@ function orientCapTrianglesForSharedEdges(
 function countSameDirectionSharedTriangleEdges(
   triangles: RepairedSceneGeometry['triangles'],
 ): number {
-  const edgeUses = new Map<
-    string,
-    Array<{ a: number; b: number }>
-  >();
+  const edgeUses = new Map<string, Array<{ a: number; b: number }>>();
   for (const triangle of triangles) {
     for (const [a, b] of [
       [triangle.v1, triangle.v2],
@@ -1687,7 +1832,10 @@ function shouldFillBoundaryLoop(
   );
 }
 
-function getBoundaryLoopMaxSpan(vertices: VectorTuple[], loop: number[]): number {
+function getBoundaryLoopMaxSpan(
+  vertices: VectorTuple[],
+  loop: number[],
+): number {
   const bounds = loop.reduce(
     (currentBounds, vertexIndex) => {
       const vertex = vertices[vertexIndex];
@@ -2209,7 +2357,10 @@ function buildSourceTriangleSpatialLookup(
     bounds.max[2] - bounds.min[2],
     THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM,
   );
-  const cellSize = Math.max(largestSpan / 64, THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM);
+  const cellSize = Math.max(
+    largestSpan / 64,
+    THREE_MF_REPAIR_VERTEX_WELD_TOLERANCE_MM,
+  );
   const centroids: THREE.Vector3[] = [];
   const cells = new Map<string, number[]>();
   const semanticCells = new Map<string, number[]>();
@@ -3107,22 +3258,34 @@ function normalizeSemanticColor(color: string): string | null {
 function smoothTriangleColorIndexes(
   triangles: ThreeMfTriangle[],
   palette: THREE.Color[],
+  {
+    smoothingIterations = 3,
+    smallColorIslandTriangleCount = SMALL_COLOR_ISLAND_TRIANGLE_COUNT,
+    similarColorIslandDistanceSquared = SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED,
+  }: {
+    smoothingIterations?: number;
+    smallColorIslandTriangleCount?: number;
+    similarColorIslandDistanceSquared?: number;
+  } = {},
 ): ThreeMfTriangle[] {
-  if (triangles.length === 0 || palette.length <= 1) {
+  if (
+    triangles.length === 0 ||
+    palette.length <= 1 ||
+    smoothingIterations <= 0 ||
+    smallColorIslandTriangleCount <= 0
+  ) {
     return triangles;
   }
 
   const adjacency = buildTriangleAdjacency(triangles);
   const colorIndexes = triangles.map((triangle) => triangle.colorIndex);
 
-  for (let iteration = 0; iteration < 3; iteration += 1) {
+  for (let iteration = 0; iteration < smoothingIterations; iteration += 1) {
     let changed = false;
     const components = getSameColorTriangleComponents(colorIndexes, adjacency);
 
     for (const component of components) {
-      if (
-        component.triangleIndexes.length > SMALL_COLOR_ISLAND_TRIANGLE_COUNT
-      ) {
+      if (component.triangleIndexes.length > smallColorIslandTriangleCount) {
         continue;
       }
 
@@ -3151,7 +3314,7 @@ function smoothTriangleColorIndexes(
         colorDistanceSquared(
           palette[component.colorIndex],
           palette[replacementColorIndex],
-        ) <= SIMILAR_COLOR_ISLAND_DISTANCE_SQUARED;
+        ) <= similarColorIslandDistanceSquared;
       if (!isSimilarColorIsland) {
         continue;
       }
@@ -3513,6 +3676,8 @@ function buildTextureDetailEdgeSegments({
   uvAttribute,
   position,
   matrixWorld,
+  subdivisionPixelSpan = TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN,
+  maxSubdivisionLevel = TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL,
 }: {
   geometry: THREE.BufferGeometry;
   groups: Array<{ start: number; count: number; materialIndex?: number }>;
@@ -3520,6 +3685,8 @@ function buildTextureDetailEdgeSegments({
   uvAttribute?: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
   position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
   matrixWorld: THREE.Matrix4;
+  subdivisionPixelSpan?: number;
+  maxSubdivisionLevel?: number;
 }): Map<string, number> | null {
   if (!uvAttribute) {
     return null;
@@ -3558,6 +3725,8 @@ function buildTextureDetailEdgeSegments({
       ] as Array<[number, number]>) {
         const segmentCount = getTextureDetailSegmentCount(
           getUvPixelDistance(pixels, uvs[leftIndex], uvs[rightIndex]),
+          subdivisionPixelSpan,
+          maxSubdivisionLevel,
         );
         if (segmentCount <= 1) {
           continue;
@@ -3578,13 +3747,17 @@ function buildTextureDetailEdgeSegments({
   return edgeSegments.size > 0 ? edgeSegments : null;
 }
 
-function getTextureDetailSegmentCount(pixelDistance: number): number {
+function getTextureDetailSegmentCount(
+  pixelDistance: number,
+  subdivisionPixelSpan: number = TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN,
+  maxSubdivisionLevel: number = TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL,
+): number {
   let segmentCount = 1;
   let reducedDistance = pixelDistance;
 
   while (
-    reducedDistance > TEXTURE_DETAIL_SUBDIVISION_PIXEL_SPAN &&
-    segmentCount < 2 ** TEXTURE_DETAIL_MAX_SUBDIVISION_LEVEL
+    reducedDistance > subdivisionPixelSpan &&
+    segmentCount < 2 ** maxSubdivisionLevel
   ) {
     segmentCount *= 2;
     reducedDistance /= 2;
@@ -3669,13 +3842,11 @@ function getPatchBoundarySplitEdgeIndex(
   let bestPatchEdgeIndex: number | null = null;
   let bestSpan = 1 + 1e-6;
 
-  for (const [patchEdgeIndex, [leftIndex, rightIndex]] of (
-    [
-      [0, [0, 1]],
-      [1, [1, 2]],
-      [2, [2, 0]],
-    ] as Array<[number, [number, number]]>
-  )) {
+  for (const [patchEdgeIndex, [leftIndex, rightIndex]] of [
+    [0, [0, 1]],
+    [1, [1, 2]],
+    [2, [2, 0]],
+  ] as Array<[number, [number, number]]>) {
     const sourceEdgeIndex = getSourceBoundaryEdgeIndex(
       barycentric[leftIndex],
       barycentric[rightIndex],
@@ -3825,7 +3996,10 @@ function splitTexturedTrianglePatch(
   ];
 }
 
-function midpointVectorTuple(left: VectorTuple, right: VectorTuple): VectorTuple {
+function midpointVectorTuple(
+  left: VectorTuple,
+  right: VectorTuple,
+): VectorTuple {
   return [
     (left[0] + right[0]) / 2,
     (left[1] + right[1]) / 2,

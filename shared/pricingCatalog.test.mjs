@@ -77,8 +77,8 @@ assert.deepEqual(
   {
     chat: 10,
     promptGeneration: 10,
-    parametric: 25,
-    parametricCadReasoning: 25,
+    parametric: 15,
+    parametricCadReasoning: 50,
     generatedInputImage: 22,
     generatedInputImageLite: 7,
     multiviewFrontImage: 22,
@@ -100,30 +100,27 @@ assert.ok(
   'Max quality mesh should cost more than draft mesh',
 );
 
-assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 25);
-assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 25);
-assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 25);
-assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 25);
-assert.equal(getParametricModelTokenCost('legacy-model'), 25);
-assert.equal(getParametricBuildTokenCost('google/gemini-3.1-pro-preview'), 25);
-assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.7'), 25);
-assert.equal(getParametricBuildTokenCost('legacy-model', 25), 25);
+assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 15);
+assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 50);
+assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 15);
+assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 15);
+assert.equal(getParametricModelTokenCost('legacy-model'), 15);
+assert.equal(getParametricBuildTokenCost('google/gemini-3.5-flash'), 15);
+assert.equal(getParametricBuildTokenCost('anthropic/claude-fable-5'), 50);
+assert.equal(getParametricBuildTokenCost('legacy-model', 25), 15);
+assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 15);
 assert.equal(
-  getCadBackendTokenCost('openscad', 'google/gemini-3.1-pro-preview'),
-  25,
-);
-assert.equal(
-  getCadBackendTokenCost('text-to-cad', 'google/gemini-3.1-pro-preview'),
-  25,
+  getCadBackendTokenCost('text-to-cad', 'google/gemini-3.5-flash'),
+  15,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
-  25,
+  15,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
-  25,
+  50,
 );
 
-assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);
+assert.equal(pricingViewSource.includes('parametricCadReasoning'), true);
 assert.equal(pricingViewSource.includes('FEATURE_COSTS.upscaleMesh'), false);

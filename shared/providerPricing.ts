@@ -42,8 +42,7 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   // title-generator + creative-chat suggestions (Haiku-class; estimate).
   'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cachedInputPerM: 0.1 },
   // --- OpenRouter slugs ---
-  // Historical parametric model; retained so old provider_usage rows can still
-  // be costed.
+  // Lite/Fast parametric CAD model.
   'google/gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9 },
   // CADAM-aligned parametric-chat agent + code-gen model.
   'google/gemini-3.1-pro-preview': { inputPerM: 1.25, outputPerM: 10 },

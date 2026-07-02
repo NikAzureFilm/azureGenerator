@@ -6,6 +6,7 @@ import {
   geminiImageCostUsd,
   openaiImageCostUsd,
 } from '../shared/providerPricing.ts';
+import { FEATURE_COSTS } from '../shared/tokenCosts.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
@@ -27,21 +28,9 @@ const DEFAULT_UNIT_PRICES = new Map(
   ]),
 );
 
-const CONFIGURED_TOKENS = {
-  chat: 10,
-  promptGeneration: 10,
-  parametric: 25,
-  parametricCadReasoning: 25,
-  generatedInputImage: 22,
-  generatedInputImageLite: 7,
-  multiviewFrontImage: 22,
-  multiviewLiteView: 7,
-  fastMesh: 41,
-  qualityMesh: 34,
-  ultraMesh: 110,
-  multiviewMesh: 61,
-  upscaleMesh: 76,
-};
+const CONFIGURED_TOKENS = Object.fromEntries(
+  Object.entries(FEATURE_COSTS).map(([key, feature]) => [key, feature.tokens]),
+);
 
 const FEATURE_BREAKDOWNS = [
   {
@@ -56,12 +45,12 @@ const FEATURE_BREAKDOWNS = [
   },
   {
     id: 'parametric',
-    label: 'Parametric CAD generation',
+    label: 'Parametric CAD generation - Lite',
     components: [{ name: 'CAD model budget', costUsd: 0.5 }],
   },
   {
     id: 'parametricCadReasoning',
-    label: 'CAD Reasoning generation',
+    label: 'Parametric CAD generation - Premium',
     components: [{ name: 'CAD reasoning budget', costUsd: 1.2 }],
   },
   {

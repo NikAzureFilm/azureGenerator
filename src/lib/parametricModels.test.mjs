@@ -28,44 +28,37 @@ const modelSelectorSource = readFileSync(
   'utf8',
 );
 
-const geminiModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'google/gemini-3.1-pro-preview',
-);
-const fableModel = PARAMETRIC_MODELS.find(
+const premiumModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'anthropic/claude-fable-5',
 );
+const liteModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'google/gemini-3.5-flash',
+);
 
-assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.1-pro-preview');
+assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.1-pro-preview', 'anthropic/claude-fable-5'],
+  ['anthropic/claude-fable-5', 'google/gemini-3.5-flash'],
 );
-assert.ok(geminiModel);
-assert.equal(geminiModel.name, 'Gemini 3.1 Pro');
-assert.equal(geminiModel.tokenCost, 25);
-assert.notEqual(geminiModel.disabled, true);
-assert.ok(fableModel);
-assert.equal(fableModel.name, 'Claude Fable 5');
-assert.equal(fableModel.provider, 'Anthropic');
-assert.equal(fableModel.tokenCost, 25);
-assert.notEqual(fableModel.disabled, true);
-assert.equal(
-  PARAMETRIC_MODELS.some(
-    (model) => model.name === 'Premium' || model.name === 'Lite',
-  ),
-  false,
-);
-assert.equal(
-  normalizeParametricChatModel('google/gemini-3.1-pro-preview'),
-  'google/gemini-3.1-pro-preview',
-);
-assert.equal(
-  normalizeParametricChatModel('google/gemini-3.5-flash'),
-  DEFAULT_PARAMETRIC_MODEL,
-);
+assert.ok(premiumModel);
+assert.equal(premiumModel.name, 'Premium');
+assert.equal(premiumModel.description.includes('Claude'), false);
+assert.equal(premiumModel.description.includes('Fable'), false);
+assert.equal(premiumModel.tokenCost, 50);
+assert.notEqual(premiumModel.disabled, true);
+assert.ok(liteModel);
+assert.equal(liteModel.name, 'Lite');
+assert.equal(liteModel.description.includes('Gemini'), false);
+assert.equal(liteModel.description.includes('Flash'), false);
+assert.equal(liteModel.tokenCost, 15);
+assert.notEqual(liteModel.disabled, true);
 assert.equal(
   normalizeParametricChatModel('anthropic/claude-fable-5'),
   'anthropic/claude-fable-5',
+);
+assert.equal(
+  normalizeParametricChatModel('google/gemini-3.5-flash'),
+  'google/gemini-3.5-flash',
 );
 assert.equal(
   normalizeParametricChatModel('google/gemini-3.1-pro-preview'),

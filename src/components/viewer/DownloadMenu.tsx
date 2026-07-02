@@ -4,9 +4,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { Loader2 } from 'lucide-react';
@@ -28,20 +25,19 @@ import { applyMaterialAdjustments } from '@/utils/meshUtils';
 import { MeshGifPreview } from './MeshGifPreview';
 import { extractAndDownloadTextures } from '@/utils/textureExtraction';
 import {
-  MAX_THREE_MF_COLOR_COUNT,
+  DEFAULT_THREE_MF_COLOR_DETAIL,
+  createThreeMfBlobFromColoredMesh,
   createThreeMfBlobFromScene,
+  type ThreeMfColoredMesh,
   type ThreeMfTargetMaterialPalette,
   type ThreeMfSemanticMaterialMap,
 } from '@/utils/threeMfExport';
+import { ThreeMfColorPrintDialog } from './ThreeMfColorPrintDialog';
 
 // Default values for material controls
 const DEFAULT_BRIGHTNESS = 50;
 const DEFAULT_ROUGHNESS = 50;
 const DEFAULT_NORMAL_INTENSITY = 100;
-const THREE_MF_COLOR_OPTIONS = Array.from(
-  { length: MAX_THREE_MF_COLOR_COUNT },
-  (_, index) => index + 1,
-);
 
 function getThreeMfSemanticMaterialMap(
   value: unknown,
@@ -119,6 +115,7 @@ export function DownloadMenu({
   const isMobile = useIsMobile();
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isColorPrintDialogOpen, setIsColorPrintDialogOpen] = useState(false);
 
   // GIF generation state
   const [_isGifGenerating, setIsGifGenerating] = useState(false);
@@ -152,6 +149,10 @@ export function DownloadMenu({
   const semanticMaterialMap = useMemo(
     () => getThreeMfSemanticMaterialMap(meshData.prompt.semanticMaterialMap),
     [meshData.prompt.semanticMaterialMap],
+  );
+  const targetMaterialPalette = useMemo(
+    () => getThreeMfTargetMaterialPalette({ semanticMaterialMap }),
+    [semanticMaterialMap],
   );
 
   const downloadSTL = useCallback(() => {
@@ -202,13 +203,23 @@ export function DownloadMenu({
   }, [gltf, toast, filename, meshData, conversation.id]);
 
   const download3MF = useCallback(
-    (colorCount: number) => {
+    (
+      colorCount: number,
+      {
+        colorDetail = DEFAULT_THREE_MF_COLOR_DETAIL,
+        coloredMesh,
+      }: {
+        colorDetail?: number;
+        coloredMesh?: ThreeMfColoredMesh;
+      } = {},
+    ) => {
       posthog.capture('3d_model_download', {
         meshId: meshData.id,
         model_name: meshData?.prompt.model || 'Unknown Model',
         format: '3MF_MULTI_COLOR',
         conversation_id: conversation.id,
         color_count: colorCount,
+        color_detail: colorDetail,
       });
 
       setIsDownloading3MF(true);
@@ -216,16 +227,38 @@ export function DownloadMenu({
 
       setTimeout(async () => {
         try {
-          const processedScene = await processUserModelForDownload(gltf);
-          const threeMfBlob = await createThreeMfBlobFromScene({
-            scene: processedScene,
-            filename,
-            colorCount,
-            semanticMaterialMap,
-            targetMaterialPalette: getThreeMfTargetMaterialPalette({
+          let threeMfBlob: Blob;
+          if (coloredMesh) {
+            // The color print dialog already computed the colored mesh for
+            // its preview; package exactly what the user saw.
+            threeMfBlob = await createThreeMfBlobFromColoredMesh({
+              coloredMesh,
+              filename,
+            });
+          } else {
+            const processedScene = await processUserModelForDownload(gltf);
+            threeMfBlob = await createThreeMfBlobFromScene({
+              scene: processedScene,
+              filename,
+              colorCount,
+              colorDetail,
               semanticMaterialMap,
-            }),
-          });
+              targetMaterialPalette: getThreeMfTargetMaterialPalette({
+                semanticMaterialMap,
+              }),
+            });
+
+            processedScene.traverse((child) => {
+              if (child instanceof THREE.Mesh) {
+                child.geometry.dispose();
+                if (Array.isArray(child.material)) {
+                  child.material.forEach((mat) => mat.dispose());
+                } else {
+                  child.material.dispose();
+                }
+              }
+            });
+          }
 
           const url = URL.createObjectURL(threeMfBlob);
           const a = document.createElement('a');
@@ -235,23 +268,13 @@ export function DownloadMenu({
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-
-          processedScene.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-              child.geometry.dispose();
-              if (Array.isArray(child.material)) {
-                child.material.forEach((mat) => mat.dispose());
-              } else {
-                child.material.dispose();
-              }
-            }
-          });
         } catch (error) {
           Sentry.captureException(error, {
             extra: {
               meshId: meshData.id,
               format: '3MF_MULTI_COLOR',
               color_count: colorCount,
+              color_detail: colorDetail,
             },
           });
           toast({
@@ -262,6 +285,7 @@ export function DownloadMenu({
         } finally {
           setIsDownloading3MF(false);
           setIsDropdownOpen(false);
+          setIsColorPrintDialogOpen(false);
         }
       }, 0);
     },
@@ -778,38 +802,27 @@ export function DownloadMenu({
             </span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger
-              className="cursor-pointer text-adam-text-primary"
-              disabled={isDownloading3MF}
-            >
-              {isDownloading3MF ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              <span className="text-sm">.3MF</span>
-              <span className="ml-3 text-xs text-adam-text-primary/60">
-                {isDownloading3MF ? 'Downloading...' : 'Color print'}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              {THREE_MF_COLOR_OPTIONS.map((colorCount) => (
-                <DropdownMenuItem
-                  key={colorCount}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    download3MF(colorCount);
-                  }}
-                  className="cursor-pointer text-adam-text-primary"
-                  disabled={isDownloading3MF}
-                >
-                  <span className="text-sm">{colorCount}</span>
-                  <span className="ml-3 text-xs text-adam-text-primary/60">
-                    {colorCount === 1 ? 'color' : 'colors'}
-                  </span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.preventDefault();
+              posthog.capture('3mf_color_print_dialog_open', {
+                meshId: meshData.id,
+                conversation_id: conversation.id,
+              });
+              setIsDropdownOpen(false);
+              setIsColorPrintDialogOpen(true);
+            }}
+            className="cursor-pointer text-adam-text-primary"
+            disabled={isDownloading3MF}
+          >
+            {isDownloading3MF ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            <span className="text-sm">.3MF</span>
+            <span className="ml-3 text-xs text-adam-text-primary/60">
+              {isDownloading3MF ? 'Downloading...' : 'Color print'}
+            </span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
@@ -887,6 +900,17 @@ export function DownloadMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <ThreeMfColorPrintDialog
+        open={isColorPrintDialogOpen}
+        onOpenChange={setIsColorPrintDialogOpen}
+        gltf={gltf}
+        semanticMaterialMap={semanticMaterialMap}
+        targetMaterialPalette={targetMaterialPalette}
+        isDownloading={isDownloading3MF}
+        onDownload={({ colorCount, colorDetail, coloredMesh }) =>
+          download3MF(colorCount, { colorDetail, coloredMesh })
+        }
+      />
       <div
         className="pointer-events-none fixed -left-[1000px] -top-[1000px] z-[-1]"
         style={{

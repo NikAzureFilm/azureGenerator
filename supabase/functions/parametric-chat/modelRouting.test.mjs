@@ -46,7 +46,7 @@ assert.match(
 assert.match(
   source,
   /const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000/,
-  'Gemini 3.1 Pro code generation should use a larger bounded token budget for CADAM-style OpenSCAD',
+  'Gemini Flash code generation should use a larger bounded token budget for CADAM-style OpenSCAD',
 );
 assert.match(
   source,

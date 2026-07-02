@@ -2,6 +2,7 @@ import { FEATURE_COSTS } from '../../shared/tokenCosts.ts';
 import {
   CLAUDE_FABLE_5_MODEL,
   DEFAULT_CODE_GENERATION_MODEL,
+  GEMINI_35_FLASH_MODEL,
 } from '../../shared/parametricRouting.ts';
 import type { ModelConfig } from '../types/misc.ts';
 
@@ -9,20 +10,20 @@ export const DEFAULT_PARAMETRIC_MODEL = DEFAULT_CODE_GENERATION_MODEL;
 
 export const PARAMETRIC_MODELS: ModelConfig[] = [
   {
-    id: DEFAULT_CODE_GENERATION_MODEL,
-    name: 'Gemini 3.1 Pro',
-    description: 'CADAM-style CAD generation with Google Gemini 3.1 Pro',
-    provider: 'Google',
+    id: CLAUDE_FABLE_5_MODEL,
+    name: 'Premium',
+    description: 'Best reasoning for complex CAD generation',
+    provider: 'Anthropic',
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametric.tokens,
+    tokenCost: FEATURE_COSTS.parametricCadReasoning.tokens,
   },
   {
-    id: CLAUDE_FABLE_5_MODEL,
-    name: 'Claude Fable 5',
-    description: 'Deep Anthropic reasoning for complex CAD at higher cost',
-    provider: 'Anthropic',
+    id: GEMINI_35_FLASH_MODEL,
+    name: 'Lite',
+    description: 'Fast CAD drafts at lower token cost',
+    provider: 'Google',
     supportsTools: true,
     supportsThinking: true,
     supportsVision: true,
