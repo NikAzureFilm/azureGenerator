@@ -54,6 +54,7 @@ export const config = {
     '/',
     '/users/:path*',
     '/costs',
+    '/providers',
     '/retention',
     '/generations/:path*',
     '/conversations/:path*',

@@ -6,7 +6,11 @@ import {
   fetchCostDaily,
   tokenCostUsd,
 } from '@/lib/metrics';
-import { PLAN_DISPLAY } from '@/lib/pricing';
+import {
+  PLAN_DISPLAY,
+  TOKEN_INTERNAL_USD_COST,
+  TOKEN_USD_VALUE,
+} from '@/lib/pricing';
 import {
   absoluteTime,
   bytes,
@@ -73,6 +77,56 @@ export default async function CostsPage({
     totals.costUsd > 0 ? totals.failedCostUsd / totals.costUsd : 0;
   const avgCallUsd = totals.calls > 0 ? totals.costUsd / totals.calls : 0;
   const storage = explorer.storage;
+
+  // --- Windowed token economics -------------------------------------------
+  // fetchCostDaily returns est_cost_usd = consumed_tokens × $0.01 per day, so
+  // for windows the daily series fully covers (<= 90d) the windowed consumed
+  // token count is sum(est_cost_usd) / 0.01. For larger windows (1y / all) the
+  // daily series is capped at 90 days, so fall back to lifetime totals and label
+  // the figures accordingly.
+  const windowCoveredByDaily =
+    windowChoice.days != null && windowChoice.days <= 90;
+  const lifetimeConsumedTokens = Object.values(tokenOps).reduce(
+    (s, t) => s + t,
+    0,
+  );
+  const dailyEstUsd = daily.reduce((s, d) => s + (d.est_cost_usd ?? 0), 0);
+  const consumedTokens = windowCoveredByDaily
+    ? Math.round(dailyEstUsd / TOKEN_INTERNAL_USD_COST)
+    : lifetimeConsumedTokens;
+  const economicsLabel = windowCoveredByDaily ? label : 'lifetime';
+  const chargedValueUsd = consumedTokens * TOKEN_USD_VALUE;
+  // Provider cost must share the SAME source and bucketing as chargedValueUsd
+  // (both derived from admin_cost_daily's calendar-day series) so the margin
+  // spans align. For the lifetime fallback use the breakdown's lifetime cost.
+  const dailyActualUsd = daily.reduce(
+    (s, d) => s + (d.actual_cost_usd ?? 0),
+    0,
+  );
+  const economicsCostUsd = windowCoveredByDaily
+    ? dailyActualUsd
+    : lifetimeCostUsd;
+  const grossMarginUsd = chargedValueUsd - economicsCostUsd;
+  const grossMarginPct =
+    chargedValueUsd > 0 ? grossMarginUsd / chargedValueUsd : 0;
+
+  // --- Spend spikes: days whose actual cost is > 2x the trailing-7d average
+  // and > $1 absolute (to skip quiet-day noise). Computed from the daily series.
+  const spikes: { day: string; costUsd: number; multiple: number }[] = [];
+  for (let i = 0; i < daily.length; i++) {
+    const today = daily[i].actual_cost_usd ?? 0;
+    if (today <= 1) continue;
+    const window = daily.slice(Math.max(0, i - 7), i);
+    if (window.length === 0) continue;
+    const avg =
+      window.reduce((s, d) => s + (d.actual_cost_usd ?? 0), 0) / window.length;
+    if (avg <= 0) continue;
+    const multiple = today / avg;
+    if (multiple > 2) {
+      spikes.push({ day: daily[i].day, costUsd: today, multiple });
+    }
+  }
+  spikes.sort((a, b) => b.costUsd - a.costUsd);
 
   return (
     <div className="wrap wide">
@@ -163,7 +217,52 @@ export default async function CostsPage({
             </>
           }
         />
+        <Kpi
+          label={`Token value charged (${economicsLabel})`}
+          value={usdFromDollars(chargedValueUsd)}
+          sub={
+            <>
+              <b>{num(consumedTokens)}</b> tok × ${TOKEN_USD_VALUE}
+              {!windowCoveredByDaily && ' · lifetime'}
+            </>
+          }
+        />
+        <Kpi
+          label={`Gross margin (${economicsLabel})`}
+          value={usdFromDollars(grossMarginUsd)}
+          sub={
+            <>
+              {chargedValueUsd > 0 ? (
+                <b className={grossMarginUsd >= 0 ? 'up' : 'down'}>
+                  {pct(grossMarginPct)}
+                </b>
+              ) : (
+                '—'
+              )}{' '}
+              charged − {usdFromDollars(economicsCostUsd)} cost
+            </>
+          }
+        />
       </div>
+
+      {spikes.length > 0 && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="label">
+            Spend spikes (day &gt; 2× trailing-7d average, &gt; $1)
+          </div>
+          <div style={{ marginTop: 10 }}>
+            {spikes.map((s) => (
+              <div className="kv" key={s.day}>
+                <span className="k mono">{s.day}</span>
+                <span className="mono">
+                  {usdFromDollars(s.costUsd)}{' '}
+                  <span className="down">{s.multiple.toFixed(1)}×</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 14 }}>
         <CostChart data={daily} />

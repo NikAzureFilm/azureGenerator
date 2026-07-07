@@ -10,11 +10,18 @@ import {
 } from '@/lib/metrics';
 import { generationKindLabel } from '@/lib/content';
 import { PLAN_DISPLAY } from '@/lib/pricing';
-import { usd, usdFromDollars, num, relativeTime } from '@/lib/format';
+import {
+  usd,
+  usdFromDollars,
+  num,
+  operationLabel,
+  relativeTime,
+} from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import Nav from '@/app/components/Nav';
 import Kpi from '@/app/components/Kpi';
 import StatusBadge from '@/app/components/StatusBadge';
+import TokenAdjust from '@/app/components/TokenAdjust';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -216,6 +223,11 @@ export default async function UserDetailPage({
         </div>
       </div>
 
+      {/* Manual token adjustment */}
+      <div style={{ marginTop: 14 }}>
+        <TokenAdjust userId={profile.user_id} />
+      </div>
+
       {/* Recent generations */}
       <div className="section-title">Generated content</div>
       <div className="card table-card">
@@ -345,7 +357,7 @@ export default async function UserDetailPage({
                       className="badge"
                       style={{ textTransform: 'capitalize' }}
                     >
-                      {t.operation}
+                      {operationLabel(t.operation)}
                     </span>
                   </td>
                   <td className={`right mono ${t.amount < 0 ? 'down' : 'up'}`}>

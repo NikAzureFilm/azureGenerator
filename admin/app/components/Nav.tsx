@@ -8,6 +8,7 @@ const LINKS: { key: string; href: string; label: string }[] = [
   { key: 'users', href: '/users', label: 'Users' },
   { key: 'generations', href: '/generations', label: 'Generations' },
   { key: 'costs', href: '/costs', label: 'Costs' },
+  { key: 'providers', href: '/providers', label: 'Providers' },
   { key: 'retention', href: '/retention', label: 'Retention' },
   { key: 'resources', href: '/resources', label: 'Resources' },
 ];

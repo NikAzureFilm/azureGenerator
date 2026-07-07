@@ -849,6 +849,193 @@ th .arrow {
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* =========================================================================
+   Providers page — budget bars, status pills, inline budget editor.
+   ========================================================================= */
+.budgetbar {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  margin: 8px 0 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.budgetbar .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--accent);
+  min-width: 2px;
+  transition: width 0.15s;
+}
+.budgetbar .fill.warn {
+  background: var(--amber);
+}
+.budgetbar .fill.over {
+  background: var(--red);
+}
+/* Non-interactive provider status pill (distinct from the clickable .pill;
+   no hover affordance). */
+.statuspill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.statuspill.ok {
+  color: var(--green);
+  border-color: #1f3d2a;
+  background: #11231a;
+}
+.statuspill.warn {
+  color: var(--amber);
+  border-color: #3d3417;
+  background: #231f11;
+}
+.statuspill.over {
+  color: var(--red);
+  border-color: #3d1f1f;
+  background: #231111;
+}
+.statuspill.none {
+  color: var(--muted);
+}
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+@media (max-width: 900px) {
+  .provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.provider-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.provider-name {
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.budget-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.budget-editor input {
+  width: 120px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.budget-editor input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.budget-editor .prefix {
+  color: var(--muted);
+  font-size: 13px;
+}
+.budget-editor .err {
+  color: var(--red);
+  font-size: 12px;
+  flex-basis: 100%;
+}
+.provider-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  margin-top: 12px;
+}
+.provider-metrics .kv {
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+/* =========================================================================
+   Token adjustment panel (user detail page).
+   ========================================================================= */
+.token-adjust {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+.token-adjust-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+}
+.token-adjust label {
+  display: grid;
+  gap: 6px;
+}
+.token-adjust label .k {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.token-adjust input[type='number'],
+.token-adjust input[type='text'] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.token-adjust input[type='number'] {
+  width: 140px;
+}
+.token-adjust input:focus,
+.token-adjust .select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.token-adjust-radios {
+  display: flex;
+  gap: 14px;
+  padding-bottom: 9px;
+}
+.token-adjust-radios label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.token-adjust-note input {
+  width: 100%;
+}
+.token-adjust-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+}
+.token-adjust-result {
+  font-size: 13px;
+  color: var(--muted);
+}
+.token-adjust-result b {
+  color: var(--text);
+}
+
 /* funnel bars */
 .fbar-row {
   display: flex;

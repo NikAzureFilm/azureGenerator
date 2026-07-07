@@ -61,6 +61,18 @@ export function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+// Human label for a token_transactions.operation value. Most operations render
+// fine with CSS capitalize, but underscored enum values (e.g. admin_adjustment)
+// need the underscore turned into a space first.
+export function operationLabel(operation: string): string {
+  switch (operation) {
+    case 'admin_adjustment':
+      return 'admin adjustment';
+    default:
+      return operation.replace(/_/g, ' ');
+  }
+}
+
 export function shortDate(iso: string): string {
   return new Date(`${iso}T00:00:00.000Z`).toLocaleDateString('en-US', {
     month: 'short',

@@ -11,6 +11,7 @@ import {
   tokenValueUsd,
 } from '@/lib/metrics';
 import { getStripeMetrics } from '@/lib/stripe';
+import { fetchBudgetAlerts } from '@/lib/providers';
 import { PLAN_DISPLAY } from '@/lib/pricing';
 import { usd, usdFromDollars, num, pct, relativeTime } from '@/lib/format';
 import { generationKindLabel } from '@/lib/content';
@@ -26,18 +27,28 @@ export const revalidate = 0;
 export default async function DashboardPage() {
   const admin = await requireAdmin();
 
-  const [overview, daily, recent, topUsers, stripe, cost, cadFailures] =
-    await Promise.all([
-      fetchOverview(),
-      fetchDailyActivity(30),
-      fetchRecentGenerations(30),
-      fetchTopUsers(10),
-      getStripeMetrics(),
-      // Resilient: the Overview still renders if admin_explorer.sql isn't applied.
-      fetchCostBreakdown().catch(() => null),
-      // Already returns null on query errors; the catch covers thrown ones.
-      fetchCadFailureBreakdown(30).catch(() => null),
-    ]);
+  const [
+    overview,
+    daily,
+    recent,
+    topUsers,
+    stripe,
+    cost,
+    cadFailures,
+    budgetAlerts,
+  ] = await Promise.all([
+    fetchOverview(),
+    fetchDailyActivity(30),
+    fetchRecentGenerations(30),
+    fetchTopUsers(10),
+    getStripeMetrics(),
+    // Resilient: the Overview still renders if admin_explorer.sql isn't applied.
+    fetchCostBreakdown().catch(() => null),
+    // Already returns null on query errors; the catch covers thrown ones.
+    fetchCadFailureBreakdown(30).catch(() => null),
+    // Never throws (catches internally → []).
+    fetchBudgetAlerts(),
+  ]);
 
   const { users, generations, tokens, revenue } = overview;
 
@@ -74,6 +85,27 @@ export default async function DashboardPage() {
   return (
     <div className="wrap">
       <Nav active="overview" email={admin.email} />
+
+      {budgetAlerts.length > 0 && (
+        <div className="banner">
+          <b>
+            {budgetAlerts.length} provider
+            {budgetAlerts.length === 1 ? '' : 's'} approaching or over budget:
+          </b>{' '}
+          {budgetAlerts.map((a, i) => (
+            <span key={a.provider}>
+              {i > 0 && ', '}
+              <span style={{ textTransform: 'capitalize' }}>
+                {a.provider}
+              </span>{' '}
+              {usdFromDollars(a.mtdCostUsd)}
+              {a.budgetUsd != null && <> of {usdFromDollars(a.budgetUsd)}</>} (
+              {a.status})
+            </span>
+          ))}{' '}
+          · <Link href="/providers">Review providers →</Link>
+        </div>
+      )}
 
       {!stripe && (
         <div className="banner">

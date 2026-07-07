@@ -163,7 +163,7 @@ begin
         + coalesce((select count(*) from public.meshes  m where m.user_id = u.id), 0)
         ) as generations,
         coalesce((select sum(-t.amount) from public.token_transactions t
-                    where t.user_id = u.id and t.amount < 0 and t.operation <> 'refund'), 0) as tokens_consumed,
+                    where t.user_id = u.id and t.amount < 0 and t.operation not in ('refund','admin_adjustment')), 0) as tokens_consumed,
         %s as actual_cost_usd,
         (
           coalesce((select sum(p.price_cents) from public.token_transactions tt
@@ -263,15 +263,15 @@ begin
     ), '{}'::jsonb),
     'tokens', jsonb_build_object(
       'consumed_total', coalesce((select sum(-amount) from token_transactions
-                                    where user_id = p_user_id and amount < 0 and operation <> 'refund'), 0),
+                                    where user_id = p_user_id and amount < 0 and operation not in ('refund','admin_adjustment')), 0),
       'consumed_30d',   coalesce((select sum(-amount) from token_transactions
-                                    where user_id = p_user_id and amount < 0 and operation <> 'refund'
+                                    where user_id = p_user_id and amount < 0 and operation not in ('refund','admin_adjustment')
                                       and created_at >= now() - interval '30 days'), 0),
       'by_operation',   coalesce((
         select jsonb_object_agg(operation, total)
           from (select operation, sum(-amount) as total
                   from token_transactions
-                 where user_id = p_user_id and amount < 0 and operation <> 'refund'
+                 where user_id = p_user_id and amount < 0 and operation not in ('refund','admin_adjustment')
                  group by operation) t
       ), '{}'::jsonb),
       'refunded',       coalesce((select sum(amount) from token_transactions
@@ -768,7 +768,7 @@ begin
       select jsonb_object_agg(operation, total)
         from (select operation, sum(-amount) as total
                 from token_transactions
-               where amount < 0 and operation <> 'refund'
+               where amount < 0 and operation not in ('refund','admin_adjustment')
                group by operation) t
     ), '{}'::jsonb),
     'revenue', jsonb_build_object(
@@ -826,7 +826,7 @@ begin
       coalesce((select sum(p.cost_usd) from pu p where p.day = s.day), 0)::numeric as actual_cost_usd,
       coalesce((select sum(-t.amount) from token_transactions t
                   where (t.created_at at time zone 'UTC')::date = s.day
-                    and t.amount < 0 and t.operation <> 'refund'), 0) * 0.01::numeric as est_cost_usd,
+                    and t.amount < 0 and t.operation not in ('refund','admin_adjustment')), 0) * 0.01::numeric as est_cost_usd,
       coalesce((select sum(pp.price_cents) from token_transactions tt
                   join token_pack_products pp on pp.token_amount = tt.amount
                  where (tt.created_at at time zone 'UTC')::date = s.day
@@ -877,7 +877,7 @@ as $$
                 where date_trunc('week', pr.created_at at time zone 'UTC')::date = s.week), 0) as signups,
     coalesce((select count(distinct t.user_id) from token_transactions t
                 where date_trunc('week', t.created_at at time zone 'UTC')::date = s.week
-                  and t.amount < 0 and t.operation <> 'refund'), 0) as active_users,
+                  and t.amount < 0 and t.operation not in ('refund','admin_adjustment')), 0) as active_users,
     coalesce((select count(*) from subscriptions sub
                 where date_trunc('week', sub.created_at at time zone 'UTC')::date = s.week), 0) as new_subscriptions
   from series s
@@ -952,7 +952,7 @@ as $$
     join token_transactions t
       on t.user_id = c.user_id
      and t.amount < 0
-     and t.operation <> 'refund'
+     and t.operation not in ('refund','admin_adjustment')
     where date_trunc('week', t.created_at at time zone 'UTC')::date >= c.cohort_week
     group by c.cohort_week,
              floor((date_trunc('week', t.created_at at time zone 'UTC')::date - c.cohort_week) / 7)::int

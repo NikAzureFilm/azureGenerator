@@ -27,7 +27,8 @@ as $$
       'new_7d',     (select count(*) from profiles where created_at >= now() - interval '7 days'),
       'new_30d',    (select count(*) from profiles where created_at >= now() - interval '30 days'),
       'active_30d', (select count(distinct user_id) from token_transactions
-                       where created_at >= now() - interval '30 days' and amount < 0),
+                       where created_at >= now() - interval '30 days' and amount < 0
+                         and operation <> 'admin_adjustment'),
       'paying',     (select count(*) from subscriptions where status in ('active','trialing'))
     ),
     'generations', jsonb_build_object(
@@ -45,14 +46,14 @@ as $$
     ),
     'tokens', jsonb_build_object(
       'consumed_total', (select coalesce(sum(-amount),0) from token_transactions
-                           where amount < 0 and operation <> 'refund'),
+                           where amount < 0 and operation not in ('refund','admin_adjustment')),
       'consumed_30d',   (select coalesce(sum(-amount),0) from token_transactions
-                           where amount < 0 and operation <> 'refund'
+                           where amount < 0 and operation not in ('refund','admin_adjustment')
                              and created_at >= now() - interval '30 days'),
       'by_operation',   (select coalesce(jsonb_object_agg(operation, total), '{}'::jsonb)
                            from (select operation, sum(-amount) as total
                                    from token_transactions
-                                  where amount < 0 and operation <> 'refund'
+                                  where amount < 0 and operation not in ('refund','admin_adjustment')
                                   group by operation) t),
       'refunded',             (select coalesce(sum(amount),0) from token_transactions where operation = 'refund'),
       'balance_subscription', (select coalesce(sum(balance),0) from token_balances where source = 'subscription'),
@@ -130,7 +131,7 @@ as $$
     (select count(*) from images    i where (i.created_at at time zone 'UTC')::date = s.day),
     (select coalesce(sum(-amount),0) from token_transactions t
        where (t.created_at at time zone 'UTC')::date = s.day
-         and t.amount < 0 and t.operation <> 'refund')
+         and t.amount < 0 and t.operation not in ('refund','admin_adjustment'))
   from series s
   order by s.day;
 $$;
@@ -195,7 +196,7 @@ as $$
     u.email,
     pr.full_name,
     coalesce((select sum(-amount) from token_transactions t
-                where t.user_id = u.id and t.amount < 0 and t.operation <> 'refund'), 0) as tokens_consumed,
+                where t.user_id = u.id and t.amount < 0 and t.operation not in ('refund','admin_adjustment')), 0) as tokens_consumed,
     coalesce((select count(*) from cad_jobs c where c.user_id = u.id), 0)
       + coalesce((select count(*) from meshes m where m.user_id = u.id), 0) as generations,
     coalesce((select s.level::text from subscriptions s
