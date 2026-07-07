@@ -131,7 +131,7 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         onKeyDown={handleKeyDown}
-        className="max-h-[90vh] w-[95vw] max-w-3xl overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-6 text-adam-text-primary sm:rounded-xl sm:p-8"
+        className="max-h-[92vh] w-[96vw] max-w-6xl overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-6 text-adam-text-primary sm:rounded-xl sm:p-8"
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{slide.title}</DialogTitle>
@@ -141,7 +141,7 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
         {/* Screenshot — fixed ~16:10 container so mixed source sizes look
             uniform. On load failure we hide the img and keep the framed
             container with the slide title only. */}
-        <div className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-lg border border-adam-neutral-800 bg-adam-neutral-950">
+        <div className="relative flex aspect-[1920/930] w-full items-center justify-center overflow-hidden rounded-lg border border-adam-neutral-800 bg-adam-neutral-950">
           {failedImages[index] ? (
             <span className="px-6 text-center text-sm font-medium text-adam-text-secondary">
               {slide.title}
@@ -159,11 +159,11 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
           )}
         </div>
 
-        <div className="mt-5 flex flex-col gap-2">
-          <h2 className="text-lg font-semibold text-adam-text-primary">
+        <div className="mt-6 flex flex-col gap-2">
+          <h2 className="text-2xl font-semibold text-adam-text-primary">
             {slide.title}
           </h2>
-          <p className="text-sm leading-relaxed text-adam-text-secondary">
+          <p className="text-base leading-relaxed text-adam-text-secondary">
             {slide.description}
           </p>
         </div>
