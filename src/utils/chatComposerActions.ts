@@ -1,6 +1,6 @@
 import type { Content, Message } from '@shared/types';
 
-export type ComposerQuickAction = 'continue' | 'edit-output';
+export type ComposerQuickAction = 'edit-output';
 
 export const EDIT_OUTPUT_DRAFT = 'Edit the output: ';
 
@@ -16,9 +16,9 @@ export function getComposerQuickActionDraft(action: ComposerQuickAction) {
 function hasAssistantOutput(content: Content) {
   return Boolean(
     content.text?.trim() ||
-      content.artifact ||
-      content.mesh ||
-      (content.images && content.images.length > 0),
+    content.artifact ||
+    content.mesh ||
+    (content.images && content.images.length > 0),
   );
 }
 

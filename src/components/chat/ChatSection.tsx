@@ -30,7 +30,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
-import { MessageCircle, Pencil, Share } from 'lucide-react';
+import { Pencil, Share } from 'lucide-react';
 import { useMeshData } from '@/hooks/useMeshData';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
@@ -372,16 +372,6 @@ export function ChatSection({
         <div className="w-full min-w-52 max-w-xl bg-transparent px-4 pb-6">
           {showComposerQuickActions && (
             <div className="flex flex-wrap gap-2 pb-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => handleComposerQuickAction('continue')}
-                className="h-8 rounded-full border-adam-neutral-700 bg-adam-neutral-800 px-3 text-xs text-adam-text-primary hover:bg-adam-neutral-700 hover:text-white"
-              >
-                <MessageCircle className="mr-1.5 h-3.5 w-3.5" />
-                Continue
-              </Button>
               <Button
                 type="button"
                 variant="outline"

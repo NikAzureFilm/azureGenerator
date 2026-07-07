@@ -1,8 +1,12 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { Message, Model, Parameter } from '@shared/types';
+import { CreativeModel, Message, Model, Parameter } from '@shared/types';
 import { ModelConfig } from '../types/misc.ts';
-import { getCreativeModelTokenCost } from '@shared/tokenCosts';
+import {
+  FEATURE_COSTS,
+  getCreativeModelTokenCost,
+  getParametricModelTokenCost,
+} from '@shared/tokenCosts';
 import {
   DEFAULT_PARAMETRIC_MODEL,
   PARAMETRIC_MODELS,
@@ -258,6 +262,31 @@ export const CREATIVE_MODELS: ModelConfig[] = [
     tokenCost: getCreativeModelTokenCost('multiview'),
   },
 ];
+
+/**
+ * Estimated token cost of a pending composer submission. Mirrors the charge
+ * that will actually be applied so the sidebar can preview the balance drop:
+ *  - parametric  → per-model CAD cost (Lite vs Premium)
+ *  - creative + multiview → multiview mesh cost
+ *  - creative otherwise → per-model creative mesh cost
+ */
+export function estimatePendingSubmissionCost({
+  type,
+  model,
+  isMultiview,
+}: {
+  type: 'parametric' | 'creative';
+  model: Model;
+  isMultiview: boolean;
+}): number {
+  if (type === 'parametric') {
+    return getParametricModelTokenCost(model);
+  }
+  if (isMultiview) {
+    return FEATURE_COSTS.multiviewMesh.tokens;
+  }
+  return getCreativeModelTokenCost(model as CreativeModel);
+}
 
 // Whether the selected parametric model can accept image / STL-render inputs.
 // Unknown ids (e.g. historical messages tagged with a removed model) fall back

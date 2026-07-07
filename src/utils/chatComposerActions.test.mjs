@@ -12,7 +12,6 @@ const assistantResult = {
   },
 };
 
-assert.equal(getComposerQuickActionDraft('continue'), undefined);
 assert.equal(getComposerQuickActionDraft('edit-output'), EDIT_OUTPUT_DRAFT);
 assert.equal(EDIT_OUTPUT_DRAFT, 'Edit the output: ');
 

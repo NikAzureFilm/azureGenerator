@@ -22,9 +22,11 @@ import {
 import {
   cn,
   CREATIVE_MODELS,
+  estimatePendingSubmissionCost,
   PARAMETRIC_MODELS,
   parametricModelSupportsVision,
 } from '@/lib/utils';
+import { useTokenCostPreview } from '@/contexts/TokenCostPreviewContext';
 import {
   Content,
   CreativeModel,
@@ -193,6 +195,7 @@ function TextAreaChat({
   const prevIsDraggingRef = useRef(isDragging);
   const { toast } = useToast();
   const { session, billing } = useAuth();
+  const { setPendingCost, clearPendingCost } = useTokenCostPreview();
   const { images, mesh, setImages, setMesh } = useItemSelection();
   const meshFiles = useMeshFiles();
   const focusRequestId = composerFocusRequest?.id;
@@ -487,7 +490,7 @@ function TextAreaChat({
   }, [type]);
 
   // ------------------------------------------------------------
-  // Placeholder â€“ Typed-out Animation
+  // Placeholder – Typed-out Animation
   // When the target placeholder (based on mode & image state)
   // changes, we progressively reveal each character so it looks
   // like it's being typed in real-time. This gives users a more
@@ -560,6 +563,10 @@ function TextAreaChat({
   }, [images, setModel, model, type, isMultiview]);
 
   const handleSubmit = async () => {
+    // Clear any hover cost-preview up front so both the click and Enter-key
+    // submit paths reset it — the send button unmounts once isLoading flips,
+    // so onMouseLeave never fires to clear a lingering preview otherwise.
+    clearPendingCost();
     if (isMultiview) {
       // Multiview submit requires at least the front view (Tripo requirement)
       // and no slot still uploading/generating.
@@ -954,6 +961,24 @@ function TextAreaChat({
     ? hasFrontMultiviewSlot(multiviewSlots) && !anyMultiviewBusy(multiviewSlots)
     : type === 'creative' || images.length > 0 || !!input.trim() || !!mesh;
 
+  // Mirrors the send button's `disabled` condition so we only preview the
+  // token cost when the submission would actually go through.
+  const isSubmitEnabled =
+    !isLoading &&
+    !disabled &&
+    !isGeneratingInputImage &&
+    canSubmit &&
+    (isMultiview ? true : !images.some((img) => img.isUploading));
+
+  const previewPendingCost = useCallback(() => {
+    if (!isSubmitEnabled) return;
+    setPendingCost(estimatePendingSubmissionCost({ type, model, isMultiview }));
+  }, [isSubmitEnabled, setPendingCost, type, model, isMultiview]);
+
+  // Drop any lingering preview when this composer unmounts (e.g. navigating
+  // away while still hovering the send button).
+  useEffect(() => clearPendingCost, [clearPendingCost]);
+
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = event.clipboardData.files;
     if (files && files.length > 0) {
@@ -976,7 +1001,7 @@ function TextAreaChat({
       shouldAddItems = true;
     }
 
-    // In multiview mode the flat image list is unused â€” each view has its own
+    // In multiview mode the flat image list is unused — each view has its own
     // slot. Ignore general-area drops so users don't accumulate orphaned files.
     if (isMultiview) {
       shouldAddItems = false;
@@ -1590,11 +1615,42 @@ function TextAreaChat({
         }}
       >
         <div className="flex select-none items-center justify-between p-2">
-          <Avatar className="h-8 w-8">
-            <div className="h-full w-full p-1.5">
-              <BrandLogo variant="mark" className="h-full w-full" />
-            </div>
-          </Avatar>
+          {type === 'creative' && !isMultiview ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 rounded-full hover:bg-adam-neutral-800"
+                  disabled={isLoading || disabled || isGeneratingInputImage}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openImageCreator();
+                  }}
+                  aria-label="Generate image"
+                >
+                  {isGeneratingInputImage ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 text-adam-blue" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Generate image (
+                {formatTokenCost(
+                  getImageGenerationTokenCost(selectedImageGenerationModel),
+                )}
+                )
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <Avatar className="h-8 w-8">
+              <div className="h-full w-full p-1.5">
+                <BrandLogo variant="mark" className="h-full w-full" />
+              </div>
+            </Avatar>
+          )}
           <div className="relative grid w-full">
             <Textarea
               disabled={isLoading || disabled}
@@ -1672,11 +1728,7 @@ function TextAreaChat({
                         onClick={(e) => e.stopPropagation()}
                         aria-label="Add reference image"
                       >
-                        {isGeneratingInputImage ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-adam-blue" />
-                        ) : (
-                          <ImagePlus className="h-4 w-4" />
-                        )}
+                        <ImagePlus className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
@@ -1695,23 +1747,6 @@ function TextAreaChat({
                     <ImagePlus className="h-4 w-4 text-adam-text-secondary" />
                     <span>Upload</span>
                   </DropdownMenuItem>
-                  {type === 'creative' && (
-                    <DropdownMenuItem
-                      className="gap-2 rounded-md text-adam-text-primary hover:cursor-pointer"
-                      disabled={isLoading || isGeneratingInputImage}
-                      onSelect={() => openImageCreator()}
-                    >
-                      <Sparkles className="h-4 w-4 text-adam-blue" />
-                      <span>Generate</span>
-                      <span className="ml-auto rounded-md bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
-                        {formatTokenCost(
-                          getImageGenerationTokenCost(
-                            selectedImageGenerationModel,
-                          ),
-                        )}
-                      </span>
-                    </DropdownMenuItem>
-                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1739,8 +1774,8 @@ function TextAreaChat({
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    Generate a CAD model â€” precise parts, mechanisms,
-                    practical engineering
+                    Generate a CAD model — precise parts, mechanisms, practical
+                    engineering
                   </TooltipContent>
                 </Tooltip>
                 <Tooltip>
@@ -1763,7 +1798,7 @@ function TextAreaChat({
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    Generate a mesh â€” figurines, organic shapes, sculpts
+                    Generate a mesh — figurines, organic shapes, sculpts
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -1823,6 +1858,8 @@ function TextAreaChat({
               </Tooltip>
             ) : (
               <button
+                onMouseEnter={previewPendingCost}
+                onMouseLeave={clearPendingCost}
                 onClick={() => {
                   handleSubmit();
                 }}

@@ -8,7 +8,7 @@ import {
   CardHeader,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { getLevel, useAuth } from '@/contexts/AuthContext';
+import { getLevel, useAuth, type BillingStatus } from '@/contexts/AuthContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   useManageSubscription,
@@ -31,6 +31,11 @@ import {
   FREE_STARTER_TOKENS,
   getAnnualDiscountPercent,
 } from '@shared/pricingCatalog';
+import {
+  CAD_PREMIUM_GENERATION_TOKEN_COST,
+  FEATURE_COSTS,
+} from '@shared/tokenCosts';
+import { formatFull, formatPeriodEnd } from '@/lib/tokenFormat';
 
 type Cadence = 'monthly' | 'yearly';
 
@@ -104,11 +109,122 @@ function buildTier(
   return tier;
 }
 
+// Rough "what does this buy" line, derived from FEATURE_COSTS so it tracks
+// pricing changes automatically instead of hardcoding counts.
+function meshAndCadEquivalents(tokens: number): string {
+  const meshes = Math.floor(tokens / FEATURE_COSTS.ultraMesh.tokens);
+  const cad = Math.floor(tokens / CAD_PREMIUM_GENERATION_TOKEN_COST);
+  return `${meshes} max-quality 3D meshes or ${cad} CAD generations`;
+}
+
 function creditsLines(tier: SubscriptionTier): string[] {
-  const starter = `${FREE_STARTER_TOKENS.toLocaleString()} free starter tokens`;
-  if (tier.level === 'free') return [starter];
-  const amount = tier.tokenAmount?.toLocaleString() ?? '';
-  return [`${amount} tokens per month`];
+  if (tier.level === 'free') {
+    const starter = `${FREE_STARTER_TOKENS.toLocaleString()} free starter tokens`;
+    const cad = Math.floor(
+      FREE_STARTER_TOKENS / CAD_PREMIUM_GENERATION_TOKEN_COST,
+    );
+    return [starter, `≈ ${cad} CAD generations to try it out`];
+  }
+  const amount = tier.tokenAmount ?? 0;
+  return [
+    `${amount.toLocaleString()} tokens per month`,
+    `≈ ${meshAndCadEquivalents(amount)} / month`,
+    'Tokens reset monthly — no rollover',
+  ];
+}
+
+function TokenBalanceHeader({
+  billing,
+  currentLevel,
+}: {
+  billing: BillingStatus;
+  currentLevel: PlanLevel;
+}) {
+  const { free, subscription, purchased, total } = billing.tokens;
+  const isFree = currentLevel === 'free';
+  const resetsOn = formatPeriodEnd(billing.subscription?.currentPeriodEnd);
+
+  type StatCard = { key: string; label: string; value: number; note?: string };
+  const cards: StatCard[] = [];
+  if (!isFree) {
+    cards.push({
+      key: 'plan',
+      label: `${PLAN_DISPLAY_NAMES[currentLevel]} plan tokens`,
+      value: subscription,
+      note: resetsOn ? `resets ${resetsOn}` : undefined,
+    });
+  }
+  if (free > 0) {
+    cards.push({
+      key: 'free',
+      label: 'Free starter tokens',
+      value: free,
+    });
+  }
+  if (purchased > 0) {
+    cards.push({
+      key: 'purchased',
+      label: 'Purchased tokens',
+      value: purchased,
+      note: 'never expire',
+    });
+  }
+
+  return (
+    <div className="mx-auto mb-10 max-w-3xl px-8">
+      <div className="rounded-xl border border-adam-neutral-800 bg-adam-neutral-950 p-6">
+        <div className="flex flex-col items-center text-center">
+          <span className="text-xs font-medium uppercase tracking-wide text-adam-neutral-400">
+            Your tokens
+          </span>
+          <div className="mt-1 flex items-baseline gap-1.5">
+            <span className="text-4xl font-light tabular-nums text-white">
+              {formatFull(total)}
+            </span>
+            <span className="text-sm text-adam-neutral-400">tokens</span>
+          </div>
+        </div>
+
+        {cards.length > 0 && (
+          <div
+            className={cn(
+              'mt-6 grid gap-3',
+              cards.length === 1
+                ? 'grid-cols-1'
+                : cards.length === 2
+                  ? 'grid-cols-1 sm:grid-cols-2'
+                  : 'grid-cols-1 sm:grid-cols-3',
+            )}
+          >
+            {cards.map((card) => (
+              <div
+                key={card.key}
+                className="rounded-lg border border-adam-neutral-800 bg-adam-neutral-900/40 p-4 text-center"
+              >
+                <div className="text-2xl font-light tabular-nums text-white">
+                  {formatFull(card.value)}
+                </div>
+                <div className="mt-1 text-xs font-medium text-adam-neutral-200">
+                  {card.label}
+                </div>
+                {card.note && (
+                  <div className="mt-0.5 text-xs text-adam-neutral-500">
+                    {card.note}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="mt-4 text-center text-xs text-adam-neutral-400">
+          Plan tokens reset to your plan&apos;s amount each billing month —
+          unused plan tokens don&apos;t roll over. Purchased token packs never
+          expire and are spent after plan tokens.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function Subscriptions() {
@@ -175,6 +291,10 @@ export function Subscriptions() {
             </p>
           </div>
 
+          {user && billing && (
+            <TokenBalanceHeader billing={billing} currentLevel={currentLevel} />
+          )}
+
           <Tabs
             defaultValue="monthly"
             className="flex w-full flex-col items-center"
@@ -188,10 +308,10 @@ export function Subscriptions() {
               </TabsTrigger>
               <TabsTrigger
                 value="yearly"
-                className="pr-1.5 data-[state=active]:bg-adam-neutral-100 data-[state=active]:text-adam-neutral-900"
+                className="gap-1.5 pr-2 data-[state=active]:bg-adam-neutral-100 data-[state=active]:text-adam-neutral-900"
               >
                 Annual
-                <span className="ml-1.5 rounded-full bg-adam-blue/20 px-2 text-[10px] font-medium text-adam-blue">
+                <span className="rounded-full bg-adam-blue px-2.5 py-0.5 text-xs font-semibold text-white">
                   -{getAnnualDiscountPercent('pro')}%
                 </span>
               </TabsTrigger>
@@ -224,34 +344,52 @@ export function Subscriptions() {
           {/* Token Packs */}
           {tokenPacks.length > 0 && (
             <div className="mt-12 px-8">
-              <div className="mx-auto max-w-2xl text-center">
-                <h2 className="mb-2 text-xl font-light text-white">
-                  Need more tokens?
-                </h2>
-                <p className="mb-6 text-sm text-adam-neutral-300">
-                  Purchase token packs that never expire. Use them anytime.
-                </p>
-                <div className="flex flex-wrap justify-center gap-3">
+              <div className="mx-auto max-w-4xl">
+                <div className="mb-6 text-center">
+                  <h2 className="mb-2 text-xl font-light text-white">
+                    Need more tokens?
+                  </h2>
+                  <p className="text-sm text-adam-neutral-300">
+                    Purchase token packs that never expire. Use them anytime.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   {tokenPacks.map((pack) => {
                     const isThisPending =
                       isPurchaseLoading &&
                       purchaseVariables?.priceId === pack.stripePriceId;
                     return (
-                      <Button
+                      <div
                         key={pack.id}
-                        variant="dark"
-                        className="rounded-full border border-adam-neutral-700 px-5 font-light"
-                        disabled={isPurchaseLoading || !pack.stripePriceId}
-                        onClick={() =>
-                          pack.stripePriceId &&
-                          purchaseTokenPack({ priceId: pack.stripePriceId })
-                        }
+                        className="flex flex-col items-center rounded-xl border border-adam-neutral-800 bg-adam-neutral-950 p-5 text-center"
                       >
-                        {isThisPending && (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        )}
-                        {`${pack.tokenAmount.toLocaleString()} tokens — $${formatPrice(pack.priceCents)}`}
-                      </Button>
+                        <div className="text-2xl font-light tabular-nums text-white">
+                          {pack.tokenAmount.toLocaleString()}
+                        </div>
+                        <div className="text-xs text-adam-neutral-400">
+                          tokens
+                        </div>
+                        <div className="mt-2 text-lg font-light text-white">
+                          ${formatPrice(pack.priceCents)}
+                        </div>
+                        <div className="mt-0.5 text-xs text-adam-neutral-500">
+                          Never expires
+                        </div>
+                        <Button
+                          variant="dark"
+                          className="mt-4 w-full rounded-full border border-adam-neutral-700 font-light"
+                          disabled={isPurchaseLoading || !pack.stripePriceId}
+                          onClick={() =>
+                            pack.stripePriceId &&
+                            purchaseTokenPack({ priceId: pack.stripePriceId })
+                          }
+                        >
+                          {isThisPending && (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          )}
+                          Buy
+                        </Button>
+                      </div>
                     );
                   })}
                 </div>

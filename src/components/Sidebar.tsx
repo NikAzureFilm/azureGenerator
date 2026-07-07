@@ -10,6 +10,7 @@ import {
   ArrowUpRight,
   CircleDollarSign,
   ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,7 +26,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useAuth } from '@/contexts/AuthContext';
+import { getLevel, useAuth } from '@/contexts/AuthContext';
+import { useTokenCostPreview } from '@/contexts/TokenCostPreviewContext';
+import { formatCompact, formatFull } from '@/lib/tokenFormat';
 import { supabase } from '@/lib/supabase';
 import {
   Sheet,
@@ -59,6 +62,128 @@ type SidebarPath =
   | '/subscription'
   | '/pricing'
   | '/admin/pricing';
+
+function TokenBalanceWidget({
+  isSidebarOpen,
+  onNavigate,
+}: {
+  isSidebarOpen: boolean;
+  onNavigate: (path: SidebarPath) => void;
+}) {
+  const { user, billing } = useAuth();
+  const { pendingCost } = useTokenCostPreview();
+
+  // Fallback: no signed-in user or billing not yet loaded → keep the original
+  // "Pricing" presentation pointing at the public pricing page.
+  if (!user || !billing) {
+    if (!isSidebarOpen) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="adam_dark_collapsed"
+              className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
+              onClick={() => onNavigate('/pricing')}
+            >
+              <CircleDollarSign className="h-[22px] w-[22px]" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="flex flex-col">
+            <span className="font-semibold">Pricing</span>
+            <span className="text-xs text-muted-foreground">
+              View token costs
+            </span>
+          </TooltipContent>
+        </Tooltip>
+      );
+    }
+    return (
+      <Button
+        variant="adam_dark"
+        className="flex h-10 w-full items-center justify-start gap-2"
+        onClick={() => onNavigate('/pricing')}
+      >
+        <CircleDollarSign className="h-[22px] w-[22px] min-w-[22px]" />
+        Pricing
+      </Button>
+    );
+  }
+
+  const level = getLevel(billing);
+  const isFree = level === 'free';
+  const { free, subscription, purchased, total } = billing.tokens;
+  const hasPreview = pendingCost > 0;
+  const displayTokens = Math.max(0, total - pendingCost);
+
+  // Secondary split line. Paid plans group free+subscription as "plan" tokens;
+  // free plan surfaces starter tokens directly.
+  const planPortion = isFree ? free : subscription + free;
+  const planLabel = isFree
+    ? `${formatFull(planPortion)} free`
+    : `${formatFull(planPortion)} plan`;
+  const splitText =
+    purchased > 0
+      ? `${planLabel} · ${formatFull(purchased)} purchased`
+      : planLabel;
+
+  const countClass = cn(
+    'tabular-nums transition-colors',
+    hasPreview && 'text-adam-blue',
+  );
+
+  if (!isSidebarOpen) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="adam_dark_collapsed"
+            className="mb-0 ml-[1px] flex h-[46px] w-[46px] flex-col gap-0.5 p-0"
+            onClick={() => onNavigate('/subscription')}
+          >
+            <Zap className="h-[18px] w-[18px]" fill="currentColor" />
+            <span
+              className={cn('text-[10px] font-medium leading-none', countClass)}
+            >
+              {formatCompact(displayTokens)}
+            </span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="flex flex-col">
+          <span className="font-semibold">Tokens</span>
+          <span className="text-xs text-muted-foreground">
+            {formatFull(displayTokens)} tokens
+            {hasPreview ? ` (−${formatFull(pendingCost)} pending)` : ''}
+          </span>
+          <span className="text-xs text-muted-foreground">{splitText}</span>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Button
+      variant="adam_dark"
+      className="flex h-10 w-full items-center justify-start gap-2"
+      onClick={() => onNavigate('/subscription')}
+    >
+      <Zap className="h-[22px] w-[22px] min-w-[22px]" fill="currentColor" />
+      <div className="flex min-w-0 flex-1 flex-col items-start leading-tight">
+        <span className="flex items-center gap-1.5">
+          <span className={countClass}>{formatFull(displayTokens)}</span>
+          <span>tokens</span>
+          {hasPreview && (
+            <span className="rounded-full bg-adam-blue/20 px-1.5 text-[10px] font-medium text-adam-blue">
+              −{formatFull(pendingCost)}
+            </span>
+          )}
+        </span>
+        <span className="truncate text-xs text-adam-neutral-400">
+          {splitText}
+        </span>
+      </div>
+    </Button>
+  );
+}
 
 function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const navigate = useNavigate();
@@ -351,36 +476,10 @@ function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
               </a>
             )}
 
-            {!isSidebarOpen && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="adam_dark_collapsed"
-                    className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
-                    onClick={() => sidebarNavigate('/pricing')}
-                  >
-                    <CircleDollarSign className="h-[22px] w-[22px]" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="flex flex-col">
-                  <span className="font-semibold">Pricing</span>
-                  <span className="text-xs text-muted-foreground">
-                    View token costs
-                  </span>
-                </TooltipContent>
-              </Tooltip>
-            )}
-
-            {isSidebarOpen && (
-              <Button
-                variant="adam_dark"
-                className="flex h-10 w-full items-center justify-start gap-2"
-                onClick={() => sidebarNavigate('/pricing')}
-              >
-                <CircleDollarSign className="h-[22px] w-[22px] min-w-[22px]" />
-                Pricing
-              </Button>
-            )}
+            <TokenBalanceWidget
+              isSidebarOpen={isSidebarOpen}
+              onNavigate={sidebarNavigate}
+            />
 
             {showAdminNav && !isSidebarOpen && (
               <Tooltip>
