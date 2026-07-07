@@ -9,6 +9,11 @@ import {
 } from 'react-resizable-panels';
 import { ChatSection } from '@/components/chat/ChatSection';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useRef, useState, useMemo, useCallback } from 'react';
 import { ChevronsRight } from 'lucide-react';
 import { TreeNode } from '@shared/Tree';
@@ -173,13 +178,24 @@ export function CreativeView({
             <PanelResizeHandle className="resize-handle group relative">
               {!isCollapsed && (
                 <div className="absolute left-1 top-1/2 z-50 -translate-y-1/2 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-                  <Button
-                    variant="ghost"
-                    className="rounded-l-none rounded-r-lg border-b border-r border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors hover:bg-black hover:text-adam-neutral-0 dark:border-gray-800"
-                    onClick={handleCollapse}
-                  >
-                    <ChevronsRight className="h-5 w-5 rotate-180" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        aria-label="Collapse chat panel"
+                        className="rounded-l-none rounded-r-lg border-b border-r border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors hover:bg-black hover:text-adam-neutral-0 dark:border-gray-800"
+                        onClick={handleCollapse}
+                      >
+                        <ChevronsRight className="h-5 w-5 rotate-180" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="right"
+                      className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                    >
+                      <p>Collapse chat panel</p>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               )}
               {isCollapsed && (

@@ -16,6 +16,11 @@ import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { GLTF } from 'three-stdlib';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 import { CreativeLoadingBar } from './CreativeLoadingBar';
 import { LightingControls } from './LightingControls';
@@ -298,33 +303,52 @@ export function MeshPreview({ meshId }: { meshId: string }) {
         ) : (
           // For fast model, only show wireframe toggle since texture isn't supported
           <div className="flex items-center gap-2 rounded-full bg-adam-neutral-900 px-3 py-2 shadow-[0px_4px_24px_0px_rgba(0,0,0,0.32)]">
-            <button
-              onClick={() => handleViewModeChange('textureless')}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-                viewMode === 'textureless' &&
-                  'border-2 border-adam-neutral-500',
-              )}
-              style={{
-                background: 'linear-gradient(135deg, #D9D9D9 0%, #6F6F6F 100%)',
-              }}
-              aria-label="Solid view"
-              title="Solid"
-            ></button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => handleViewModeChange('textureless')}
+                  className={cn(
+                    'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+                    viewMode === 'textureless' &&
+                      'border-2 border-adam-neutral-500',
+                  )}
+                  style={{
+                    background:
+                      'linear-gradient(135deg, #D9D9D9 0%, #6F6F6F 100%)',
+                  }}
+                  aria-label="Solid view"
+                ></button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>Solid view</p>
+              </TooltipContent>
+            </Tooltip>
 
-            <button
-              onClick={() => handleViewModeChange('wireframe')}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-                viewMode === 'wireframe'
-                  ? 'border-2 border-adam-neutral-500 bg-transparent text-adam-neutral-500'
-                  : 'bg-transparent text-adam-neutral-500',
-              )}
-              aria-label="Wireframe view"
-              title="Wireframe"
-            >
-              <WireframeIcon />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => handleViewModeChange('wireframe')}
+                  className={cn(
+                    'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+                    viewMode === 'wireframe'
+                      ? 'border-2 border-adam-neutral-500 bg-transparent text-adam-neutral-500'
+                      : 'bg-transparent text-adam-neutral-500',
+                  )}
+                  aria-label="Wireframe view"
+                >
+                  <WireframeIcon />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>Wireframe view</p>
+              </TooltipContent>
+            </Tooltip>
           </div>
         )}
       </div>
@@ -407,47 +431,74 @@ function ViewModeControl({
   return (
     <div className="flex items-center gap-2 rounded-full bg-adam-neutral-900 px-3 py-2 shadow-[0px_4px_24px_0px_rgba(0,0,0,0.32)]">
       {/* Textured */}
-      <button
-        onClick={() => handleViewModeChange('textured')}
-        className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-          viewMode === 'textured' && 'border-2 border-adam-neutral-500',
-        )}
-        style={{
-          background: 'linear-gradient(135deg, #FFA3DD 0%, #05AFB8 100%)',
-        }}
-        aria-label="Textured view"
-        title="Textured"
-      ></button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => handleViewModeChange('textured')}
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+              viewMode === 'textured' && 'border-2 border-adam-neutral-500',
+            )}
+            style={{
+              background: 'linear-gradient(135deg, #FFA3DD 0%, #05AFB8 100%)',
+            }}
+            aria-label="Textured view"
+          ></button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+        >
+          <p>Textured view</p>
+        </TooltipContent>
+      </Tooltip>
 
       {/* Textureless */}
-      <button
-        onClick={() => handleViewModeChange('textureless')}
-        className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-          viewMode === 'textureless' && 'border-2 border-adam-neutral-500',
-        )}
-        style={{
-          background: 'linear-gradient(135deg, #D9D9D9 0%, #6F6F6F 100%)',
-        }}
-        aria-label="Textureless view"
-        title="Solid"
-      ></button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => handleViewModeChange('textureless')}
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+              viewMode === 'textureless' && 'border-2 border-adam-neutral-500',
+            )}
+            style={{
+              background: 'linear-gradient(135deg, #D9D9D9 0%, #6F6F6F 100%)',
+            }}
+            aria-label="Textureless view"
+          ></button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+        >
+          <p>Solid view</p>
+        </TooltipContent>
+      </Tooltip>
 
       {/* Wireframe */}
-      <button
-        onClick={() => handleViewModeChange('wireframe')}
-        className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-          viewMode === 'wireframe'
-            ? 'border-2 border-adam-neutral-500 bg-transparent text-adam-neutral-500'
-            : 'bg-transparent text-adam-neutral-500',
-        )}
-        aria-label="Wireframe view"
-        title="Wireframe"
-      >
-        <WireframeIcon />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => handleViewModeChange('wireframe')}
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+              viewMode === 'wireframe'
+                ? 'border-2 border-adam-neutral-500 bg-transparent text-adam-neutral-500'
+                : 'bg-transparent text-adam-neutral-500',
+            )}
+            aria-label="Wireframe view"
+          >
+            <WireframeIcon />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+        >
+          <p>Wireframe view</p>
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }

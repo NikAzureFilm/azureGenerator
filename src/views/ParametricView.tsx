@@ -13,6 +13,11 @@ import {
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { ChevronsRight } from 'lucide-react';
 import { TreeNode } from '@shared/Tree';
 import { ParametricPreviewSection } from '@/components/viewer/ParametricPreviewSection';
@@ -266,13 +271,24 @@ export default function ParametricView({
           <PanelResizeHandle className="resize-handle group relative">
             {!isChatCollapsed && (
               <div className="absolute left-1 top-1/2 z-50 -translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                <Button
-                  variant="ghost"
-                  className="rounded-l-none rounded-r-lg border-b border-r border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors dark:border-gray-800 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10"
-                  onClick={handleChatCollapse}
-                >
-                  <ChevronsRight className="h-5 w-5 rotate-180" />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      aria-label="Collapse chat panel"
+                      className="rounded-l-none rounded-r-lg border-b border-r border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors dark:border-gray-800 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10"
+                      onClick={handleChatCollapse}
+                    >
+                      <ChevronsRight className="h-5 w-5 rotate-180" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="right"
+                    className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                  >
+                    <p>Collapse chat panel</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
             )}
             {isChatCollapsed && (
@@ -330,13 +346,24 @@ export default function ParametricView({
           >
             {hasArtifact && !isParametersPanelCollapsed && (
               <div className="absolute right-1 top-1/2 z-50 -translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                <Button
-                  variant="ghost"
-                  className="rounded-l-lg rounded-r-none border-b border-l border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors dark:border-gray-800 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10"
-                  onClick={handleParametersCollapse}
-                >
-                  <ChevronsRight className="h-5 w-5" />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      aria-label="Collapse parameters panel"
+                      className="rounded-l-lg rounded-r-none border-b border-l border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors dark:border-gray-800 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10"
+                      onClick={handleParametersCollapse}
+                    >
+                      <ChevronsRight className="h-5 w-5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="left"
+                    className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                  >
+                    <p>Collapse parameters panel</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
             )}
             {hasArtifact && isParametersPanelCollapsed && (

@@ -5,6 +5,11 @@ import { Carousel, CarouselContent, CarouselItem } from '../ui/carousel';
 import type { CarouselApi } from '../ui/carousel';
 import { cn } from '@/lib/utils';
 import { ImageViewer } from '@/components/ImageViewer';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useImagesData } from '@/hooks/useImageData';
 import { CreativeLoadingBar } from '@/components/viewer/CreativeLoadingBar';
@@ -139,20 +144,40 @@ export function ImageGallery({ imageIds }: { imageIds: string[] }) {
           </CarouselContent>
           {imageIds.length > 1 && (
             <>
-              <button
-                onClick={handleNext}
-                className="absolute right-4 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-opacity hover:bg-black/70 md:right-8"
-                aria-label="Next image"
-              >
-                <ChevronRight className="h-6 w-6" />
-              </button>
-              <button
-                onClick={handlePrevious}
-                className="absolute left-4 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-opacity hover:bg-black/70 md:left-8"
-                aria-label="Previous image"
-              >
-                <ChevronLeft className="h-6 w-6" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleNext}
+                    className="absolute right-4 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-opacity hover:bg-black/70 md:right-8"
+                    aria-label="Next image"
+                  >
+                    <ChevronRight className="h-6 w-6" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                >
+                  <p>Next image</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handlePrevious}
+                    className="absolute left-4 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-opacity hover:bg-black/70 md:left-8"
+                    aria-label="Previous image"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                >
+                  <p>Previous image</p>
+                </TooltipContent>
+              </Tooltip>
             </>
           )}
         </Carousel>

@@ -1518,16 +1518,29 @@ function TextAreaChat({
                             <Box className="h-4 w-4 text-white" />
                           </div>
                         )}
-                        <button
-                          onClick={handleMeshRemoved}
-                          disabled={mesh.isUploading}
-                          className={cn(
-                            'absolute right-[-0.50rem] top-[-0.50rem] rounded-full border border-adam-neutral-500 bg-adam-neutral-500 text-white transition-colors duration-200 hover:border-adam-neutral-700 hover:bg-adam-neutral-700',
-                            mesh.isUploading && 'opacity-50',
-                          )}
-                        >
-                          <CircleX className="h-4 w-4 stroke-[1.5]" />
-                        </button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="absolute right-[-0.50rem] top-[-0.50rem] inline-flex">
+                              <button
+                                onClick={handleMeshRemoved}
+                                disabled={mesh.isUploading}
+                                aria-label="Remove mesh"
+                                className={cn(
+                                  'rounded-full border border-adam-neutral-500 bg-adam-neutral-500 text-white transition-colors duration-200 hover:border-adam-neutral-700 hover:bg-adam-neutral-700',
+                                  mesh.isUploading && 'opacity-50',
+                                )}
+                              >
+                                <CircleX className="h-4 w-4 stroke-[1.5]" />
+                              </button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent
+                            side="top"
+                            className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                          >
+                            <p>Remove mesh</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </motion.div>
                     )}
                     {images.map((image) => (
@@ -1562,19 +1575,32 @@ function TextAreaChat({
                             <Loader2 className="h-4 w-4 animate-spin text-white" />
                           </div>
                         )}
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleImageRemoved(image);
-                          }}
-                          disabled={image.isUploading}
-                          className={cn(
-                            'absolute right-[-0.50rem] top-[-0.50rem] rounded-full border border-adam-neutral-500 bg-adam-neutral-500 text-white transition-colors duration-200 hover:border-adam-neutral-700 hover:bg-adam-neutral-700',
-                            image.isUploading && 'opacity-50',
-                          )}
-                        >
-                          <CircleX className="h-4 w-4 stroke-[1.5]" />
-                        </button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="absolute right-[-0.50rem] top-[-0.50rem] inline-flex">
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleImageRemoved(image);
+                                }}
+                                disabled={image.isUploading}
+                                aria-label="Remove image"
+                                className={cn(
+                                  'rounded-full border border-adam-neutral-500 bg-adam-neutral-500 text-white transition-colors duration-200 hover:border-adam-neutral-700 hover:bg-adam-neutral-700',
+                                  image.isUploading && 'opacity-50',
+                                )}
+                              >
+                                <CircleX className="h-4 w-4 stroke-[1.5]" />
+                              </button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent
+                            side="top"
+                            className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                          >
+                            <p>Remove image</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </motion.div>
                     ))}
                   </AnimatePresence>

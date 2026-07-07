@@ -11,6 +11,11 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
   DEFAULT_BRIGHTNESS,
@@ -228,18 +233,28 @@ export function LightingControls({
         </div>
         <div className="flex items-center gap-0 xl:gap-2">
           {anyValueChanged && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="hidden h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue xl:flex"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleReset();
-              }}
-              title="Reset to defaults"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Reset to defaults"
+                  className="hidden h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue xl:flex"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReset();
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="bottom"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>Reset to defaults</p>
+              </TooltipContent>
+            </Tooltip>
           )}
           <ChevronDown
             className={cn(
@@ -314,15 +329,25 @@ export function LightingControls({
                 </div>
                 <div className="flex items-center gap-1">
                   {brightnessChanged && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
-                      onClick={resetBrightness}
-                      title="Reset brightness"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Reset brightness"
+                          className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
+                          onClick={resetBrightness}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                      >
+                        <p>Reset brightness</p>
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   <Input
                     type="text"
@@ -359,15 +384,25 @@ export function LightingControls({
                 </div>
                 <div className="flex items-center gap-1">
                   {roughnessChanged && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
-                      onClick={resetRoughness}
-                      title="Reset roughness"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Reset roughness"
+                          className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
+                          onClick={resetRoughness}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                      >
+                        <p>Reset roughness</p>
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   <Input
                     type="text"
@@ -405,15 +440,25 @@ export function LightingControls({
                   </div>
                   <div className="flex items-center gap-1">
                     {normalIntensityChanged && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
-                        onClick={resetNormalIntensity}
-                        title="Reset normal intensity"
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Reset normal intensity"
+                            className="h-6 w-6 rounded-md bg-adam-background-2/70 p-1 text-adam-text-primary/70 hover:bg-adam-blue/20 hover:text-adam-blue"
+                            onClick={resetNormalIntensity}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                        >
+                          <p>Reset normal intensity</p>
+                        </TooltipContent>
+                      </Tooltip>
                     )}
                     <Input
                       type="text"

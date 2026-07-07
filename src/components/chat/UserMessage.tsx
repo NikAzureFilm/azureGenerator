@@ -253,26 +253,38 @@ export function UserMessage({
                   </>
                 ) : (
                   <>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={handleEdit}
-                      className="h-6 w-6 rounded-sm p-0 hover:bg-adam-blue"
-                    >
-                      <Check className="h-3 w-3 p-0 text-adam-neutral-100" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Save changes"
+                          onClick={handleEdit}
+                          className="h-6 w-6 rounded-sm p-0 hover:bg-adam-blue"
+                        >
+                          <Check className="h-3 w-3 p-0 text-adam-neutral-100" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Save changes</TooltipContent>
+                    </Tooltip>
                     <Separator
                       orientation="vertical"
                       className="h-4 bg-adam-neutral-700"
                     />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
-                      onClick={handleCancel}
-                    >
-                      <X className="h-3 w-3 p-0 text-adam-neutral-100" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Cancel editing"
+                          className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
+                          onClick={handleCancel}
+                        >
+                          <X className="h-3 w-3 p-0 text-adam-neutral-100" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Cancel editing</TooltipContent>
+                    </Tooltip>
                   </>
                 )}
               </div>
@@ -302,31 +314,47 @@ function BranchNavigation({
 
   return (
     <div className="flex items-center gap-0.5">
-      <Button
-        disabled={branchIndex === 0 || isLoading}
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
-        onClick={() => {
-          changeLeaf(leafNodes[branchIndex - 1].id);
-        }}
-      >
-        <ChevronLeft className="h-3 w-3 p-0 text-adam-neutral-100" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              disabled={branchIndex === 0 || isLoading}
+              variant="ghost"
+              size="icon"
+              aria-label="Previous version"
+              className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
+              onClick={() => {
+                changeLeaf(leafNodes[branchIndex - 1].id);
+              }}
+            >
+              <ChevronLeft className="h-3 w-3 p-0 text-adam-neutral-100" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>Previous version</TooltipContent>
+      </Tooltip>
       <span className="text-xs tracking-widest text-adam-neutral-100">
         {branchIndex + 1}/{branches.length}
       </span>
-      <Button
-        disabled={branchIndex === branches.length - 1 || isLoading}
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
-        onClick={() => {
-          changeLeaf(leafNodes[branchIndex + 1].id);
-        }}
-      >
-        <ChevronRight className="h-3 w-3 p-0 text-adam-neutral-100" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              disabled={branchIndex === branches.length - 1 || isLoading}
+              variant="ghost"
+              size="icon"
+              aria-label="Next version"
+              className="h-6 w-6 rounded-sm p-0 hover:bg-adam-neutral-800"
+              onClick={() => {
+                changeLeaf(leafNodes[branchIndex + 1].id);
+              }}
+            >
+              <ChevronRight className="h-3 w-3 p-0 text-adam-neutral-100" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>Next version</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

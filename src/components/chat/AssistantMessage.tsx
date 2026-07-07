@@ -368,42 +368,56 @@ export function AssistantMessage({
             <div className="flex flex-wrap items-center gap-1 gap-y-2">
               {changeRating && (
                 <div className="flex items-center">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="Rate response as good"
-                    onClick={() =>
-                      changeRating({
-                        messageId: message.id,
-                        rating: 1,
-                      })
-                    }
-                    className="h-6 w-6 rounded-lg rounded-r-none border-r-0 p-0 pl-0.5"
-                  >
-                    <ThumbsUp
-                      className={`h-3 w-3 ${message.rating === 1 ? 'text-adam-blue' : 'text-adam-neutral-100'}`}
-                    />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        aria-label="Rate response as good"
+                        onClick={() =>
+                          changeRating({
+                            messageId: message.id,
+                            rating: 1,
+                          })
+                        }
+                        className="h-6 w-6 rounded-lg rounded-r-none border-r-0 p-0 pl-0.5"
+                      >
+                        <ThumbsUp
+                          className={`h-3 w-3 ${message.rating === 1 ? 'text-adam-blue' : 'text-adam-neutral-100'}`}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>Good response</span>
+                    </TooltipContent>
+                  </Tooltip>
                   <Separator
                     orientation="vertical"
                     className="h-6 bg-adam-neutral-700"
                   />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="Rate response as bad"
-                    onClick={() =>
-                      changeRating({
-                        messageId: message.id,
-                        rating: -1,
-                      })
-                    }
-                    className="h-6 w-6 rounded-lg rounded-l-none border-l-0 p-0 pr-0.5"
-                  >
-                    <ThumbsDown
-                      className={`h-3 w-3 ${message.rating === -1 ? 'text-adam-blue' : 'text-adam-neutral-100'}`}
-                    />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        aria-label="Rate response as bad"
+                        onClick={() =>
+                          changeRating({
+                            messageId: message.id,
+                            rating: -1,
+                          })
+                        }
+                        className="h-6 w-6 rounded-lg rounded-l-none border-l-0 p-0 pr-0.5"
+                      >
+                        <ThumbsDown
+                          className={`h-3 w-3 ${message.rating === -1 ? 'text-adam-blue' : 'text-adam-neutral-100'}`}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>Bad response</span>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               )}
               {restoreMessage && !isLastMessage && (
@@ -480,35 +494,54 @@ export function AssistantMessage({
               )}
               {message.siblings.length > 1 && updateConversation && (
                 <div className="flex h-6 items-center gap-0.5 rounded-lg border border-adam-neutral-700 bg-adam-bg-secondary-dark">
-                  <Button
-                    disabled={branchIndex === 0 || isLoading}
-                    variant="outline"
-                    size="icon"
-                    aria-label="Previous version"
-                    onClick={() => {
-                      changeLeaf(leafNodes[branchIndex - 1].id);
-                    }}
-                    className="h-full w-6 rounded-lg rounded-r-none border-none p-0"
-                  >
-                    <ChevronLeft className="h-3 w-3 p-0 text-adam-neutral-100" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex h-full">
+                        <Button
+                          disabled={branchIndex === 0 || isLoading}
+                          variant="outline"
+                          size="icon"
+                          aria-label="Previous version"
+                          onClick={() => {
+                            changeLeaf(leafNodes[branchIndex - 1].id);
+                          }}
+                          className="h-full w-6 rounded-lg rounded-r-none border-none p-0"
+                        >
+                          <ChevronLeft className="h-3 w-3 p-0 text-adam-neutral-100" />
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>Previous version</span>
+                    </TooltipContent>
+                  </Tooltip>
                   <span className="text-xs tracking-widest text-adam-neutral-100">
                     {branchIndex + 1}/{message.siblings.length}
                   </span>
-                  <Button
-                    disabled={
-                      branchIndex === message.siblings.length - 1 || isLoading
-                    }
-                    variant="outline"
-                    size="icon"
-                    aria-label="Next version"
-                    onClick={() => {
-                      changeLeaf(leafNodes[branchIndex + 1].id);
-                    }}
-                    className="h-full w-6 rounded-lg rounded-l-none border-none p-0"
-                  >
-                    <ChevronRight className="h-3 w-3 p-0 text-adam-neutral-100" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex h-full">
+                        <Button
+                          disabled={
+                            branchIndex === message.siblings.length - 1 ||
+                            isLoading
+                          }
+                          variant="outline"
+                          size="icon"
+                          aria-label="Next version"
+                          onClick={() => {
+                            changeLeaf(leafNodes[branchIndex + 1].id);
+                          }}
+                          className="h-full w-6 rounded-lg rounded-l-none border-none p-0"
+                        >
+                          <ChevronRight className="h-3 w-3 p-0 text-adam-neutral-100" />
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>Next version</span>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               )}
             </div>

@@ -358,15 +358,24 @@ export function ParameterSection({
               {selectedFormat.toUpperCase()}
             </Button>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  disabled={!isAnyFormatAvailable}
-                  aria-label="select download format"
-                  className="h-12 w-12 rounded-l-none border-l border-adam-neutral-300 bg-adam-neutral-50 p-0 text-adam-neutral-800 hover:bg-adam-neutral-100 hover:text-adam-neutral-900"
-                >
-                  <ChevronUp className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        disabled={!isAnyFormatAvailable}
+                        aria-label="select download format"
+                        className="h-12 w-12 rounded-l-none border-l border-adam-neutral-300 bg-adam-neutral-50 p-0 text-adam-neutral-800 hover:bg-adam-neutral-100 hover:text-adam-neutral-900"
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Select download format</p>
+                </TooltipContent>
+              </Tooltip>
               <DropdownMenuContent
                 align="end"
                 className="w-64 border-none bg-adam-neutral-800 shadow-md"

@@ -128,15 +128,23 @@ export function ConversationCard({
         <div className="absolute right-2 top-1/2 -translate-y-1/2">
           <AlertDialog>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className="h-8 w-8 p-0 transition-colors duration-200 ease-out hover:bg-adam-neutral-950"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <MoreVertical className="h-4 w-4 text-adam-neutral-50" />
-                </Button>
-              </DropdownMenuTrigger>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        aria-label="More options"
+                        className="h-8 w-8 p-0 transition-colors duration-200 ease-out hover:bg-adam-neutral-950"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreVertical className="h-4 w-4 text-adam-neutral-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>More options</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <DropdownMenuContent align="end" className="bg-[#191A1A]">
                 <AlertDialogTrigger
                   asChild

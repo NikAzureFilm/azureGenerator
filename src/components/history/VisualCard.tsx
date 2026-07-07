@@ -28,6 +28,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { formatDistanceToNow } from 'date-fns';
 import { HistoryConversation } from '../../types/misc.ts';
 import { MeshFileType } from '@shared/types';
@@ -363,15 +368,21 @@ export function VisualCard({
       <div className="absolute right-2 top-2">
         <AlertDialog>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-8 w-8 rounded-full bg-adam-background-1/80 p-0 backdrop-blur-sm transition-colors duration-200 hover:bg-adam-neutral-950"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreVertical className="h-4 w-4 text-adam-neutral-50" />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    aria-label="More options"
+                    className="h-8 w-8 rounded-full bg-adam-background-1/80 p-0 backdrop-blur-sm transition-colors duration-200 hover:bg-adam-neutral-950"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <MoreVertical className="h-4 w-4 text-adam-neutral-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>More options</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="bg-[#191A1A]">
               <DropdownMenuItem
                 onClick={(e) => {
