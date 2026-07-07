@@ -131,21 +131,22 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         onKeyDown={handleKeyDown}
-        className="max-h-[92vh] w-[96vw] max-w-6xl overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-6 text-adam-text-primary sm:rounded-xl sm:p-8"
+        className="max-h-[95vh] w-[97vw] max-w-[1800px] overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-4 text-adam-text-primary sm:rounded-xl sm:p-6"
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{slide.title}</DialogTitle>
           <DialogDescription>{slide.description}</DialogDescription>
         </DialogHeader>
 
-        {/* Screenshot — fixed ~16:10 container so mixed source sizes look
-            uniform. On load failure we hide the img and keep the framed
-            container with the slide title only. */}
-        <div className="relative flex aspect-[1920/930] w-full items-center justify-center overflow-hidden rounded-lg border border-adam-neutral-800 bg-adam-neutral-950">
+        {/* Screenshot — sized by viewport height so it renders as large as
+            the screen allows (all sources share the 1920×930 crop, so no
+            letterbox). On load failure we swap in a framed title placeholder
+            that keeps the same footprint. */}
+        <div className="flex w-full items-center justify-center">
           {failedImages[index] ? (
-            <span className="px-6 text-center text-sm font-medium text-adam-text-secondary">
+            <div className="flex aspect-[1920/930] max-h-[72vh] w-full items-center justify-center rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 px-6 text-center text-base font-medium text-adam-text-secondary">
               {slide.title}
-            </span>
+            </div>
           ) : (
             <img
               src={slide.image}
@@ -154,22 +155,22 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
               onError={() =>
                 setFailedImages((prev) => ({ ...prev, [index]: true }))
               }
-              className="h-full w-full object-contain"
+              className="max-h-[72vh] w-auto max-w-full rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 object-contain"
             />
           )}
         </div>
 
-        <div className="mt-6 flex flex-col gap-2">
+        <div className="mt-5 flex flex-col gap-2">
           <h2 className="text-2xl font-semibold text-adam-text-primary">
             {slide.title}
           </h2>
-          <p className="text-base leading-relaxed text-adam-text-secondary">
+          <p className="text-lg leading-relaxed text-adam-text-secondary">
             {slide.description}
           </p>
         </div>
 
         {/* Dot indicators */}
-        <div className="mt-5 flex items-center justify-center gap-2">
+        <div className="mt-4 flex items-center justify-center gap-2">
           {TUTORIAL_SLIDES.map((s, i) => (
             <button
               key={s.image}
@@ -188,7 +189,7 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
         </div>
 
         {/* Navigation */}
-        <div className="mt-6 flex items-center justify-between gap-3">
+        <div className="mt-4 flex items-center justify-between gap-3">
           <Button
             variant="outline"
             className="h-9 gap-1.5"
