@@ -469,6 +469,18 @@ function buildBambuProjectSettings(
     flush_volumes_matrix: buildFlushVolumesMatrix(normalizedPalette.length),
     flush_volumes_vector: repeatFlushVolumeVector(normalizedPalette.length),
     single_extruder_multi_material: '1',
+    // These are sized [print, one per filament slot, printer] — the template
+    // ships 5 entries for its 3-filament preset, so they must be re-sized to the
+    // real slot count. Both stay all-empty here; the mixed-filament branch fills
+    // the process (first) entry to opt its overrides in.
+    inherits_group: buildDifferentSettingsToSystem(
+      normalizedPalette.length,
+      [],
+    ),
+    different_settings_to_system: buildDifferentSettingsToSystem(
+      normalizedPalette.length,
+      [],
+    ),
   });
 
   if (mixedSlots) {
@@ -514,9 +526,18 @@ function buildMixedFilamentProjectSettings(
     filament_mixed_gradient_range: repeatSlots(''),
     filament_mixed_gradient_curve: repeatSlots(''),
     filament_mixed_gradient_per_part: repeatSlots('0'),
-    filament_map: repeatSlots('1').map(() => 1),
+    // Bambu serializes every scalar as a string; a numeric entry here makes its
+    // JSON loader reject the array and silently stop parsing every key that
+    // sorts after "filament_map", so this MUST stay a string array.
+    filament_map: repeatSlots('1'),
     // Process-level flag that turns on sublayer splitting for the mixed slots.
     enable_mixed_color_sublayer: '1',
+    // Studio only honors project process overrides that are listed here, so the
+    // sublayer flag must be declared as a diff from the system process preset or
+    // its checkbox arrives unchecked.
+    different_settings_to_system: buildDifferentSettingsToSystem(slotCount, [
+      'enable_mixed_color_sublayer',
+    ]),
   };
 }
 
@@ -550,6 +571,19 @@ function buildFlushVolumesMatrix(filamentCount: number): string[] {
 
 function repeatFlushVolumeVector(filamentCount: number): string[] {
   return Array.from({ length: filamentCount * 2 }, () => '140');
+}
+
+// Bambu's per-preset override lists are [process, one per filament slot,
+// printer]; Studio only applies the listed process overrides on top of the
+// selected system process preset. Process diffs go in the first entry as a
+// semicolon-separated list; filament and printer entries stay empty.
+function buildDifferentSettingsToSystem(
+  filamentCount: number,
+  processDiffs: string[],
+): string[] {
+  const entries = Array.from({ length: filamentCount + 2 }, () => '');
+  entries[0] = processDiffs.join(';');
+  return entries;
 }
 
 export type ThreeMfColoredMesh = {
@@ -4569,6 +4603,33 @@ function validateMaterialIndex(
   }
 }
 
+// Bambu Studio's ConfigBase::load_from_json parses each value as a string (or a
+// depth-2 array of strings) and `break`s the load loop on the first value it
+// can't read — silently dropping every key that sorts after it alphabetically.
+// A single numeric/boolean/object leaf therefore truncates the whole config, so
+// the generated settings must contain string leaves only.
+function assertProjectSettingValuesAreStrings(settings: {
+  [key: string]: unknown;
+}): void {
+  const isStringArray = (value: unknown): boolean =>
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
+  for (const [key, value] of Object.entries(settings)) {
+    if (typeof value === 'string') {
+      continue;
+    }
+    if (
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === 'string' || isStringArray(entry))
+    ) {
+      continue;
+    }
+    throw new Error(
+      `3MF project settings ${key} has a non-string value; Bambu's loader stops parsing at the first non-string value`,
+    );
+  }
+}
+
 function validateProjectSettingsColors(
   projectSettingsConfig: string,
   modelXml: string,
@@ -4577,6 +4638,8 @@ function validateProjectSettingsColors(
     filament_colour?: unknown;
     [key: string]: unknown;
   };
+
+  assertProjectSettingValuesAreStrings(projectSettings);
 
   if (!Array.isArray(projectSettings.filament_colour)) {
     throw new Error('3MF project settings are missing filament_colour');

@@ -383,6 +383,11 @@ assert.deepEqual(projectSettings.flush_volumes_vector, [
 assert.equal(projectSettings.gcode_flavor, 'marlin');
 assert.equal(projectSettings.gcode_add_line_number, '0');
 assert.equal(projectSettings.version, '01.08.02.56');
+// The override lists are [process, one per filament, printer]; the template
+// ships 5 entries for 3 filaments, so they must resize to the real slot count
+// (here 2 filaments -> 4 entries). Classic keeps every entry empty.
+assert.deepEqual(projectSettings.different_settings_to_system, ['', '', '', '']);
+assert.deepEqual(projectSettings.inherits_group, ['', '', '', '']);
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -1792,7 +1797,65 @@ assert.deepEqual(fullSpectrumSettings.filament_colour_type, [
   '1',
 ]);
 assert.equal(fullSpectrumSettings.enable_mixed_color_sublayer, '1');
+// The sublayer flag only takes effect if it is declared as a process override
+// from the system preset. different_settings_to_system is [process, one per
+// slot, printer] = 1 + 7 + 1 = 9 entries, with the process diff first.
+assert.equal(fullSpectrumSettings.different_settings_to_system.length, 9);
+assert.equal(
+  fullSpectrumSettings.different_settings_to_system[0],
+  'enable_mixed_color_sublayer',
+);
+assert.deepEqual(
+  fullSpectrumSettings.different_settings_to_system.slice(1),
+  ['', '', '', '', '', '', '', ''],
+);
+assert.equal(fullSpectrumSettings.inherits_group.length, 9);
+assert.ok(
+  fullSpectrumSettings.inherits_group.every((entry) => entry === ''),
+  'inherits_group is resized to slot count with empty entries',
+);
 assert.equal(fullSpectrumSettings.filament_map.length, 7);
+// filament_map values MUST be strings: a numeric entry makes Bambu's JSON
+// loader reject the array and silently drop every key sorted after it.
+assert.deepEqual(fullSpectrumSettings.filament_map, [
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+]);
+// Whole-object invariant: every leaf Bambu reads must be a string (or a nested
+// array of strings). A single non-string value truncates the config parse.
+function assertAllProjectSettingValuesAreStrings(settings, label) {
+  const isStringArray = (value) =>
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+  for (const [key, value] of Object.entries(settings)) {
+    if (typeof value === 'string') {
+      continue;
+    }
+    const validArray =
+      Array.isArray(value) &&
+      value.every(
+        (entry) => typeof entry === 'string' || isStringArray(entry),
+      );
+    assert.ok(
+      validArray,
+      `${label} ${key} must be a string or string array, got ${JSON.stringify(
+        value,
+      )}`,
+    );
+  }
+}
+assertAllProjectSettingValuesAreStrings(
+  fullSpectrumSettings,
+  'full-spectrum project settings',
+);
+assertAllProjectSettingValuesAreStrings(
+  projectSettings,
+  'classic project settings',
+);
 assert.equal(fullSpectrumSettings.version, '02.07.00.55');
 assert.match(
   fullSpectrumRootXml,
