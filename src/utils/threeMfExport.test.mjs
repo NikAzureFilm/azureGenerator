@@ -411,6 +411,7 @@ const threeMfBlob = await createThreeMfBlobFromScene({
   scene,
   filename: 'red-part',
   colorCount: 1,
+  colorDetail: 50,
 });
 assert.equal(threeMfBlob.type, 'model/3mf');
 
@@ -527,6 +528,7 @@ const areaWeightedBlob = await createThreeMfBlobFromScene({
   scene: areaWeightedScene,
   filename: 'area-weighted-palette',
   colorCount: 1,
+  colorDetail: 50,
 });
 const areaWeightedZipReader = new ZipReader(new BlobReader(areaWeightedBlob));
 const areaWeightedSettings = JSON.parse(
@@ -556,6 +558,7 @@ const squareBlob = await createThreeMfBlobFromScene({
   scene: squareScene,
   filename: 'square',
   colorCount: 1,
+  colorDetail: 50,
 });
 const squareZipReader = new ZipReader(new BlobReader(squareBlob));
 const squareModelXml = await getMeshModelXml(
@@ -600,6 +603,7 @@ const splitSquareBlob = await createThreeMfBlobFromScene({
   scene: splitSquareScene,
   filename: 'split-square',
   colorCount: 1,
+  colorDetail: 50,
 });
 const splitSquareZipReader = new ZipReader(new BlobReader(splitSquareBlob));
 const splitSquareModelXml = await getMeshModelXml(
@@ -636,6 +640,7 @@ const noisySurfaceBlob = await createThreeMfBlobFromScene({
   scene: noisySurfaceScene,
   filename: 'noisy-surface',
   colorCount: 2,
+  colorDetail: 50,
 });
 const noisySurfaceZipReader = new ZipReader(new BlobReader(noisySurfaceBlob));
 const noisySurfaceEntries = await noisySurfaceZipReader.getEntries();
@@ -707,6 +712,7 @@ const noisySlotBlob = await createThreeMfBlobFromScene({
   scene: noisySlotScene,
   filename: 'noisy-bambu-slot-surface',
   colorCount: 4,
+  colorDetail: 50,
 });
 const noisySlotZipReader = new ZipReader(new BlobReader(noisySlotBlob));
 const noisySlotEntries = await noisySlotZipReader.getEntries();
@@ -789,6 +795,7 @@ const faceColorPreservationBlob = await createThreeMfBlobFromScene({
   scene: faceColorPreservationScene,
   filename: 'face-color-preservation',
   colorCount: 4,
+  colorDetail: 50,
 });
 const faceColorPreservationZipReader = new ZipReader(
   new BlobReader(faceColorPreservationBlob),
@@ -835,6 +842,7 @@ const semanticMapBlob = await createThreeMfBlobFromScene({
   scene: semanticMapScene,
   filename: 'semantic-map',
   colorCount: 4,
+  colorDetail: 50,
   semanticMaterialMap: {
     classes: [
       { id: 0, name: 'silver', color: '#B8B8B8' },
@@ -869,6 +877,7 @@ const embeddedSemanticBlob = await createThreeMfBlobFromScene({
   scene: embeddedSemanticScene,
   filename: 'embedded-semantic-map',
   colorCount: 4,
+  colorDetail: 50,
   semanticMaterialMap: {
     classes: [
       { id: 0, name: 'silver', color: '#B8B8B8' },
@@ -909,6 +918,7 @@ const targetPaletteBlob = await createThreeMfBlobFromScene({
   scene: targetPaletteScene,
   filename: 'target-material-palette',
   colorCount: 4,
+  colorDetail: 50,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
 const targetPaletteZipReader = new ZipReader(new BlobReader(targetPaletteBlob));
@@ -955,6 +965,7 @@ try {
     scene: texturedTriangleScene,
     filename: 'textured-triangle-majority',
     colorCount: 2,
+  colorDetail: 50,
     targetMaterialPalette: ['#00FF00', '#FF0000'],
   });
   const texturedTriangleZipReader = new ZipReader(
@@ -999,6 +1010,7 @@ try {
     scene: flipYFalseTextureScene,
     filename: 'texture-flipy-false',
     colorCount: 2,
+  colorDetail: 50,
     targetMaterialPalette: ['#FF0000', '#00FF00'],
   });
   const flipYFalseTextureZipReader = new ZipReader(
@@ -1041,6 +1053,7 @@ try {
     scene: textureDetailScene,
     filename: 'texture-detail-subdivision',
     colorCount: 2,
+  colorDetail: 50,
     targetMaterialPalette: ['#00FF00', '#FFFFFF'],
   });
   const textureDetailZipReader = new ZipReader(
@@ -1099,6 +1112,7 @@ try {
     scene: closedTextureDetailScene,
     filename: 'closed-texture-detail-topology',
     colorCount: 2,
+  colorDetail: 50,
     targetMaterialPalette: ['#00FF00', '#FFFFFF'],
   });
   const closedTextureDetailZipReader = new ZipReader(
@@ -1140,6 +1154,7 @@ const manifoldFilterColorBlob = await createThreeMfBlobFromScene({
   scene: manifoldFilterColorScene,
   filename: 'manifold-filter-color-box',
   colorCount: 6,
+  colorDetail: 50,
 });
 const manifoldFilterColorZipReader = new ZipReader(
   new BlobReader(manifoldFilterColorBlob),
@@ -1199,6 +1214,7 @@ const badgeRecoveryBlob = await createThreeMfBlobFromScene({
   scene: badgeRecoveryScene,
   filename: 'badge-semantic-recovery',
   colorCount: 4,
+  colorDetail: 50,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
 const badgeRecoveryZipReader = new ZipReader(new BlobReader(badgeRecoveryBlob));
@@ -1236,6 +1252,7 @@ const namedMaterialBlob = await createThreeMfBlobFromScene({
   scene: namedMaterialScene,
   filename: 'named-material-regions',
   colorCount: 4,
+  colorDetail: 50,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
 const namedMaterialZipReader = new ZipReader(new BlobReader(namedMaterialBlob));
@@ -1303,6 +1320,7 @@ const adjacentNamedMaterialBlob = await createThreeMfBlobFromScene({
   scene: adjacentNamedMaterialScene,
   filename: 'adjacent-named-material-regions',
   colorCount: 4,
+  colorDetail: 50,
   targetMaterialPalette: ['#D8D8D2', '#111111', '#6E8E18', '#FFD600'],
 });
 const adjacentNamedMaterialZipReader = new ZipReader(
@@ -1332,6 +1350,7 @@ const cubeBlob = await createThreeMfBlobFromScene({
   scene: cubeScene,
   filename: 'closed-cube',
   colorCount: 1,
+  colorDetail: 50,
 });
 const cubeZipReader = new ZipReader(new BlobReader(cubeBlob));
 const cubeModelXml = await getMeshModelXml(await cubeZipReader.getEntries());
@@ -1381,6 +1400,7 @@ const openTetraBlob = await createThreeMfBlobFromScene({
   scene: openTetraScene,
   filename: 'sealed-open-tetra',
   colorCount: 1,
+  colorDetail: 50,
 });
 const openTetraZipReader = new ZipReader(new BlobReader(openTetraBlob));
 const openTetraModelXml = await getMeshModelXml(
@@ -1446,6 +1466,7 @@ const repairedThreeMfBlob = await createThreeMfBlobFromScene({
   scene: nonManifoldScene,
   filename: 'repaired-color-model',
   colorCount: 3,
+  colorDetail: 50,
 });
 const repairedZipReader = new ZipReader(new BlobReader(repairedThreeMfBlob));
 const repairedEntries = await repairedZipReader.getEntries();
@@ -1497,6 +1518,7 @@ const nearDuplicateEdgeBlob = await createThreeMfBlobFromScene({
   scene: nearDuplicateEdgeScene,
   filename: 'near-duplicate-edge-repair',
   colorCount: 3,
+  colorDetail: 50,
 });
 const nearDuplicateEdgeZipReader = new ZipReader(
   new BlobReader(nearDuplicateEdgeBlob),
@@ -1544,6 +1566,7 @@ const degenerateRepairBlob = await createThreeMfBlobFromScene({
   scene: degenerateRepairScene,
   filename: 'degenerate-repair-color-model',
   colorCount: 2,
+  colorDetail: 50,
 });
 const degenerateRepairZipReader = new ZipReader(
   new BlobReader(degenerateRepairBlob),
@@ -1589,6 +1612,7 @@ const coincidentTriangleBlob = await createThreeMfBlobFromScene({
   scene: coincidentTriangleScene,
   filename: 'coincident-triangles',
   colorCount: 1,
+  colorDetail: 50,
 });
 const coincidentTriangleZipReader = new ZipReader(
   new BlobReader(coincidentTriangleBlob),
@@ -1625,6 +1649,7 @@ const recolorAfterRepairBlob = await createThreeMfBlobFromScene({
   scene: recolorAfterRepairScene,
   filename: 'recolor-after-repair',
   colorCount: 2,
+  colorDetail: 50,
 });
 const recolorAfterRepairZipReader = new ZipReader(
   new BlobReader(recolorAfterRepairBlob),
@@ -1941,6 +1966,7 @@ async function getSensitivityColorDistribution(colorDetail) {
     scene: buildSensitivityGridScene().scene,
     filename: `sensitivity-${colorDetail}`,
     colorCount: 4,
+  colorDetail: 50,
     colorDetail,
     semanticMaterialMap: sensitivitySemanticMaterialMap,
   });
@@ -1966,4 +1992,108 @@ assert.ok(
   Object.keys(sensitivityFineDistribution).length >
     Object.keys(sensitivityRoughDistribution).length,
   'higher sensitivity preserves more small color islands',
+);
+
+// --- Disconnected-body fusion: two separated solids must export as one piece ---
+
+// Non-indexed closed box (12 triangles) with its min corner at (x0, y0, z0).
+function closedBoxPositions(x0, y0, z0, size) {
+  const s = size;
+  const v = [
+    [x0, y0, z0],
+    [x0 + s, y0, z0],
+    [x0 + s, y0 + s, z0],
+    [x0, y0 + s, z0],
+    [x0, y0, z0 + s],
+    [x0 + s, y0, z0 + s],
+    [x0 + s, y0 + s, z0 + s],
+    [x0, y0 + s, z0 + s],
+  ];
+  const quads = [
+    [0, 1, 2, 3],
+    [5, 4, 7, 6],
+    [4, 5, 1, 0],
+    [1, 5, 6, 2],
+    [2, 6, 7, 3],
+    [4, 0, 3, 7],
+  ];
+  const positions = [];
+  for (const [a, b, c, d] of quads) {
+    for (const index of [a, b, c, a, c, d]) {
+      positions.push(v[index][0], v[index][1], v[index][2]);
+    }
+  }
+  return positions;
+}
+
+// Count connected components of a packaged 3MF mesh via union-find over the
+// triangle vertex indices (the exporter has already welded coincident vertices,
+// so shared indices reflect true adjacency).
+function countPackagedMeshComponents(modelXml) {
+  const vertexCount = [...modelXml.matchAll(/<vertex\b/g)].length;
+  const parent = Array.from({ length: vertexCount }, (_unused, i) => i);
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  const used = new Set();
+  for (const match of modelXml.matchAll(/<triangle\b([^>]*)\/>/g)) {
+    const attributes = Object.fromEntries(
+      [...match[1].matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]),
+    );
+    const a = Number(attributes.v1);
+    const b = Number(attributes.v2);
+    const c = Number(attributes.v3);
+    used.add(a);
+    used.add(b);
+    used.add(c);
+    union(a, b);
+    union(b, c);
+  }
+  const roots = new Set();
+  for (const index of used) roots.add(find(index));
+  return roots.size;
+}
+
+const twoBodyScene = new THREE.Scene();
+twoBodyScene.add(
+  new THREE.Mesh(
+    new THREE.BufferGeometry().setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(closedBoxPositions(0, 0, 0, 10), 3),
+    ),
+    new THREE.MeshStandardMaterial({ color: '#ff0000' }),
+  ),
+);
+twoBodyScene.add(
+  new THREE.Mesh(
+    new THREE.BufferGeometry().setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(closedBoxPositions(25, 0, 0, 10), 3),
+    ),
+    new THREE.MeshStandardMaterial({ color: '#0000ff' }),
+  ),
+);
+
+const twoBodyBlob = await createThreeMfBlobFromScene({
+  scene: twoBodyScene,
+  filename: 'two-body',
+  colorCount: 2,
+});
+const twoBodyReader = new ZipReader(new BlobReader(twoBodyBlob));
+const twoBodyModelXml = await getMeshModelXml(await twoBodyReader.getEntries());
+await twoBodyReader.close();
+
+assert.equal(
+  countPackagedMeshComponents(twoBodyModelXml),
+  1,
+  'two separated bodies must export as a single connected 3MF mesh',
 );

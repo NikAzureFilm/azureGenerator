@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { GLTF, STLExporterOptionsBinary } from 'three-stdlib';
+import { connectMeshComponents } from './meshComponentConnector';
 
 // Print processing constants
 const PRINT_CONSTANTS = {
@@ -30,8 +31,12 @@ const PRINT_CONSTANTS = {
   SMALL_DETAILED_SCALE_MULTIPLIER: 1.3,
   STANDARD_SCALE_MULTIPLIER: 1.05,
 
-  // Unit conversion
-  M_TO_MM: 1000, // Converts meters to millimeters
+  // Unit conversion: exporters (STL/3MF/OBJ/GLB) write raw scene units and
+  // slicers read those as millimeters, so 1 exported scene unit = 1 mm. The
+  // sizing math below operates in that same unit space — no meters conversion.
+  MM_PER_SCENE_UNIT: 1,
+  // 1 cm^3 = 1000 mm^3; volume in mm^3 divided by this yields cubic centimeters.
+  MM3_PER_CM3: 1000,
 } as const;
 
 // const DEBUG = true;
@@ -119,11 +124,11 @@ export const ensureFirstLayerExtrusion = (scene: THREE.Scene): void => {
   scene.traverse((node) => {
     if (node instanceof THREE.Mesh) {
       const meshBox = new THREE.Box3().setFromObject(node);
-      if (meshBox.min.y > 0.1) {
-        // More than 100mm above the ground
+      // Scene units are millimeters here; flag parts sitting well above the bed.
+      if (meshBox.min.y > 100) {
         if (DEBUG) {
           console.warn(
-            `Detected mesh part ${node.uuid.slice(0, 8)} floating ${meshBox.min.y.toFixed(2)}m above ground`,
+            `Detected mesh part ${node.uuid.slice(0, 8)} floating ${meshBox.min.y.toFixed(2)}mm above ground`,
           );
         }
       }
@@ -650,9 +655,9 @@ const calculateModelDimensions = (boundingBox: THREE.Box3) => {
   boundingBox.getSize(modelSize);
 
   return {
-    width: modelSize.x * PRINT_CONSTANTS.M_TO_MM,
-    height: modelSize.y * PRINT_CONSTANTS.M_TO_MM,
-    depth: modelSize.z * PRINT_CONSTANTS.M_TO_MM,
+    width: modelSize.x * PRINT_CONSTANTS.MM_PER_SCENE_UNIT,
+    height: modelSize.y * PRINT_CONSTANTS.MM_PER_SCENE_UNIT,
+    depth: modelSize.z * PRINT_CONSTANTS.MM_PER_SCENE_UNIT,
   };
 };
 
@@ -861,7 +866,8 @@ const processUserModelCore = (
 
   const boundingSphere = new THREE.Sphere();
   modelBoundingBox.getBoundingSphere(boundingSphere);
-  const boundingRadiusMm = boundingSphere.radius * PRINT_CONSTANTS.M_TO_MM;
+  const boundingRadiusMm =
+    boundingSphere.radius * PRINT_CONSTANTS.MM_PER_SCENE_UNIT;
   const smallestDimensionMm = Math.min(
     sizeInMm.width,
     sizeInMm.height,
@@ -943,6 +949,104 @@ const processUserModelCore = (
 };
 
 /**
+ * Fuse disconnected bodies across every mesh in the (already scaled, world-space
+ * mm) scene into a single printable solid, adding the connecting struts as one
+ * extra mesh. Guarantees the STL prints in one piece rather than as floating
+ * islands. See meshComponentConnector for the union-find + strut approach.
+ */
+const connectSceneComponentsForPrint = (scene: THREE.Scene): void => {
+  scene.updateMatrixWorld(true);
+
+  const vertices: [number, number, number][] = [];
+  const triangles: { v1: number; v2: number; v3: number }[] = [];
+  const vertex = new THREE.Vector3();
+
+  // Weld coincident world-space vertices into one output index as we build, so
+  // triangles that share a vertex share an index. The connector's union-find
+  // relies on shared indices to recover the true body count; without this the
+  // mesh shatters into single-triangle components that all fall below the debris
+  // floor. Tolerance matches the mm-scale scene (see 3MF weld tolerance).
+  const WELD_TOLERANCE_MM = 0.01;
+  const weldedIndexByKey = new Map<string, number>();
+  const getWeldedVertex = (worldVertex: THREE.Vector3): number => {
+    const key = `${Math.round(worldVertex.x / WELD_TOLERANCE_MM)},${Math.round(worldVertex.y / WELD_TOLERANCE_MM)},${Math.round(worldVertex.z / WELD_TOLERANCE_MM)}`;
+    const existingIndex = weldedIndexByKey.get(key);
+    if (existingIndex !== undefined) {
+      return existingIndex;
+    }
+    const newIndex = vertices.length;
+    vertices.push([worldVertex.x, worldVertex.y, worldVertex.z]);
+    weldedIndexByKey.set(key, newIndex);
+    return newIndex;
+  };
+
+  scene.traverse((node) => {
+    if (!(node instanceof THREE.Mesh) || !node.geometry?.attributes.position) {
+      return;
+    }
+    const geometry = node.geometry;
+    const position = geometry.attributes.position;
+    const matrixWorld = node.matrixWorld;
+    const readWorld = (sourceIndex: number): number => {
+      vertex
+        .fromBufferAttribute(position, sourceIndex)
+        .applyMatrix4(matrixWorld);
+      return getWeldedVertex(vertex);
+    };
+
+    if (geometry.index) {
+      const index = geometry.index;
+      for (let offset = 0; offset + 2 < index.count; offset += 3) {
+        triangles.push({
+          v1: readWorld(index.getX(offset)),
+          v2: readWorld(index.getX(offset + 1)),
+          v3: readWorld(index.getX(offset + 2)),
+        });
+      }
+    } else {
+      for (let offset = 0; offset + 2 < position.count; offset += 3) {
+        triangles.push({
+          v1: readWorld(offset),
+          v2: readWorld(offset + 1),
+          v3: readWorld(offset + 2),
+        });
+      }
+    }
+  });
+
+  if (triangles.length === 0) {
+    return;
+  }
+
+  const connected = connectMeshComponents(
+    { vertices, triangles },
+    (triangle) => triangle,
+  );
+  if (connected.strutTriangleIndexes.length === 0) {
+    return;
+  }
+
+  // Emit only the newly added strut triangles as an extra world-space mesh; the
+  // existing meshes are untouched and already positioned.
+  const strutPositions: number[] = [];
+  for (const triangleIndex of connected.strutTriangleIndexes) {
+    const triangle = connected.triangles[triangleIndex];
+    for (const vertexIndex of [triangle.v1, triangle.v2, triangle.v3]) {
+      const [x, y, z] = connected.vertices[vertexIndex];
+      strutPositions.push(x, y, z);
+    }
+  }
+
+  const strutGeometry = new THREE.BufferGeometry();
+  strutGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(strutPositions, 3),
+  );
+  strutGeometry.computeVertexNormals();
+  scene.add(new THREE.Mesh(strutGeometry, new THREE.MeshStandardMaterial()));
+};
+
+/**
  * Process the user's model for printable STL export
  * Uses advanced mesh repair that may destroy texture coordinates
  */
@@ -956,6 +1060,9 @@ export const processUserModelForPrint = async (
     makeModelWatertightForSTL,
     'PrintableExport',
   );
+
+  // Fuse any disconnected bodies into one printable solid before exporting.
+  connectSceneComponentsForPrint(processedScene);
 
   // Apply final geometry fixes for STL
   applyFinalGeometryFixes(processedScene);
@@ -1257,10 +1364,10 @@ const getAppropriateScalingFactor = (
     modelSize.depth / modelSize.width,
   );
 
-  // Calculate volume in cubic cm
+  // Calculate volume in cubic cm (modelSize is in mm; mm^3 -> cm^3).
   const volumeCm3 =
     (modelSize.width * modelSize.height * modelSize.depth) /
-    PRINT_CONSTANTS.M_TO_MM;
+    PRINT_CONSTANTS.MM3_PER_CM3;
 
   // Classify model type
   const isThinModel = aspectRatio > PRINT_CONSTANTS.HIGH_ASPECT_RATIO_THRESHOLD;

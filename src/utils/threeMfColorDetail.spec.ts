@@ -24,10 +24,16 @@ describe('clampThreeMfColorDetail', () => {
 });
 
 describe('getThreeMfColorDetailSettings', () => {
-  it('reproduces the historical fixed behavior at the default value', () => {
+  it('defaults above the midpoint so exports pick up texture detail', () => {
+    expect(DEFAULT_THREE_MF_COLOR_DETAIL).toBe(75);
     expect(
-      getThreeMfColorDetailSettings(DEFAULT_THREE_MF_COLOR_DETAIL),
-    ).toEqual({
+      getThreeMfColorDetailSettings(DEFAULT_THREE_MF_COLOR_DETAIL)
+        .forceTextureDetail,
+    ).toBe(true);
+  });
+
+  it('reproduces the historical fixed behavior at slider position 50', () => {
+    expect(getThreeMfColorDetailSettings(50)).toEqual({
       smoothingIterations: 3,
       smallColorIslandTriangleCount: 24,
       similarColorIslandDistanceSquared: 0.03,

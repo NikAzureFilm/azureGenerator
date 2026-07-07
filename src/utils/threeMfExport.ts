@@ -8,13 +8,16 @@ import {
 } from '@zip.js/zip.js';
 import * as THREE from 'three';
 import type { Mesh as ItkMesh } from 'itk-wasm';
+import { connectMeshComponents } from './meshComponentConnector.ts';
 
 export const DEFAULT_THREE_MF_COLOR_COUNT = 4;
 export const MAX_THREE_MF_COLOR_COUNT = 16;
 // Color detail ("sensitivity") for the multi-color export: 0 keeps large,
-// rough color regions, 100 preserves per-triangle/texture detail. 50 matches
-// the historical fixed behavior exactly.
-export const DEFAULT_THREE_MF_COLOR_DETAIL = 50;
+// rough color regions, 100 preserves per-triangle/texture detail. Slider
+// position 50 still reproduces the historical fixed behavior exactly; the
+// default sits above the midpoint so exports pick up texture-driven subdivision
+// (forceTextureDetail) for finer color regions out of the box.
+export const DEFAULT_THREE_MF_COLOR_DETAIL = 75;
 
 const CORE_NAMESPACE =
   'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
@@ -746,11 +749,24 @@ export async function computeThreeMfColoredMesh({
     semanticMaterialMap,
   );
   // Run the printable repair pass before palette quantization and 3MF color ids.
-  const geometry = await repairSceneGeometryForThreeMfExport(sourceGeometry);
+  const repairedGeometry =
+    await repairSceneGeometryForThreeMfExport(sourceGeometry);
 
-  if (geometry.vertices.length === 0 || geometry.triangles.length === 0) {
+  if (
+    repairedGeometry.vertices.length === 0 ||
+    repairedGeometry.triangles.length === 0
+  ) {
     throw new Error('No printable mesh geometry was found for 3MF export.');
   }
+
+  // Fuse any disconnected bodies (floating parts) into a single printable solid.
+  // Geometry here is welded and mm-scale, so the connector's mm thresholds and
+  // strut sizing apply directly. Strut triangles carry no source color; they
+  // inherit the nearest existing triangle's color in assignColorsToRepairedTriangles.
+  const geometry = connectMeshComponents(
+    repairedGeometry,
+    (triangle) => triangle,
+  );
 
   const coloredTriangles = assignColorsToRepairedTriangles(
     geometry,
