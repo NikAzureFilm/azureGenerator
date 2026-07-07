@@ -6,9 +6,15 @@ import { Sidebar } from './Sidebar';
 import { CreditsButton } from './CreditsButton';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { Loader2 } from 'lucide-react';
 import { LayoutContext } from '@/contexts/LayoutContext';
+import { TutorialDialog } from '@/components/tutorial/TutorialDialog';
 
 export function Layout() {
   const { user, isLoading } = useAuth();
@@ -17,6 +23,7 @@ export function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [hasLoadedSidebarPreference, setHasLoadedSidebarPreference] =
     useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
 
   useEffect(() => {
     const storedSidebarPreference = localStorage.getItem('sidebarOpen');
@@ -33,6 +40,22 @@ export function Layout() {
       localStorage.setItem('sidebarOpen', isSidebarOpen.toString());
     }
   }, [hasLoadedSidebarPreference, isSidebarOpen]);
+
+  // First-run auto-show: open the tutorial once per browser for signed-in
+  // users. The "seen" flag is written when the dialog closes (see
+  // handleTutorialOpenChange), not here, so an unfinished tutorial reopens.
+  useEffect(() => {
+    if (user && localStorage.getItem('hasSeenTutorial') === null) {
+      setIsTutorialOpen(true);
+    }
+  }, [user]);
+
+  const handleTutorialOpenChange = (open: boolean) => {
+    setIsTutorialOpen(open);
+    if (!open) {
+      localStorage.setItem('hasSeenTutorial', 'true');
+    }
+  };
 
   if (isLoading) {
     return (
@@ -58,10 +81,15 @@ export function Layout() {
 
   return (
     <div className="h-dvh overflow-hidden">
+      <TutorialDialog
+        open={isTutorialOpen}
+        onOpenChange={handleTutorialOpenChange}
+      />
       <div className="flex h-dvh transition-all ease-in-out">
         <Sidebar
           isSidebarOpen={isSidebarOpen}
           setIsSidebarOpen={setIsSidebarOpen}
+          onOpenTutorial={() => setIsTutorialOpen(true)}
         />
         <div className="relative flex-1 overflow-auto bg-adam-bg-dark">
           {/* Credits button — home page only. Mirrors the sidebar-toggle's
@@ -81,20 +109,31 @@ export function Layout() {
           )}
           {/* Toggle Sidebar Button - Positioned on main content area */}
           {!isMobile && user && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`bg-adam-neutral-3000 fixed z-10 h-7 w-7 rounded-md text-gray-400 transition-all duration-300 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10 ${
-                isSidebarOpen ? 'left-[272px]' : 'left-20'
-              } ${
-                location.pathname === '/' && isSidebarOpen
-                  ? 'top-[2.25rem]'
-                  : 'top-3.5'
-              }`}
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            >
-              <PanelLeft className="h-4 w-4" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Toggle sidebar"
+                  className={`bg-adam-neutral-3000 fixed z-10 h-7 w-7 rounded-md text-gray-400 transition-all duration-300 [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10 ${
+                    isSidebarOpen ? 'left-[272px]' : 'left-20'
+                  } ${
+                    location.pathname === '/' && isSidebarOpen
+                      ? 'top-[2.25rem]'
+                      : 'top-3.5'
+                  }`}
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                >
+                  <PanelLeft className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="bottom"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>Toggle sidebar</p>
+              </TooltipContent>
+            </Tooltip>
           )}
           <div className="h-full bg-adam-bg-dark">
             <LayoutContext.Provider value={{ isSidebarOpen }}>
