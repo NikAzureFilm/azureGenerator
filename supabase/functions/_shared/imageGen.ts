@@ -82,6 +82,11 @@ export const generateImageWithGptImage2 = async (
   // protected admin pricing config, not in source.
   quality: GptImageQuality,
   usageCtx?: ImageUsageCtx,
+  // Inpainting mask for edit mode. When provided, the mask PNG is downloaded
+  // from storage, base64-encoded, and passed to the image_generation tool as
+  // input_image_mask. OpenAI semantics: fully-transparent (alpha 0) areas of
+  // the mask are the regions to regenerate; opaque areas are preserved.
+  maskImageId?: string | null,
 ): Promise<GptImage2Result> => {
   const enforcedPrompt = enforce3DObjectPrompt(prompt);
   debugLog('Generating image with gpt-image-2 via Responses API', {
@@ -90,7 +95,27 @@ export const generateImageWithGptImage2 = async (
     prompt: enforcedPrompt,
     imagesCount: images.length,
     priorImageCallId,
+    hasMask: Boolean(maskImageId),
   });
+
+  // Download + base64-encode the inpainting mask (edit mode only). The mask
+  // must match the exact pixels of the source image being edited, so callers
+  // pass priorImageCallId = null in edit mode to force the base64 reference
+  // path below rather than the prior-call-id shortcut.
+  let maskBase64: string | null = null;
+  if (maskImageId) {
+    const { data: maskData } = await supabaseClient.storage
+      .from('images')
+      .download(`${userId}/${conversationId}/${maskImageId}`);
+
+    if (!maskData) {
+      throw new Error(`Failed to download mask ${maskImageId}`);
+    }
+
+    const maskArrayBuffer = await maskData.arrayBuffer();
+    const maskBuffer = Buffer.from(maskArrayBuffer);
+    maskBase64 = maskBuffer.toString('base64');
+  }
 
   const content: Array<
     | { type: 'input_text'; text: string }
@@ -150,10 +175,26 @@ export const generateImageWithGptImage2 = async (
         type: 'image_generation',
         model: OPENAI_IMAGE_MODEL,
         quality,
-        size: '1024x1024',
+        // Non-edit generations stay square (1024x1024). Edit mode sends the
+        // source + alpha mask at their natural resolution, so we let the model
+        // size the output automatically to preserve the source aspect ratio —
+        // a fixed square would misalign inpainting on non-square sources.
+        // 'auto' is a valid member of the SDK size union for gpt-image-2.
+        size: maskBase64 ? 'auto' : '1024x1024',
         output_format: 'jpeg',
         background: 'opaque',
         moderation: 'low',
+        // Inpainting: transparent regions of this mask are regenerated; the
+        // rest of the image is preserved. Field shape verified against the
+        // installed openai@6.38.0 SDK (Responses.Tool.ImageGeneration.
+        // InputImageMask = { image_url?: string; file_id?: string }).
+        ...(maskBase64
+          ? {
+              input_image_mask: {
+                image_url: `data:image/png;base64,${maskBase64}`,
+              },
+            }
+          : {}),
       },
     ],
     tool_choice: { type: 'image_generation' },

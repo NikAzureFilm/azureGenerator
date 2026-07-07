@@ -28,6 +28,12 @@ assert.match(
   'global image enforcement should convert non-object image requests into standalone 3D object assets',
 );
 
+assert.match(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /one contiguous physical piece[\s\S]*no floating, hovering, or detached parts[\s\S]*single connected object/i,
+  'global image enforcement should require a single connected, contiguous printable piece',
+);
+
 assert.equal(
   enforce3DObjectPrompt('Generate a Charizard.'),
   `${THREE_D_OBJECT_PROMPT_ENFORCEMENT} User request: Generate a Charizard.`,

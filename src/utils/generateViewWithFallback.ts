@@ -15,6 +15,10 @@ export type GenerateViewBody = {
   refImageLabels?: string[];
   provider?: ImageGenerationProvider;
   imageGenerationModel?: ImageGenerationModel;
+  // Brush-edit (inpainting) mode only. The alpha mask (OpenAI) and red-marked
+  // composite (Gemini) are re-sent unchanged on every fallback attempt.
+  maskImageId?: string;
+  markedImageId?: string;
 };
 
 export type GenerateViewData = {

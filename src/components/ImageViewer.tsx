@@ -1,10 +1,24 @@
-import { Check, DownloadIcon, Frown, Loader2, PlusIcon } from 'lucide-react';
+import {
+  Brush,
+  Check,
+  DownloadIcon,
+  Frown,
+  Loader2,
+  PlusIcon,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useItemSelection } from '@/hooks/useItemSelection';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useImageData } from '@/hooks/useImageData';
 import { useConversation } from '@/contexts/ConversationContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { getSafeFilename } from '@/utils/file-utils';
+import { ImageMaskEditDialog } from '@/components/ImageMaskEditDialog';
 
 export function ImageViewer({
   image,
@@ -18,13 +32,17 @@ export function ImageViewer({
   clickable?: boolean;
 }) {
   const [loaded, setLoaded] = useState(false);
+  const [isMaskEditOpen, setIsMaskEditOpen] = useState(false);
   const { images, selectItem } = useItemSelection();
   const { conversation } = useConversation();
+  const { session } = useAuth();
 
   const {
     data: { data: imageData, isLoading: isImageDataLoading },
     url: { data: imageUrl, isLoading: isImageLoading },
   } = useImageData(image);
+
+  const isOwner = session?.user.id === conversation.user_id;
 
   const handleDownload = () => {
     const url = imageUrl?.url || '';
@@ -120,27 +138,90 @@ export function ImageViewer({
                   'linear-gradient(to top, rgba(0,0,0,0.48) 0%, rgba(0,0,0,0) 100%)',
               }}
             />
+            {/* Brush edit icon that appears on hover (owner only) */}
+            {isOwner && imageData?.status === 'success' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    role="button"
+                    aria-label="Edit with brush"
+                    className={`absolute bottom-3 right-11 z-10 cursor-pointer transition-transform duration-200 hover:scale-110 ${hoverable ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMaskEditOpen(true);
+                    }}
+                  >
+                    <Brush className="h-5 w-5 text-white drop-shadow-[0px_2px_3px_rgba(0,0,0,0.4)]" />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+                >
+                  <p>Edit with brush</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
             {/* White download icon that appears on hover */}
-            <div
-              className={`absolute bottom-3 right-3 z-10 cursor-pointer transition-transform duration-200 hover:scale-110 ${hoverable ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
-              onClick={handleDownload}
-            >
-              <DownloadIcon className="h-5 w-5 text-white drop-shadow-[0px_2px_3px_rgba(0,0,0,0.4)]" />
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  role="button"
+                  aria-label="Download image"
+                  className={`absolute bottom-3 right-3 z-10 cursor-pointer transition-transform duration-200 hover:scale-110 ${hoverable ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
+                  onClick={handleDownload}
+                >
+                  <DownloadIcon className="h-5 w-5 text-white drop-shadow-[0px_2px_3px_rgba(0,0,0,0.4)]" />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>Download image</p>
+              </TooltipContent>
+            </Tooltip>
             {/* Selected Image Checkbox */}
-            <div
-              className={`absolute left-2 top-2 z-10 rounded-full p-1 ${isSelected ? 'bg-adam-blue' : 'bg-black'} cursor-pointer transition-transform duration-200 hover:scale-110 ${isSelected ? 'opacity-100' : hoverable ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                selectItem(
-                  { id: image, source: 'selection', url: imageUrl.url },
-                  'image',
-                );
-              }}
-            >
-              {isSelected && <Check className="h-4 w-4 text-white" />}
-              {!isSelected && <PlusIcon className="h-4 w-4 text-white" />}
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  role="button"
+                  aria-label={
+                    isSelected ? 'Remove from selection' : 'Add to selection'
+                  }
+                  className={`absolute left-2 top-2 z-10 rounded-full p-1 ${isSelected ? 'bg-adam-blue' : 'bg-black'} cursor-pointer transition-transform duration-200 hover:scale-110 ${isSelected ? 'opacity-100' : hoverable ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    selectItem(
+                      { id: image, source: 'selection', url: imageUrl.url },
+                      'image',
+                    );
+                  }}
+                >
+                  {isSelected && <Check className="h-4 w-4 text-white" />}
+                  {!isSelected && <PlusIcon className="h-4 w-4 text-white" />}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent
+                side="right"
+                className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
+              >
+                <p>
+                  {isSelected ? 'Remove from selection' : 'Add to selection'}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+            {isOwner && imageData?.status === 'success' && (
+              <ImageMaskEditDialog
+                open={isMaskEditOpen}
+                onOpenChange={setIsMaskEditOpen}
+                imageId={image}
+                imageUrl={imageUrl.url}
+                onEdited={({ id, url }) =>
+                  selectItem({ id, source: 'selection', url }, 'image')
+                }
+              />
+            )}
           </>
         )}
       </div>

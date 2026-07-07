@@ -5,7 +5,7 @@ import {
 
 export type ViewLabel = 'front' | 'left' | 'back' | 'right';
 
-export type ImageGenerationMode = 'input' | 'multiview';
+export type ImageGenerationMode = 'input' | 'multiview' | 'edit';
 
 export const VIEW_DIRECTIVE: Record<ViewLabel, string> = {
   front:
@@ -45,7 +45,14 @@ export const buildImageGenerationPrompt = ({
   const cleanPrompt = userPrompt.trim();
   let workflowPrompt: string;
 
-  if (mode === 'input') {
+  if (mode === 'edit') {
+    // Inpainting-style regeneration: change only the user-marked region and
+    // keep everything else pixel-faithful. Provider-specific mask context
+    // (OpenAI alpha mask vs. Gemini red-marked composite) is appended in the
+    // generate-view function, not here.
+    workflowPrompt =
+      `${BASE_VIEW_INSTRUCTIONS} You are editing an existing 3D object render. Reference image 1 is the original render. Apply the following change ONLY inside the user-marked region: ${cleanPrompt || 'refine the marked area'}. Everything outside the marked region must remain EXACTLY identical to the original — same object identity, geometry, proportions, pose, camera angle, colors, materials, lighting, background, and framing.`.trim();
+  } else if (mode === 'input') {
     workflowPrompt = hasReference
       ? `${BASE_VIEW_INSTRUCTIONS} Re-render the reference as a clean 3D-ready object input image. Preserve the main object's identity, proportions, colors, geometry, and materials. ${cleanPrompt ? `Additional guidance: ${cleanPrompt}` : ''}`.trim()
       : `${BASE_VIEW_INSTRUCTIONS} Generate a 3D-ready object rendering of: ${cleanPrompt || 'a simple centered 3D asset'}.`;

@@ -64,3 +64,37 @@ assert.match(
   /Re-render the reference as a clean 3D-ready object input image/,
   'reference image edits should re-render as 3D object input images',
 );
+
+// Brush-edit (inpainting) mode: changes are locked to the marked region and
+// everything else must stay identical to the original render.
+const editPrompt = buildImageGenerationPrompt({
+  view: 'front',
+  userPrompt: 'make the handle bright red',
+  hasReference: true,
+  mode: 'edit',
+});
+assert.match(
+  editPrompt,
+  /ONLY inside the user-marked region/,
+  'edit prompt must constrain the change to the marked region',
+);
+assert.match(
+  editPrompt,
+  /make the handle bright red/,
+  'edit prompt must include the user instruction',
+);
+assert.match(
+  editPrompt,
+  /remain EXACTLY identical to the original/,
+  'edit prompt must require the rest of the image to stay identical',
+);
+assert.equal(
+  buildImageGenerationPrompt({
+    view: 'front',
+    userPrompt: 'a red cube',
+    hasReference: false,
+    mode: 'input',
+  }).includes('ONLY inside the user-marked region'),
+  false,
+  'input mode must not use the edit contract',
+);

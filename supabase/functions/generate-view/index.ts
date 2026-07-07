@@ -117,6 +117,8 @@ Deno.serve(async (req) => {
       provider,
       imageGenerationModel,
       mode = 'input',
+      maskImageId,
+      markedImageId,
     }: {
       prompt?: string;
       view?: ViewLabel;
@@ -127,7 +129,12 @@ Deno.serve(async (req) => {
       provider?: ImageGenerationProvider;
       imageGenerationModel?: ImageGenerationModel;
       mode?: ImageGenerationMode;
+      // Edit mode (brush inpainting) only.
+      maskImageId?: string;
+      markedImageId?: string;
     } = await req.json();
+
+    const isEditMode = mode === 'edit';
 
     const referenceIds: string[] = (() => {
       if (Array.isArray(refImageIds) && refImageIds.length > 0) {
@@ -170,6 +177,45 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       );
+    }
+
+    // Edit (brush inpainting) mode requires the instruction, the source image
+    // to edit, plus both mask artifacts (alpha mask for OpenAI, red-marked
+    // composite for the Gemini fallback path).
+    if (isEditMode) {
+      if (!userPrompt) {
+        return new Response(
+          JSON.stringify({ error: { message: 'prompt required for edit' } }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      if (referenceIds.length === 0) {
+        return new Response(
+          JSON.stringify({
+            error: { message: 'source refImageId required for edit' },
+          }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      if (!maskImageId || !markedImageId) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'maskImageId and markedImageId required for edit',
+            },
+          }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
     }
 
     const userId = userData.user.id;
@@ -255,6 +301,11 @@ Deno.serve(async (req) => {
       mode,
     });
 
+    // Gemini edit-mode note. Gemini gets the original render plus a copy with
+    // the regions-to-change painted in translucent red (it has no alpha-mask
+    // channel like OpenAI), so we spell out how to read the two images.
+    const geminiEditPrompt = `${builtPrompt} Image 1 is the original render. Image 2 is the identical render with the regions to change painted in translucent red. Output the edited version of image 1: change ONLY the red-marked regions as instructed, remove all red markings from the output, and reproduce everything else pixel-faithfully.`;
+
     const generateWithNormal = async (): Promise<Buffer> => {
       return await generateImageWithGeminiMultiTurn(
         serviceClient,
@@ -268,10 +319,18 @@ Deno.serve(async (req) => {
     };
 
     // Shared Gemini Flash path; the model decides the tier — Nano Banana 2
-    // by default, Nano Banana 2 Lite when the lite model id is passed.
+    // by default, Nano Banana 2 Lite when the lite model id is passed. In edit
+    // mode the input images are [source, marked-composite] and the prompt
+    // carries the red-marking instructions.
     const generateWithFlash = async (flashModel?: string): Promise<Buffer> => {
+      const flashRefIds =
+        isEditMode && markedImageId
+          ? [primaryRefImageId, markedImageId]
+          : referenceIds;
+      const flashPrompt = isEditMode ? geminiEditPrompt : builtPrompt;
+
       if (primaryRefImageId) {
-        const refPaths = referenceIds.map(
+        const refPaths = flashRefIds.map(
           (refId) => `${userId}/${conversationId}/${refId}`,
         );
         const { data: signedRefs, error: signedRefError } =
@@ -289,7 +348,7 @@ Deno.serve(async (req) => {
         }
         return await generateImageWithGeminiFlashEdit(
           googleGenAI,
-          builtPrompt,
+          flashPrompt,
           signedRefUrls,
           imageUsageCtx,
           flashModel,
@@ -332,7 +391,12 @@ Deno.serve(async (req) => {
     };
 
     // Legacy Normal tier requests (nano-banana-pro) keep their own chain.
+    // Edit mode has no multi-turn equivalent (it needs the marked composite),
+    // so we route nano-banana-pro edits to the Nano Banana 2 flash edit path.
     const generateWithNormalOrLite = async (): Promise<Buffer> => {
+      if (isEditMode) {
+        return await generateWithNanoBanana2OrLite();
+      }
       try {
         return await generateWithNormal();
       } catch (error) {
@@ -367,9 +431,13 @@ Deno.serve(async (req) => {
           conversationId,
           builtPrompt,
           referenceIds,
+          // Edit mode must re-encode the source as base64 so the alpha mask
+          // matches the exact pixels being edited; never use the prior-call-id
+          // shortcut here.
           null,
           getOpenAiImageGenerationQuality(selectedImageGenerationModel),
           imageUsageCtx,
+          isEditMode ? maskImageId : null,
         );
         imageBytes = result.imageBytes;
         contentType = result.contentType;
@@ -423,6 +491,8 @@ Deno.serve(async (req) => {
       ...(referenceIds.length > 0 && { images: referenceIds }),
       ...(Array.isArray(refImageLabels) &&
         refImageLabels.length > 0 && { refImageLabels }),
+      ...(isEditMode && maskImageId && { maskImageId }),
+      ...(isEditMode && markedImageId && { markedImageId }),
     };
 
     const { error: imageRowError } = await serviceClient.from('images').upsert(
