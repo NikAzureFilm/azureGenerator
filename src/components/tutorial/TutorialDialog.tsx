@@ -131,20 +131,23 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         onKeyDown={handleKeyDown}
-        className="max-h-[95vh] w-[97vw] max-w-[1800px] overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-4 text-adam-text-primary sm:rounded-xl sm:p-6"
+        className="flex h-[min(95vh,1150px)] w-[97vw] max-w-[1800px] flex-col overflow-y-auto border-adam-neutral-800 bg-adam-bg-secondary-dark p-4 text-adam-text-primary sm:rounded-xl sm:p-6"
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{slide.title}</DialogTitle>
           <DialogDescription>{slide.description}</DialogDescription>
         </DialogHeader>
 
-        {/* Screenshot — sized by viewport height so it renders as large as
-            the screen allows (all sources share the 1920×930 crop, so no
-            letterbox). On load failure we swap in a framed title placeholder
-            that keeps the same footprint. */}
-        <div className="flex w-full items-center justify-center">
+        {/* Screenshot — the only shrinkable flex row (min-h-0 flex-1), so it
+            fills whatever height the caption and nav leave over and the
+            dialog never scrolls, regardless of viewport height. On load
+            failure we swap in a framed title placeholder. */}
+        <div className="relative min-h-0 w-full flex-1">
+          {/* Absolutely positioned so max-h/max-w percentages resolve against
+              the flex row's laid-out size (a content-sized flex item is not
+              "definite" for percentage children). */}
           {failedImages[index] ? (
-            <div className="flex aspect-[1920/930] max-h-[72vh] w-full items-center justify-center rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 px-6 text-center text-base font-medium text-adam-text-secondary">
+            <div className="absolute left-1/2 top-1/2 flex aspect-[1920/930] max-h-full w-auto max-w-full -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 px-6 text-center text-base font-medium text-adam-text-secondary">
               {slide.title}
             </div>
           ) : (
@@ -155,12 +158,12 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
               onError={() =>
                 setFailedImages((prev) => ({ ...prev, [index]: true }))
               }
-              className="max-h-[72vh] w-auto max-w-full rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 object-contain"
+              className="absolute left-1/2 top-1/2 max-h-full max-w-full -translate-x-1/2 -translate-y-1/2 rounded-lg border border-adam-neutral-800 bg-adam-neutral-950 object-contain"
             />
           )}
         </div>
 
-        <div className="mt-5 flex flex-col gap-2">
+        <div className="mt-1 flex shrink-0 flex-col gap-2">
           <h2 className="text-2xl font-semibold text-adam-text-primary">
             {slide.title}
           </h2>
@@ -170,7 +173,7 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
         </div>
 
         {/* Dot indicators */}
-        <div className="mt-4 flex items-center justify-center gap-2">
+        <div className="flex shrink-0 items-center justify-center gap-2">
           {TUTORIAL_SLIDES.map((s, i) => (
             <button
               key={s.image}
@@ -189,7 +192,7 @@ export function TutorialDialog({ open, onOpenChange }: TutorialDialogProps) {
         </div>
 
         {/* Navigation */}
-        <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-3">
           <Button
             variant="outline"
             className="h-9 gap-1.5"
