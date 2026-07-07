@@ -11,11 +11,9 @@ import {
   computeLayerMixRecipe,
   describeMixQuality,
   recommendFilamentPreset,
+  recommendPrintMode,
 } from './fullSpectrumMixing';
 
-const RYB_PRESET = FULL_SPECTRUM_FILAMENT_PRESETS.find(
-  (preset) => preset.id === 'ryb',
-)!;
 const CMY_PRESET = FULL_SPECTRUM_FILAMENT_PRESETS.find(
   (preset) => preset.id === 'translucent-cmy',
 )!;
@@ -60,20 +58,21 @@ describe('colorDeltaE / describeMixQuality', () => {
 
 describe('computeLayerMixRecipe', () => {
   it('uses a single layer when a filament matches the target exactly', () => {
-    const recipe = computeLayerMixRecipe('#E53935', RYB_PRESET.filaments);
+    // Cyan is the first filament in the CMY set.
+    const recipe = computeLayerMixRecipe('#00AEEF', CMY_PRESET.filaments);
     expect(recipe.layerFilamentIndexes).toEqual([0]);
     expect(recipe.patternLabel).toBe('1');
     expect(recipe.deltaE).toBe(0);
-    expect(recipe.achievedHex).toBe('#E53935');
+    expect(recipe.achievedHex).toBe('#00AEEF');
   });
 
   it('mixes multiple filaments to approximate an out-of-set color', () => {
-    // Orange is not in the RYB set; a red+yellow blend should get closer
+    // Orange is not in the CMY set; a magenta+yellow blend should get closer
     // than any single filament.
     const orange = '#F08A24';
-    const recipe = computeLayerMixRecipe(orange, RYB_PRESET.filaments);
+    const recipe = computeLayerMixRecipe(orange, CMY_PRESET.filaments);
     const bestSingle = Math.min(
-      ...RYB_PRESET.filaments.map((filament) =>
+      ...CMY_PRESET.filaments.map((filament) =>
         colorDeltaE(orange, filament.hex),
       ),
     );
@@ -82,18 +81,18 @@ describe('computeLayerMixRecipe', () => {
   });
 
   it('respects the layer cycle limit', () => {
-    const recipe = computeLayerMixRecipe('#F08A24', RYB_PRESET.filaments, {
+    const recipe = computeLayerMixRecipe('#F08A24', CMY_PRESET.filaments, {
       maxLayersPerCycle: 2,
     });
     expect(recipe.layerFilamentIndexes.length).toBeLessThanOrEqual(2);
   });
 
   it('flags cycles that exceed the invisible stack height', () => {
-    const shortCycle = computeLayerMixRecipe('#E53935', RYB_PRESET.filaments);
+    const shortCycle = computeLayerMixRecipe('#00AEEF', CMY_PRESET.filaments);
     expect(shortCycle.stackHeightMm).toBeCloseTo(FULL_SPECTRUM_LAYER_HEIGHT_MM);
     expect(shortCycle.exceedsInvisibleStack).toBe(false);
 
-    const tallCycle = computeLayerMixRecipe('#F08A24', RYB_PRESET.filaments, {
+    const tallCycle = computeLayerMixRecipe('#F08A24', CMY_PRESET.filaments, {
       layerHeightMm: 0.2,
     });
     expect(tallCycle.stackHeightMm).toBeGreaterThan(
@@ -104,13 +103,18 @@ describe('computeLayerMixRecipe', () => {
 });
 
 describe('buildFullSpectrumPlan', () => {
-  it('produces one recipe per valid palette color', () => {
+  it('emits one recipe per palette entry, keeping index alignment', () => {
     const plan = buildFullSpectrumPlan({
-      paletteHex: ['#E53935', 'not-a-color', '#1E88E5'],
-      preset: RYB_PRESET,
+      paletteHex: ['#00AEEF', 'not-a-color', '#FFF200'],
+      preset: CMY_PRESET,
     });
-    expect(plan.recipes).toHaveLength(2);
+    // Position-preserving: three inputs -> three recipes, so an invalid entry
+    // does not shift the colors after it.
+    expect(plan.recipes).toHaveLength(3);
     expect(plan.layerHeightMm).toBe(FULL_SPECTRUM_LAYER_HEIGHT_MM);
+    // The unparseable middle entry is an identity recipe on the first filament
+    // and is excluded from the average, which stays 0 for the exact matches.
+    expect(plan.recipes[1].layerFilamentIndexes).toEqual([0]);
     expect(plan.averageDeltaE).toBe(0);
     for (const recipe of plan.recipes) {
       expect(recipe.layerFilamentIndexes.length).toBeLessThanOrEqual(
@@ -121,20 +125,47 @@ describe('buildFullSpectrumPlan', () => {
 });
 
 describe('recommendFilamentPreset', () => {
-  it('recommends the set whose blends match the palette best', () => {
-    const { preset, reason } = recommendFilamentPreset([
-      '#E53935',
-      '#FDD835',
-      '#1E88E5',
-    ]);
-    expect(preset.id).toBe('ryb');
-    expect(reason).toContain('ΔE');
-  });
-
-  it('recommends the CMY set for its own primaries', () => {
-    const { preset } = recommendFilamentPreset(
+  it('returns the sole CMY set with a coherent reason', () => {
+    const { preset, reason } = recommendFilamentPreset(
       CMY_PRESET.filaments.map((filament) => filament.hex),
     );
     expect(preset.id).toBe('translucent-cmy');
+    expect(reason).toBe('Only one filament set available.');
+  });
+});
+
+describe('recommendPrintMode', () => {
+  it('recommends classic for a small directly-printable palette', () => {
+    const { mode, reason } = recommendPrintMode(['#FF0000', '#00FF00']);
+    expect(mode).toBe('classic');
+    expect(reason).toContain('2 colors');
+  });
+
+  it('recommends classic when even the best mix is a poor match', () => {
+    // Five saturated primaries/secondaries that translucent CMY cannot blend
+    // accurately, so separate spools reproduce them better.
+    const { mode } = recommendPrintMode([
+      '#FF0000',
+      '#00FF00',
+      '#0000FF',
+      '#FF00FF',
+      '#00FFFF',
+    ]);
+    expect(mode).toBe('classic');
+  });
+
+  it('recommends full spectrum for many well-mixable colors', () => {
+    // Many colors that sit close to CMY blends: cyan, magenta, yellow and
+    // their pairwise mixes reproduce with low ΔE.
+    const { mode, reason } = recommendPrintMode([
+      '#00AEEF',
+      '#EC008C',
+      '#FFF200',
+      '#7A5CB0',
+      '#8F9E3C',
+      '#F06EA9',
+    ]);
+    expect(mode).toBe('fullSpectrum');
+    expect(reason).toContain('ΔE');
   });
 });

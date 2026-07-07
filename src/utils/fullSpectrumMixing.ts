@@ -58,22 +58,12 @@ export const FULL_SPECTRUM_FILAMENT_PRESETS: FilamentSetPreset[] = [
       { name: 'Black', hex: '#1A1A1A' },
     ],
   },
-  {
-    id: 'ryb',
-    label: 'Red + Yellow + Blue + White + Black',
-    description:
-      'More intuitive blends — natural oranges, purples and deep greens ' +
-      '— with a narrower overall range. Works with common PLA; keep ' +
-      'layers at 0.08–0.1 mm to hide the stripes.',
-    filaments: [
-      { name: 'Red', hex: '#E53935' },
-      { name: 'Yellow', hex: '#FDD835' },
-      { name: 'Blue', hex: '#1E88E5' },
-      { name: 'White', hex: '#F2F2F2' },
-      { name: 'Black', hex: '#1A1A1A' },
-    ],
-  },
 ];
+
+/** Palettes at or below this size print directly on a normal multi-color AMS. */
+const CLASSIC_MODE_MAX_DIRECT_COLORS = 4;
+/** Average mix ΔE above this means separate filaments reproduce colors better. */
+const CLASSIC_MODE_POOR_MIX_DELTA_E = 12;
 
 export type LayerMixRecipe = {
   targetHex: string;
@@ -288,23 +278,52 @@ export function buildFullSpectrumPlan({
   maxLayersPerCycle?: number;
   layerHeightMm?: number;
 }): FullSpectrumPlan {
-  const recipes = paletteHex
-    .map((hex) => normalizeHex(hex))
-    .filter((hex): hex is string => hex !== null)
-    .map((hex) =>
-      computeLayerMixRecipe(hex, preset.filaments, {
-        maxLayersPerCycle,
-        layerHeightMm,
-      }),
-    );
+  // One recipe per input color, in order, so callers can map a palette index to
+  // its recipe positionally. An unparseable entry (which a detected palette
+  // never produces) becomes an identity recipe on the first physical filament
+  // and is left out of the match-quality average.
+  const recipes: LayerMixRecipe[] = [];
+  const matchedDeltaEs: number[] = [];
+  for (const hex of paletteHex) {
+    const normalized = normalizeHex(hex);
+    if (normalized === null) {
+      recipes.push(buildPassthroughRecipe(preset, layerHeightMm));
+      continue;
+    }
+    const recipe = computeLayerMixRecipe(normalized, preset.filaments, {
+      maxLayersPerCycle,
+      layerHeightMm,
+    });
+    recipes.push(recipe);
+    matchedDeltaEs.push(recipe.deltaE);
+  }
 
   const averageDeltaE =
-    recipes.length === 0
+    matchedDeltaEs.length === 0
       ? 0
-      : recipes.reduce((sum, recipe) => sum + recipe.deltaE, 0) /
-        recipes.length;
+      : matchedDeltaEs.reduce((sum, deltaE) => sum + deltaE, 0) /
+        matchedDeltaEs.length;
 
   return { preset, recipes, layerHeightMm, averageDeltaE };
+}
+
+// Placeholder recipe for an unparseable palette entry: print the first physical
+// filament directly (no mixing) so downstream slot mapping stays aligned.
+function buildPassthroughRecipe(
+  preset: FilamentSetPreset,
+  layerHeightMm: number,
+): LayerMixRecipe {
+  const achievedHex =
+    normalizeHex(preset.filaments[0]?.hex ?? '#808080') ?? '#808080';
+  return {
+    targetHex: achievedHex,
+    achievedHex,
+    layerFilamentIndexes: [0],
+    patternLabel: '1',
+    deltaE: Number.POSITIVE_INFINITY,
+    stackHeightMm: layerHeightMm,
+    exceedsInvisibleStack: false,
+  };
 }
 
 export function recommendFilamentPreset(
@@ -328,5 +347,50 @@ export function recommendFilamentPreset(
             .map((plan) => plan.averageDeltaE.toFixed(1))
             .join(', ')}).`
         : 'Only one filament set available.',
+  };
+}
+
+/**
+ * Recommend Classic multi-color vs Full Spectrum layer mixing for a palette.
+ *
+ * Classic wins when the palette is small enough that a normal AMS can load one
+ * spool per color (perfect colors, no stripes), or when even the best CMY
+ * mixing plan is too far off to look right. Otherwise Full Spectrum reproduces
+ * many colors from a handful of translucent filaments.
+ */
+export function recommendPrintMode(paletteHex: string[]): {
+  mode: 'classic' | 'fullSpectrum';
+  reason: string;
+} {
+  const validColors = paletteHex
+    .map((hex) => normalizeHex(hex))
+    .filter((hex): hex is string => hex !== null);
+
+  if (validColors.length <= CLASSIC_MODE_MAX_DIRECT_COLORS) {
+    return {
+      mode: 'classic',
+      reason: `Only ${validColors.length} color${
+        validColors.length === 1 ? '' : 's'
+      } detected — a standard multi-color printer can load one filament per color for perfect results.`,
+    };
+  }
+
+  const preset = FULL_SPECTRUM_FILAMENT_PRESETS[0];
+  const plan = buildFullSpectrumPlan({ paletteHex: validColors, preset });
+
+  if (plan.averageDeltaE > CLASSIC_MODE_POOR_MIX_DELTA_E) {
+    return {
+      mode: 'classic',
+      reason: `Layer mixing only reaches avg ΔE ${plan.averageDeltaE.toFixed(
+        1,
+      )} on these colors — separate filaments reproduce them more accurately.`,
+    };
+  }
+
+  return {
+    mode: 'fullSpectrum',
+    reason: `${validColors.length} colors reproduce well by layer mixing (avg ΔE ${plan.averageDeltaE.toFixed(
+      1,
+    )}) from just ${preset.filaments.length} filaments.`,
   };
 }

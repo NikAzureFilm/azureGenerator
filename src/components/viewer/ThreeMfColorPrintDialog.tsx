@@ -1,9 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { GLTF } from 'three-stdlib';
 import { Canvas } from '@react-three/fiber';
 import { Environment, OrbitControls, Stage } from '@react-three/drei';
-import { AlertTriangle, Download, Layers, Loader2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Download,
+  Layers,
+  Loader2,
+  Palette,
+} from 'lucide-react';
 import * as Sentry from '@sentry/react';
 
 import {
@@ -24,6 +30,7 @@ import {
   MAX_THREE_MF_COLOR_COUNT,
   computeThreeMfColoredMesh,
   type ThreeMfColoredMesh,
+  type ThreeMfMixedFilamentPlan,
   type ThreeMfSemanticMaterialMap,
   type ThreeMfTargetMaterialPalette,
 } from '@/utils/threeMfExport';
@@ -32,11 +39,20 @@ import {
   FULL_SPECTRUM_LAYER_HEIGHT_MM,
   buildFullSpectrumPlan,
   describeMixQuality,
-  recommendFilamentPreset,
+  recommendPrintMode,
   type MixQuality,
 } from '@/utils/fullSpectrumMixing';
 
 const RECOMPUTE_DEBOUNCE_MS = 300;
+
+// Full Spectrum blends a fixed translucent CMY + white + black set; there is a
+// single filament set, so the dialog uses it directly.
+const FULL_SPECTRUM_PRESET = FULL_SPECTRUM_FILAMENT_PRESETS[0];
+// Faces whose normals differ by more than this stay hard-edged in the preview;
+// smoother angles get averaged so the model reads as smooth as the main viewer.
+const PREVIEW_CREASE_ANGLE_COS = Math.cos((60 * Math.PI) / 180);
+
+type PrintMode = 'classic' | 'fullSpectrum';
 
 const MIX_QUALITY_STYLES: Record<MixQuality, string> = {
   excellent: 'bg-emerald-400',
@@ -57,6 +73,23 @@ function disposeScene(scene: THREE.Scene | null | undefined): void {
   });
 }
 
+function computeTriangleFaceNormal(
+  vertices: ThreeMfColoredMesh['vertices'],
+  triangle: ThreeMfColoredMesh['triangles'][number],
+): THREE.Vector3 {
+  const a = vertices[triangle.v1];
+  const b = vertices[triangle.v2];
+  const c = vertices[triangle.v3];
+  const va = new THREE.Vector3(a?.[0] ?? 0, a?.[1] ?? 0, a?.[2] ?? 0);
+  const vb = new THREE.Vector3(b?.[0] ?? 0, b?.[1] ?? 0, b?.[2] ?? 0);
+  const vc = new THREE.Vector3(c?.[0] ?? 0, c?.[1] ?? 0, c?.[2] ?? 0);
+  const normal = new THREE.Vector3()
+    .subVectors(vb, va)
+    .cross(new THREE.Vector3().subVectors(vc, va));
+  const lengthSq = normal.lengthSq();
+  return lengthSq > 0 ? normal.multiplyScalar(1 / Math.sqrt(lengthSq)) : normal;
+}
+
 function buildColoredMeshGeometry(
   coloredMesh: ThreeMfColoredMesh,
   palette: string[],
@@ -64,11 +97,33 @@ function buildColoredMeshGeometry(
   const { vertices, triangles } = coloredMesh;
   const positions = new Float32Array(triangles.length * 9);
   const colors = new Float32Array(triangles.length * 9);
+  const normals = new Float32Array(triangles.length * 9);
   const paletteColors = palette.map((hex) => new THREE.Color(hex));
   const fallbackColor = new THREE.Color('#CCCCCC');
 
+  // The coloredMesh vertices are shared/indexed, so per-corner normals can be
+  // smoothed by averaging the face normals of the triangles that meet at each
+  // vertex — but only across faces within the crease angle, so hard edges stay
+  // crisp. Colors remain per-corner from each triangle's palette index.
+  const faceNormals = triangles.map((triangle) =>
+    computeTriangleFaceNormal(vertices, triangle),
+  );
+  const vertexTriangleIndexes = new Map<number, number[]>();
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const vertexIndex of [triangle.v1, triangle.v2, triangle.v3]) {
+      const list = vertexTriangleIndexes.get(vertexIndex);
+      if (list) {
+        list.push(triangleIndex);
+      } else {
+        vertexTriangleIndexes.set(vertexIndex, [triangleIndex]);
+      }
+    }
+  });
+
+  const smoothedNormal = new THREE.Vector3();
   triangles.forEach((triangle, triangleIndex) => {
     const color = paletteColors[triangle.colorIndex] ?? fallbackColor;
+    const faceNormal = faceNormals[triangleIndex];
     [triangle.v1, triangle.v2, triangle.v3].forEach(
       (vertexIndex, cornerIndex) => {
         const offset = triangleIndex * 9 + cornerIndex * 3;
@@ -79,6 +134,22 @@ function buildColoredMeshGeometry(
         colors[offset] = color.r;
         colors[offset + 1] = color.g;
         colors[offset + 2] = color.b;
+
+        smoothedNormal.set(0, 0, 0);
+        for (const neighborIndex of vertexTriangleIndexes.get(vertexIndex) ??
+          []) {
+          const neighborNormal = faceNormals[neighborIndex];
+          if (neighborNormal.dot(faceNormal) >= PREVIEW_CREASE_ANGLE_COS) {
+            smoothedNormal.add(neighborNormal);
+          }
+        }
+        if (smoothedNormal.lengthSq() === 0) {
+          smoothedNormal.copy(faceNormal);
+        }
+        smoothedNormal.normalize();
+        normals[offset] = smoothedNormal.x;
+        normals[offset + 1] = smoothedNormal.y;
+        normals[offset + 2] = smoothedNormal.z;
       },
     );
   });
@@ -86,7 +157,7 @@ function buildColoredMeshGeometry(
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   return geometry;
 }
 
@@ -106,12 +177,7 @@ function ColoredMeshPreview({
 
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial
-        vertexColors
-        flatShading
-        roughness={0.6}
-        metalness={0.05}
-      />
+      <meshStandardMaterial vertexColors roughness={0.6} metalness={0.05} />
     </mesh>
   );
 }
@@ -132,6 +198,74 @@ function getColorDetailLabel(colorDetail: number): string {
   return 'Very detailed — per-triangle texture detail';
 }
 
+// A <input type="color"> needs a lowercase #rrggbb value; the app stores
+// palette colors as #RRGGBB, which the picker accepts either way.
+function toColorInputValue(hex: string): string {
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  return match ? `#${match[1].toLowerCase()}` : '#cccccc';
+}
+
+function ModeCard({
+  selected,
+  recommended,
+  icon,
+  title,
+  beta,
+  description,
+  onSelect,
+}: {
+  selected: boolean;
+  recommended: boolean;
+  icon: ReactNode;
+  title: string;
+  beta?: boolean;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        'flex flex-1 flex-col gap-1.5 rounded-lg border p-3 text-left transition-colors',
+        selected
+          ? 'border-adam-blue bg-adam-blue/10 ring-1 ring-adam-blue'
+          : 'border-adam-neutral-700 hover:border-adam-neutral-500',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            'flex h-4 w-4 items-center justify-center rounded-full border',
+            selected
+              ? 'border-adam-blue bg-adam-blue'
+              : 'border-adam-neutral-500',
+          )}
+        >
+          {selected ? (
+            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          ) : null}
+        </span>
+        {icon}
+        <span className="text-sm font-medium">{title}</span>
+        {beta ? (
+          <span className="rounded bg-adam-blue/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-adam-blue">
+            Beta
+          </span>
+        ) : null}
+        {recommended ? (
+          <span className="ml-auto rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+            ★ Recommended
+          </span>
+        ) : null}
+      </div>
+      <p className="text-xs text-adam-text-secondary">{description}</p>
+    </button>
+  );
+}
+
 export function ThreeMfColorPrintDialog({
   open,
   onOpenChange,
@@ -139,6 +273,7 @@ export function ThreeMfColorPrintDialog({
   semanticMaterialMap,
   targetMaterialPalette,
   isDownloading,
+  initialMode = 'classic',
   onDownload,
 }: {
   open: boolean;
@@ -147,12 +282,16 @@ export function ThreeMfColorPrintDialog({
   semanticMaterialMap: ThreeMfSemanticMaterialMap | null;
   targetMaterialPalette: ThreeMfTargetMaterialPalette | null;
   isDownloading: boolean;
+  initialMode?: PrintMode;
   onDownload: (options: {
     colorCount: number;
     colorDetail: number;
     coloredMesh: ThreeMfColoredMesh;
+    mode: PrintMode;
+    fullSpectrum?: ThreeMfMixedFilamentPlan;
   }) => void;
 }) {
+  const [mode, setMode] = useState<PrintMode>(initialMode);
   const [colorCount, setColorCount] = useState(DEFAULT_THREE_MF_COLOR_COUNT);
   const [colorDetail, setColorDetail] = useState(DEFAULT_THREE_MF_COLOR_DETAIL);
   const [coloredMesh, setColoredMesh] = useState<ThreeMfColoredMesh | null>(
@@ -160,8 +299,24 @@ export function ThreeMfColorPrintDialog({
   );
   const [isComputing, setIsComputing] = useState(false);
   const [computeError, setComputeError] = useState<string | null>(null);
-  const [presetId, setPresetId] = useState<string | null>(null);
-  const [simulateBlend, setSimulateBlend] = useState(false);
+  // Full-spectrum previews show the achieved blended colors by default so the
+  // user sees what the print will actually look like.
+  const [simulateBlend, setSimulateBlend] = useState(true);
+  // User edits to detected palette colors, keyed by palette index and applied
+  // everywhere downstream (preview, mixing plan, export).
+  const [paletteOverrides, setPaletteOverrides] = useState<
+    Record<number, string>
+  >({});
+
+  // Full-spectrum mode reserves the physical filament slots, so the number of
+  // extra printable colors is capped so the total never exceeds the 16 slots.
+  const maxColorCount =
+    mode === 'fullSpectrum'
+      ? Math.max(
+          1,
+          MAX_THREE_MF_COLOR_COUNT - FULL_SPECTRUM_PRESET.filaments.length,
+        )
+      : MAX_THREE_MF_COLOR_COUNT;
 
   // The printable-processed scene is expensive to build, so it is prepared
   // once per gltf behind a shared promise: overlapping computes await the
@@ -180,6 +335,21 @@ export function ThreeMfColorPrintDialog({
     },
     [],
   );
+
+  // Reset the per-open UI choices (mode, blend simulation, color edits) each
+  // time the dialog opens so a previous session doesn't leak into a new model.
+  useEffect(() => {
+    if (open) {
+      setMode(initialMode);
+      setSimulateBlend(true);
+      setPaletteOverrides({});
+    }
+  }, [open, initialMode]);
+
+  // Keep the requested color count within the current mode's slot budget.
+  useEffect(() => {
+    setColorCount((count) => Math.min(count, maxColorCount));
+  }, [maxColorCount]);
 
   useEffect(() => {
     if (!open || !gltf) {
@@ -264,48 +434,134 @@ export function ThreeMfColorPrintDialog({
     targetMaterialPalette,
   ]);
 
-  const recommendation = useMemo(
-    () =>
-      coloredMesh && coloredMesh.palette.length > 0
-        ? recommendFilamentPreset(coloredMesh.palette)
-        : null,
-    [coloredMesh],
-  );
+  // Drop overrides that no longer point at a palette entry when the detected
+  // palette shrinks (fewer colors), so "Reset colors" reflects real edits.
+  useEffect(() => {
+    const paletteLength = coloredMesh?.palette.length ?? 0;
+    setPaletteOverrides((previous) => {
+      const entries = Object.entries(previous).filter(
+        ([index]) => Number(index) < paletteLength,
+      );
+      return entries.length === Object.keys(previous).length
+        ? previous
+        : Object.fromEntries(entries);
+    });
+  }, [coloredMesh]);
 
-  const activePreset =
-    FULL_SPECTRUM_FILAMENT_PRESETS.find((preset) => preset.id === presetId) ??
-    recommendation?.preset ??
-    FULL_SPECTRUM_FILAMENT_PRESETS[0];
+  // The detected palette with the user's color edits applied.
+  const editedPalette = useMemo(() => {
+    if (!coloredMesh) {
+      return [] as string[];
+    }
+    return coloredMesh.palette.map(
+      (hex, index) => paletteOverrides[index] ?? hex,
+    );
+  }, [coloredMesh, paletteOverrides]);
 
   const fullSpectrumPlan = useMemo(
     () =>
-      coloredMesh && coloredMesh.palette.length > 0
+      editedPalette.length > 0
         ? buildFullSpectrumPlan({
-            paletteHex: coloredMesh.palette,
-            preset: activePreset,
+            paletteHex: editedPalette,
+            preset: FULL_SPECTRUM_PRESET,
           })
         : null,
-    [coloredMesh, activePreset],
+    [editedPalette],
   );
 
-  const previewPalette =
-    simulateBlend && fullSpectrumPlan && coloredMesh
-      ? fullSpectrumPlan.recipes.map((recipe) => recipe.achievedHex)
-      : (coloredMesh?.palette ?? []);
+  const modeRecommendation = useMemo(
+    () => (editedPalette.length > 0 ? recommendPrintMode(editedPalette) : null),
+    [editedPalette],
+  );
+
+  // Memoized so the preview geometry (which averages normals and builds an
+  // adjacency map) is only rebuilt when the shown palette actually changes,
+  // not on every render while blend simulation is on.
+  const previewPalette = useMemo(
+    () =>
+      mode === 'fullSpectrum' && simulateBlend && fullSpectrumPlan
+        ? fullSpectrumPlan.recipes.map((recipe) => recipe.achievedHex)
+        : editedPalette,
+    [mode, simulateBlend, fullSpectrumPlan, editedPalette],
+  );
+
+  const hasOverrides = Object.keys(paletteOverrides).length > 0;
+
+  const handleDownload = () => {
+    if (!coloredMesh) {
+      return;
+    }
+
+    const exportedMesh: ThreeMfColoredMesh = {
+      ...coloredMesh,
+      palette: editedPalette,
+    };
+    const fullSpectrum =
+      mode === 'fullSpectrum' && fullSpectrumPlan
+        ? {
+            presetFilaments: FULL_SPECTRUM_PRESET.filaments.map((filament) => ({
+              name: filament.name,
+              hex: filament.hex,
+            })),
+            recipes: fullSpectrumPlan.recipes.map((recipe) => ({
+              achievedHex: recipe.achievedHex,
+              layerFilamentIndexes: recipe.layerFilamentIndexes,
+            })),
+          }
+        : undefined;
+
+    onDownload({
+      colorCount,
+      colorDetail,
+      coloredMesh: exportedMesh,
+      mode,
+      fullSpectrum,
+    });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto text-adam-text-primary">
+      <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-5xl overflow-y-auto text-adam-text-primary">
         <DialogHeader>
           <DialogTitle>.3MF Color Print</DialogTitle>
           <DialogDescription>
             Preview how the model will be split into filament colors before
             downloading. Colors are stored per-triangle in the .3MF and map to
-            filament slots in Bambu Studio / Orca.
+            filament slots in your slicer.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="relative h-64 overflow-hidden rounded-md border border-adam-neutral-700 bg-adam-neutral-950 sm:h-80">
+        <div
+          role="radiogroup"
+          aria-label="Color print technique"
+          className="flex flex-col gap-3 sm:flex-row"
+        >
+          <ModeCard
+            selected={mode === 'classic'}
+            recommended={modeRecommendation?.mode === 'classic'}
+            icon={<Palette className="h-4 w-4 text-adam-blue" />}
+            title="Classic multi-color"
+            onSelect={() => setMode('classic')}
+            description="Prints each detected palette color with its own filament — the standard multi-color technique (e.g. red, yellow, blue, white, black spools)."
+          />
+          <ModeCard
+            selected={mode === 'fullSpectrum'}
+            recommended={modeRecommendation?.mode === 'fullSpectrum'}
+            icon={<Layers className="h-4 w-4 text-adam-blue" />}
+            title="Full Spectrum layer mixing"
+            beta
+            onSelect={() => setMode('fullSpectrum')}
+            description="Blends translucent Cyan, Magenta, Yellow + White + Black layer-by-layer to reproduce the full color spectrum."
+          />
+        </div>
+        {modeRecommendation ? (
+          <p className="-mt-1 text-[11px] text-adam-text-secondary/80">
+            <span className="text-emerald-400">★ Recommended:</span>{' '}
+            {modeRecommendation.reason}
+          </p>
+        ) : null}
+
+        <div className="relative h-72 overflow-hidden rounded-md border border-adam-neutral-700 bg-adam-neutral-950 sm:h-96">
           {coloredMesh && coloredMesh.triangles.length > 0 ? (
             <Canvas dpr={[1, 2]} camera={{ fov: 45 }}>
               <Environment preset="city" />
@@ -320,7 +576,15 @@ export function ThreeMfColorPrintDialog({
                   palette={previewPalette}
                 />
               </Stage>
-              <OrbitControls makeDefault enablePan={false} />
+              <OrbitControls
+                makeDefault
+                enablePan
+                mouseButtons={{
+                  LEFT: THREE.MOUSE.ROTATE,
+                  MIDDLE: THREE.MOUSE.PAN,
+                  RIGHT: THREE.MOUSE.PAN,
+                }}
+              />
             </Canvas>
           ) : null}
           {isComputing || (!coloredMesh && !computeError) ? (
@@ -342,18 +606,48 @@ export function ThreeMfColorPrintDialog({
             <span className="text-xs text-adam-text-secondary">
               Detected palette:
             </span>
-            {coloredMesh.palette.map((hex, index) => (
-              <span
-                key={`${hex}-${index}`}
-                className="inline-flex items-center gap-1 rounded border border-adam-neutral-700 px-1.5 py-0.5 text-[10px] text-adam-text-secondary"
+            {coloredMesh.palette.map((_, index) => {
+              const currentHex = editedPalette[index];
+              const isEdited = paletteOverrides[index] !== undefined;
+              return (
+                <label
+                  key={index}
+                  title="Click to edit this color"
+                  className={cn(
+                    'inline-flex cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] text-adam-text-secondary transition-colors hover:border-adam-neutral-500',
+                    isEdited
+                      ? 'border-adam-blue/70'
+                      : 'border-adam-neutral-700',
+                  )}
+                >
+                  <span
+                    className="h-3 w-3 rounded-sm border border-black/30"
+                    style={{ backgroundColor: currentHex }}
+                  />
+                  {currentHex}
+                  <input
+                    type="color"
+                    value={toColorInputValue(currentHex)}
+                    onChange={(event) =>
+                      setPaletteOverrides((previous) => ({
+                        ...previous,
+                        [index]: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="sr-only"
+                  />
+                </label>
+              );
+            })}
+            {hasOverrides ? (
+              <button
+                type="button"
+                onClick={() => setPaletteOverrides({})}
+                className="rounded border border-adam-neutral-700 px-1.5 py-0.5 text-[10px] text-adam-text-secondary hover:border-adam-neutral-500"
               >
-                <span
-                  className="h-3 w-3 rounded-sm border border-black/30"
-                  style={{ backgroundColor: hex }}
-                />
-                {hex}
-              </span>
-            ))}
+                Reset colors
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -366,9 +660,9 @@ export function ThreeMfColorPrintDialog({
               </span>
             </div>
             <Slider
-              value={[colorCount]}
+              value={[Math.min(colorCount, maxColorCount)]}
               min={1}
-              max={MAX_THREE_MF_COLOR_COUNT}
+              max={maxColorCount}
               step={1}
               defaultValue={[DEFAULT_THREE_MF_COLOR_COUNT]}
               onValueChange={([value]) => setColorCount(value)}
@@ -396,156 +690,129 @@ export function ThreeMfColorPrintDialog({
           </div>
         </div>
 
-        <div className="rounded-md border border-adam-neutral-700 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Layers className="h-4 w-4 text-adam-blue" />
-              <span className="text-sm font-medium">
-                Full Spectrum layer mixing
-              </span>
-              <span className="rounded bg-adam-blue/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-adam-blue">
-                Beta
-              </span>
-            </div>
-            <label className="flex items-center gap-2 text-xs text-adam-text-secondary">
-              Simulate blended colors in preview
-              <Switch
-                checked={simulateBlend}
-                onCheckedChange={setSimulateBlend}
-              />
-            </label>
-          </div>
-          <p className="mt-2 text-xs text-adam-text-secondary">
-            Tool-changer printers (e.g. Snapmaker U1 with Snapmaker Orca ≥
-            2.3.3) can blend a few filaments into many colors by alternating
-            them layer by layer — stacks under 0.2&nbsp;mm read as a single
-            mixed color. Load the filament set below and enter each pattern in
-            the slicer&apos;s Cycle Mix; the .3MF itself keeps the plain palette
-            colors.{' '}
-            <a
-              href="https://www.snapmaker.com/blog/getting-started-with-full-spectrum-slicing/"
-              target="_blank"
-              rel="noreferrer"
-              className="text-adam-blue underline underline-offset-2"
-            >
-              Learn the technique
-            </a>
-          </p>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            {FULL_SPECTRUM_FILAMENT_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => setPresetId(preset.id)}
-                className={cn(
-                  'rounded-md border px-2 py-1 text-xs transition-colors',
-                  preset.id === activePreset.id
-                    ? 'border-adam-blue bg-adam-blue/15 text-adam-text-primary'
-                    : 'border-adam-neutral-700 text-adam-text-secondary hover:border-adam-neutral-500',
-                )}
-                title={preset.description}
-              >
-                {preset.label}
-                {recommendation?.preset.id === preset.id ? (
-                  <span className="ml-1 text-[10px] text-emerald-400">
-                    ★ recommended
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-          {recommendation ? (
-            <p className="mt-1 text-[11px] text-adam-text-secondary/80">
-              {recommendation.reason}
-            </p>
-          ) : null}
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            {activePreset.filaments.map((filament, index) => (
-              <span
-                key={filament.name}
-                className="inline-flex items-center gap-1.5 rounded border border-adam-neutral-700 px-1.5 py-0.5 text-[10px] text-adam-text-secondary"
-              >
-                <span className="font-semibold text-adam-text-primary">
-                  {index + 1}
+        {mode === 'fullSpectrum' ? (
+          <div className="rounded-md border border-adam-neutral-700 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-adam-blue" />
+                <span className="text-sm font-medium">
+                  Full Spectrum layer mixing
                 </span>
-                <span
-                  className="h-3 w-3 rounded-sm border border-black/30"
-                  style={{ backgroundColor: filament.hex }}
+                <span className="rounded bg-adam-blue/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-adam-blue">
+                  Beta
+                </span>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-adam-text-secondary">
+                Preview blended result
+                <Switch
+                  checked={simulateBlend}
+                  onCheckedChange={setSimulateBlend}
                 />
-                {filament.name}
-              </span>
-            ))}
-          </div>
-
-          {fullSpectrumPlan ? (
-            <div className="mt-3 space-y-1.5">
-              {fullSpectrumPlan.recipes.map((recipe, index) => {
-                const quality = describeMixQuality(recipe.deltaE);
-                return (
-                  <div
-                    key={`${recipe.targetHex}-${index}`}
-                    className="flex flex-wrap items-center gap-2 text-xs"
-                  >
-                    <span
-                      className="h-4 w-4 rounded-sm border border-black/30"
-                      style={{ backgroundColor: recipe.targetHex }}
-                      title={`Target ${recipe.targetHex}`}
-                    />
-                    <span className="text-adam-text-secondary">→</span>
-                    <span
-                      className="h-4 w-4 rounded-sm border border-black/30"
-                      style={{ backgroundColor: recipe.achievedHex }}
-                      title={`Blended result ${recipe.achievedHex}`}
-                    />
-                    <span className="font-mono text-adam-text-primary">
-                      {recipe.patternLabel}
-                    </span>
-                    <span className="flex items-center gap-1 text-adam-text-secondary">
-                      <span
-                        className={cn(
-                          'h-2 w-2 rounded-full',
-                          MIX_QUALITY_STYLES[quality],
-                        )}
-                      />
-                      ΔE {recipe.deltaE.toFixed(1)} ({quality})
-                    </span>
-                    <span className="text-adam-text-secondary/70">
-                      {recipe.stackHeightMm.toFixed(2)} mm stack
-                    </span>
-                    {recipe.exceedsInvisibleStack ? (
-                      <span
-                        className="flex items-center gap-1 text-amber-400"
-                        title="Repeating stack is taller than 0.2 mm — layer stripes may be visible on shallow slopes."
-                      >
-                        <AlertTriangle className="h-3 w-3" /> stripes possible
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              })}
-              <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] text-adam-text-secondary/80">
-                <li>
-                  Slice at {FULL_SPECTRUM_LAYER_HEIGHT_MM} –0.1&nbsp;mm layer
-                  height; thicker layers make the color cycles visible.
-                </li>
-                <li>
-                  Translucent filaments (transmission distance 5–8&nbsp;mm)
-                  blend far better than opaque ones.
-                </li>
-                <li>
-                  Blends look best on vertical walls; avoid dithering on shallow
-                  slopes and sphere tops.
-                </li>
-                <li>
-                  Print a small test palette first to check stripe visibility
-                  and color accuracy.
-                </li>
-              </ul>
+              </label>
             </div>
-          ) : null}
-        </div>
+            <p className="mt-2 text-xs text-adam-text-secondary">
+              Tool-changer printers (e.g. Snapmaker U1 with Snapmaker Orca ≥
+              2.3.3) can blend a few filaments into many colors by alternating
+              them layer by layer — stacks under 0.2&nbsp;mm read as a single
+              mixed color. The export loads the filament set below and writes
+              the mixed-filament slots so the slicer prints each blend
+              automatically.{' '}
+              <a
+                href="https://www.snapmaker.com/blog/getting-started-with-full-spectrum-slicing/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-adam-blue underline underline-offset-2"
+              >
+                Learn the technique
+              </a>
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {FULL_SPECTRUM_PRESET.filaments.map((filament, index) => (
+                <span
+                  key={filament.name}
+                  className="inline-flex items-center gap-1.5 rounded border border-adam-neutral-700 px-1.5 py-0.5 text-[10px] text-adam-text-secondary"
+                >
+                  <span className="font-semibold text-adam-text-primary">
+                    {index + 1}
+                  </span>
+                  <span
+                    className="h-3 w-3 rounded-sm border border-black/30"
+                    style={{ backgroundColor: filament.hex }}
+                  />
+                  {filament.name}
+                </span>
+              ))}
+            </div>
+
+            {fullSpectrumPlan ? (
+              <div className="mt-3 space-y-1.5">
+                {fullSpectrumPlan.recipes.map((recipe, index) => {
+                  const quality = describeMixQuality(recipe.deltaE);
+                  return (
+                    <div
+                      key={`${recipe.targetHex}-${index}`}
+                      className="flex flex-wrap items-center gap-2 text-xs"
+                    >
+                      <span
+                        className="h-4 w-4 rounded-sm border border-black/30"
+                        style={{ backgroundColor: recipe.targetHex }}
+                        title={`Target ${recipe.targetHex}`}
+                      />
+                      <span className="text-adam-text-secondary">→</span>
+                      <span
+                        className="h-4 w-4 rounded-sm border border-black/30"
+                        style={{ backgroundColor: recipe.achievedHex }}
+                        title={`Blended result ${recipe.achievedHex}`}
+                      />
+                      <span className="font-mono text-adam-text-primary">
+                        {recipe.patternLabel}
+                      </span>
+                      <span className="flex items-center gap-1 text-adam-text-secondary">
+                        <span
+                          className={cn(
+                            'h-2 w-2 rounded-full',
+                            MIX_QUALITY_STYLES[quality],
+                          )}
+                        />
+                        ΔE {recipe.deltaE.toFixed(1)} ({quality})
+                      </span>
+                      <span className="text-adam-text-secondary/70">
+                        {recipe.stackHeightMm.toFixed(2)} mm stack
+                      </span>
+                      {recipe.exceedsInvisibleStack ? (
+                        <span
+                          className="flex items-center gap-1 text-amber-400"
+                          title="Repeating stack is taller than 0.2 mm — layer stripes may be visible on shallow slopes."
+                        >
+                          <AlertTriangle className="h-3 w-3" /> stripes possible
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] text-adam-text-secondary/80">
+                  <li>
+                    Slice at {FULL_SPECTRUM_LAYER_HEIGHT_MM} –0.1&nbsp;mm layer
+                    height; thicker layers make the color cycles visible.
+                  </li>
+                  <li>
+                    Translucent filaments (transmission distance 5–8&nbsp;mm)
+                    blend far better than opaque ones.
+                  </li>
+                  <li>
+                    Blends look best on vertical walls; avoid dithering on
+                    shallow slopes and sphere tops.
+                  </li>
+                  <li>
+                    Print a small test palette first to check stripe visibility
+                    and color accuracy.
+                  </li>
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="flex items-center justify-end gap-2">
           <Button
@@ -556,11 +823,7 @@ export function ThreeMfColorPrintDialog({
             Cancel
           </Button>
           <Button
-            onClick={() => {
-              if (coloredMesh) {
-                onDownload({ colorCount, colorDetail, coloredMesh });
-              }
-            }}
+            onClick={handleDownload}
             disabled={!coloredMesh || isComputing || isDownloading}
           >
             {isDownloading ? (

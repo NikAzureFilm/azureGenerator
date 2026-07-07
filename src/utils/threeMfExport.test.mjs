@@ -14,6 +14,7 @@ import {
   buildThreeMfProjectSettingsConfig,
   buildThreeMfRelationshipsXml,
   clampThreeMfColorCount,
+  createThreeMfBlobFromColoredMesh,
   createThreeMfBlobFromScene,
   analyzeThreeMfMeshTopology,
   validateThreeMfBlob,
@@ -377,6 +378,11 @@ assert.deepEqual(projectSettings.flush_volumes_vector, [
   '140',
   '140',
 ]);
+// Real Bambu values (not empty strings) so Studio stops offering to "replace"
+// them on load.
+assert.equal(projectSettings.gcode_flavor, 'marlin');
+assert.equal(projectSettings.gcode_add_line_number, '0');
+assert.equal(projectSettings.version, '01.08.02.56');
 
 const relationshipsXml = buildThreeMfRelationshipsXml();
 assert.match(relationshipsXml, /Target="\/3D\/3dmodel\.model"/);
@@ -1673,4 +1679,228 @@ const invalidThreeMfBlob = await invalidZipWriter.close();
 await assert.rejects(
   () => validateThreeMfBlob(invalidThreeMfBlob),
   /3MF triangle material index 1 exceeds 1 available materials/,
+);
+
+// Full Spectrum export: the detected palette expands into physical filament
+// slots plus a mixed slot per color the physical spools cannot print directly.
+const fullSpectrumColoredMesh = {
+  vertices: [
+    [0, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0],
+    [2, 0, 0],
+    [3, 0, 0],
+    [2, 1, 0],
+    [4, 0, 0],
+    [5, 0, 0],
+    [4, 1, 0],
+  ],
+  triangles: [
+    { v1: 0, v2: 1, v3: 2, colorIndex: 0 },
+    { v1: 3, v2: 4, v3: 5, colorIndex: 1 },
+    { v1: 6, v2: 7, v3: 8, colorIndex: 2 },
+  ],
+  palette: ['#00AEEF', '#F58A2E', '#8A8A8A'],
+};
+const fullSpectrumPlan = {
+  presetFilaments: [
+    { name: 'Cyan', hex: '#00AEEF' },
+    { name: 'Magenta', hex: '#EC008C' },
+    { name: 'Yellow', hex: '#FFF200' },
+    { name: 'White', hex: '#F2F2F2' },
+    { name: 'Black', hex: '#1A1A1A' },
+  ],
+  recipes: [
+    // Exact match to a physical spool: prints directly, no mixed slot.
+    { achievedHex: '#00AEEF', layerFilamentIndexes: [0] },
+    // Magenta + Yellow, even split.
+    { achievedHex: '#F58A2E', layerFilamentIndexes: [1, 2] },
+    // Yellow (2 layers) + White (1 layer): uneven ratios.
+    { achievedHex: '#8A8A8A', layerFilamentIndexes: [2, 2, 3] },
+  ],
+};
+const fullSpectrumBlob = await createThreeMfBlobFromColoredMesh({
+  coloredMesh: fullSpectrumColoredMesh,
+  filename: 'full-spectrum-mixed',
+  fullSpectrum: fullSpectrumPlan,
+});
+const fullSpectrumZipReader = new ZipReader(new BlobReader(fullSpectrumBlob));
+const fullSpectrumEntries = await fullSpectrumZipReader.getEntries();
+const fullSpectrumModelXml = await getMeshModelXml(fullSpectrumEntries);
+const fullSpectrumRootXml = await getZipText(
+  fullSpectrumEntries,
+  '3D/3dmodel.model',
+);
+const fullSpectrumSettings = JSON.parse(
+  await getZipText(fullSpectrumEntries, 'Metadata/project_settings.config'),
+);
+// Physical slots (5) + a mixed slot per mixing color (2) = 7 slots.
+assert.deepEqual(fullSpectrumSettings.filament_colour, [
+  '#00AEEF',
+  '#EC008C',
+  '#FFF200',
+  '#F2F2F2',
+  '#1A1A1A',
+  '#F58A2E',
+  '#8A8A8A',
+]);
+assert.deepEqual(fullSpectrumSettings.filament_is_mixed, [
+  '0',
+  '0',
+  '0',
+  '0',
+  '0',
+  '1',
+  '1',
+]);
+assert.deepEqual(fullSpectrumSettings.filament_mixed_components, [
+  '',
+  '',
+  '',
+  '',
+  '',
+  '2,3',
+  '3,4',
+]);
+for (const components of ['2,3', '3,4']) {
+  assert.match(components, /^\d(,\d)+$/);
+}
+assert.deepEqual(fullSpectrumSettings.filament_mixed_sublayer_ratios, [
+  '',
+  '',
+  '',
+  '',
+  '',
+  '0.50,0.50',
+  '0.67,0.33',
+]);
+for (const ratios of ['0.50,0.50', '0.67,0.33']) {
+  const sum = ratios.split(',').reduce((total, part) => total + Number(part), 0);
+  assert.ok(Math.abs(sum - 1) < 1e-9, `mixed ratios ${ratios} sum to 1.0`);
+}
+assert.deepEqual(
+  fullSpectrumSettings.filament_multi_colour,
+  fullSpectrumSettings.filament_colour,
+);
+assert.deepEqual(fullSpectrumSettings.filament_colour_type, [
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+  '1',
+]);
+assert.equal(fullSpectrumSettings.enable_mixed_color_sublayer, '1');
+assert.equal(fullSpectrumSettings.filament_map.length, 7);
+assert.equal(fullSpectrumSettings.version, '02.07.00.55');
+assert.match(
+  fullSpectrumRootXml,
+  /<metadata name="Application">BambuStudio-02\.07\.00\.55<\/metadata>/,
+);
+assert.match(
+  await getZipText(fullSpectrumEntries, 'Metadata/slice_info.config'),
+  /X-BBL-Client-Version" value="02\.07\.00\.55"/,
+);
+// Triangles reference their slot: the single-filament color prints on its
+// physical slot; the mixed colors print on the new slots (indexes > 5 physical).
+const fullSpectrumMaterialIndexes = [
+  ...fullSpectrumModelXml.matchAll(/\bp1="(\d+)"/g),
+].map((match) => Number(match[1]));
+assert.deepEqual(fullSpectrumMaterialIndexes, [0, 5, 6]);
+assert.ok(
+  fullSpectrumMaterialIndexes.some(
+    (index) => index >= fullSpectrumPlan.presetFilaments.length,
+  ),
+  'mixed colors are packed into slots beyond the physical filaments',
+);
+await fullSpectrumZipReader.close();
+
+// Sensitivity slider must affect semantic-mapped models: colorDetail 0 merges
+// small color islands into their surroundings while colorDetail 100 keeps them,
+// so the per-slot triangle distribution differs between the two extremes.
+function buildSensitivityGridScene() {
+  const grid = 8;
+  const positions = [];
+  for (let y = 0; y <= grid; y += 1) {
+    for (let x = 0; x <= grid; x += 1) {
+      positions.push(x, y, 0);
+    }
+  }
+  const vertexIndex = (x, y) => y * (grid + 1) + x;
+  const indexes = [];
+  const triangleMaterialIds = [];
+  for (let y = 0; y < grid; y += 1) {
+    for (let x = 0; x < grid; x += 1) {
+      indexes.push(
+        vertexIndex(x, y),
+        vertexIndex(x + 1, y),
+        vertexIndex(x + 1, y + 1),
+        vertexIndex(x, y),
+        vertexIndex(x + 1, y + 1),
+        vertexIndex(x, y + 1),
+      );
+      // Sparse single-triangle islands (colors 1-3) in a field of the base
+      // color (0); the island hues sit near the base so island merging fires.
+      const islandMaterial =
+        (x * 3 + y * 5) % 7 === 0 ? ((x + y) % 3) + 1 : 0;
+      triangleMaterialIds.push(islandMaterial, 0);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setIndex(indexes);
+  const scene = new THREE.Scene();
+  scene.add(
+    new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: '#808080' }),
+    ),
+  );
+  return { scene, triangleMaterialIds };
+}
+
+const sensitivitySemanticMaterialMap = {
+  classes: [
+    { id: 0, name: 'base', color: '#808080' },
+    { id: 1, name: 'accent-a', color: '#A08080' },
+    { id: 2, name: 'accent-b', color: '#80A080' },
+    { id: 3, name: 'accent-c', color: '#8080A0' },
+  ],
+  triangleMaterialIds: buildSensitivityGridScene().triangleMaterialIds,
+};
+
+async function getSensitivityColorDistribution(colorDetail) {
+  const blob = await createThreeMfBlobFromScene({
+    scene: buildSensitivityGridScene().scene,
+    filename: `sensitivity-${colorDetail}`,
+    colorCount: 4,
+    colorDetail,
+    semanticMaterialMap: sensitivitySemanticMaterialMap,
+  });
+  const zipReader = new ZipReader(new BlobReader(blob));
+  const modelXml = await getMeshModelXml(await zipReader.getEntries());
+  const distribution = {};
+  for (const match of modelXml.matchAll(/\bp1="(\d+)"/g)) {
+    distribution[match[1]] = (distribution[match[1]] ?? 0) + 1;
+  }
+  await zipReader.close();
+  return distribution;
+}
+
+const sensitivityRoughDistribution = await getSensitivityColorDistribution(0);
+const sensitivityFineDistribution = await getSensitivityColorDistribution(100);
+assert.notDeepEqual(
+  sensitivityRoughDistribution,
+  sensitivityFineDistribution,
+  'colorDetail must change the color distribution for semantic-mapped models',
+);
+// The fine setting keeps more distinct color slots than the rough setting.
+assert.ok(
+  Object.keys(sensitivityFineDistribution).length >
+    Object.keys(sensitivityRoughDistribution).length,
+  'higher sensitivity preserves more small color islands',
 );

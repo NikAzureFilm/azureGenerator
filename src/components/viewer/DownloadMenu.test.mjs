@@ -56,6 +56,6 @@ assert.match(
 
 assert.match(
   source,
-  /<ThreeMfColorPrintDialog[\s\S]*onDownload=\{\(\{ colorCount, colorDetail, coloredMesh \}\) =>\s*download3MF\(colorCount, \{ colorDetail, coloredMesh \}\)/,
+  /<ThreeMfColorPrintDialog[\s\S]*onDownload=\{\(\{ colorCount, colorDetail, coloredMesh, fullSpectrum \}\) =>\s*download3MF\(colorCount, \{ colorDetail, coloredMesh, fullSpectrum \}\)/,
   'the color print dialog should hand its previewed mesh and settings to the 3MF download path',
 );

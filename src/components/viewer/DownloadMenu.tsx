@@ -4,9 +4,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-import { Loader2 } from 'lucide-react';
+import { Layers, Loader2, Palette } from 'lucide-react';
 import { ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 import posthog from 'posthog-js';
 import {
@@ -29,6 +32,7 @@ import {
   createThreeMfBlobFromColoredMesh,
   createThreeMfBlobFromScene,
   type ThreeMfColoredMesh,
+  type ThreeMfMixedFilamentPlan,
   type ThreeMfTargetMaterialPalette,
   type ThreeMfSemanticMaterialMap,
 } from '@/utils/threeMfExport';
@@ -116,6 +120,9 @@ export function DownloadMenu({
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isColorPrintDialogOpen, setIsColorPrintDialogOpen] = useState(false);
+  const [colorPrintMode, setColorPrintMode] = useState<
+    'classic' | 'fullSpectrum'
+  >('classic');
 
   // GIF generation state
   const [_isGifGenerating, setIsGifGenerating] = useState(false);
@@ -208,9 +215,11 @@ export function DownloadMenu({
       {
         colorDetail = DEFAULT_THREE_MF_COLOR_DETAIL,
         coloredMesh,
+        fullSpectrum,
       }: {
         colorDetail?: number;
         coloredMesh?: ThreeMfColoredMesh;
+        fullSpectrum?: ThreeMfMixedFilamentPlan;
       } = {},
     ) => {
       posthog.capture('3d_model_download', {
@@ -220,6 +229,7 @@ export function DownloadMenu({
         conversation_id: conversation.id,
         color_count: colorCount,
         color_detail: colorDetail,
+        mode: fullSpectrum ? 'fullSpectrum' : 'classic',
       });
 
       setIsDownloading3MF(true);
@@ -234,6 +244,7 @@ export function DownloadMenu({
             threeMfBlob = await createThreeMfBlobFromColoredMesh({
               coloredMesh,
               filename,
+              fullSpectrum,
             });
           } else {
             const processedScene = await processUserModelForDownload(gltf);
@@ -780,6 +791,20 @@ export function DownloadMenu({
     filename,
   ]);
 
+  const openColorPrintDialog = useCallback(
+    (mode: 'classic' | 'fullSpectrum') => {
+      posthog.capture('3mf_color_print_dialog_open', {
+        meshId: meshData.id,
+        conversation_id: conversation.id,
+        mode,
+      });
+      setColorPrintMode(mode);
+      setIsDropdownOpen(false);
+      setIsColorPrintDialogOpen(true);
+    },
+    [conversation.id, meshData.id],
+  );
+
   return (
     <>
       <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
@@ -802,27 +827,64 @@ export function DownloadMenu({
             </span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.preventDefault();
-              posthog.capture('3mf_color_print_dialog_open', {
-                meshId: meshData.id,
-                conversation_id: conversation.id,
-              });
-              setIsDropdownOpen(false);
-              setIsColorPrintDialogOpen(true);
-            }}
-            className="cursor-pointer text-adam-text-primary"
-            disabled={isDownloading3MF}
-          >
-            {isDownloading3MF ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : null}
-            <span className="text-sm">.3MF</span>
-            <span className="ml-3 text-xs text-adam-text-primary/60">
-              {isDownloading3MF ? 'Downloading...' : 'Color print'}
-            </span>
-          </DropdownMenuItem>
+          {/* Color print is the marquee export, so it reads as special: an
+              accent-bordered submenu with its own two techniques rather than a
+              plain format row. */}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger
+              className="cursor-pointer rounded border border-adam-blue/40 bg-adam-blue/5 text-adam-blue focus:bg-adam-blue/10 data-[state=open]:bg-adam-blue/10"
+              disabled={isDownloading3MF}
+            >
+              {isDownloading3MF ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Palette className="mr-2 h-4 w-4" />
+              )}
+              <span className="text-sm font-medium">.3MF</span>
+              <span className="ml-3 text-xs text-adam-blue/70">
+                {isDownloading3MF ? 'Downloading...' : 'Color print'}
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  openColorPrintDialog('classic');
+                }}
+                className="cursor-pointer text-adam-text-primary"
+                disabled={isDownloading3MF}
+              >
+                <Palette className="mr-2 h-4 w-4 text-adam-blue" />
+                <div className="flex flex-col">
+                  <span className="text-sm">Classic filament colors</span>
+                  <span className="text-xs text-adam-text-primary/60">
+                    One filament per detected color
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  openColorPrintDialog('fullSpectrum');
+                }}
+                className="cursor-pointer text-adam-text-primary"
+                disabled={isDownloading3MF}
+              >
+                <Layers className="mr-2 h-4 w-4 text-adam-blue" />
+                <div className="flex flex-col">
+                  <span className="flex items-center gap-1.5 text-sm">
+                    Full Spectrum layer mixing
+                    <span className="rounded bg-adam-blue/20 px-1 py-0.5 text-[9px] uppercase tracking-wide text-adam-blue">
+                      Beta
+                    </span>
+                  </span>
+                  <span className="text-xs text-adam-text-primary/60">
+                    Blend translucent CMY into many colors
+                  </span>
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
@@ -907,8 +969,9 @@ export function DownloadMenu({
         semanticMaterialMap={semanticMaterialMap}
         targetMaterialPalette={targetMaterialPalette}
         isDownloading={isDownloading3MF}
-        onDownload={({ colorCount, colorDetail, coloredMesh }) =>
-          download3MF(colorCount, { colorDetail, coloredMesh })
+        initialMode={colorPrintMode}
+        onDownload={({ colorCount, colorDetail, coloredMesh, fullSpectrum }) =>
+          download3MF(colorCount, { colorDetail, coloredMesh, fullSpectrum })
         }
       />
       <div
