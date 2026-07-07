@@ -4,10 +4,9 @@ import {
   BudgetsTableMissingError,
   upsertProviderBudget,
 } from '@/lib/providers';
+import { parseBudgetBody } from '@/lib/apiValidation';
 
 export const dynamic = 'force-dynamic';
-
-const MAX_BUDGET_USD = 1_000_000;
 
 // POST /api/providers/budget  { provider: string, monthlyBudgetUsd: number|null }
 // Sets (or clears, when null) a provider's monthly USD budget. Admin-guarded
@@ -21,12 +20,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let provider: unknown;
-  let monthlyBudgetUsd: unknown;
+  let body: unknown;
   try {
-    const body = await req.json();
-    provider = body.provider;
-    monthlyBudgetUsd = body.monthlyBudgetUsd;
+    body = await req.json();
   } catch {
     return NextResponse.json(
       { ok: false, error: 'Invalid request body' },
@@ -34,32 +30,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (typeof provider !== 'string' || !provider.trim()) {
+  const parsed = parseBudgetBody(body);
+  if (!parsed.ok) {
     return NextResponse.json(
-      { ok: false, error: 'provider is required' },
+      { ok: false, error: parsed.error },
       { status: 400 },
     );
   }
-
-  let budget: number | null;
-  if (monthlyBudgetUsd === null) {
-    budget = null;
-  } else if (
-    typeof monthlyBudgetUsd === 'number' &&
-    Number.isFinite(monthlyBudgetUsd) &&
-    monthlyBudgetUsd >= 0 &&
-    monthlyBudgetUsd <= MAX_BUDGET_USD
-  ) {
-    budget = monthlyBudgetUsd;
-  } else {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `monthlyBudgetUsd must be null or a number between 0 and ${MAX_BUDGET_USD}`,
-      },
-      { status: 400 },
-    );
-  }
+  const { provider, monthlyBudgetUsd: budget } = parsed.value;
 
   try {
     await upsertProviderBudget(provider, budget);

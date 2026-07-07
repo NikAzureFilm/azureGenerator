@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getAdminUser } from '@/lib/auth';
 import { getAdminClient } from '@/lib/supabaseAdmin';
+import {
+  isMissingFunctionError,
+  parseTokenAdjustBody,
+} from '@/lib/apiValidation';
 
 export const dynamic = 'force-dynamic';
-
-const MAX_ABS_AMOUNT = 100_000;
-const SOURCES = new Set(['subscription', 'purchased']);
 
 // POST /api/users/:id/tokens  { amount, source, note }
 // Manual credit/debit of a user's token balance via the admin_adjust_tokens
@@ -24,14 +25,9 @@ export async function POST(
 
   const { id } = await params;
 
-  let amount: unknown;
-  let source: unknown;
-  let note: unknown;
+  let body: unknown;
   try {
-    const body = await req.json();
-    amount = body.amount;
-    source = body.source;
-    note = body.note;
+    body = await req.json();
   } catch {
     return NextResponse.json(
       { ok: false, error: 'Invalid request body' },
@@ -39,34 +35,14 @@ export async function POST(
     );
   }
 
-  if (
-    typeof amount !== 'number' ||
-    !Number.isInteger(amount) ||
-    amount === 0 ||
-    Math.abs(amount) > MAX_ABS_AMOUNT
-  ) {
+  const parsed = parseTokenAdjustBody(body);
+  if (!parsed.ok) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: `amount must be a non-zero integer with |amount| <= ${MAX_ABS_AMOUNT}`,
-      },
+      { ok: false, error: parsed.error },
       { status: 400 },
     );
   }
-
-  if (typeof source !== 'string' || !SOURCES.has(source)) {
-    return NextResponse.json(
-      { ok: false, error: "source must be 'subscription' or 'purchased'" },
-      { status: 400 },
-    );
-  }
-
-  if (typeof note !== 'string' || !note.trim() || note.length > 200) {
-    return NextResponse.json(
-      { ok: false, error: 'note is required and must be <= 200 chars' },
-      { status: 400 },
-    );
-  }
+  const { amount, source, note } = parsed.value;
 
   const supa = getAdminClient();
   const { data, error } = await supa.rpc('admin_adjust_tokens', {
@@ -79,7 +55,7 @@ export async function POST(
   if (error) {
     // RPC not applied yet: undefined_function (42883) or PostgREST no-match
     // (PGRST202). Surface an actionable message.
-    if (error.code === '42883' || error.code === 'PGRST202') {
+    if (isMissingFunctionError(error)) {
       return NextResponse.json(
         {
           ok: false,

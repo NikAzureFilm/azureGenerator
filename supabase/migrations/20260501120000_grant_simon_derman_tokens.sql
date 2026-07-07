@@ -10,7 +10,10 @@ BEGIN
       AND lower(email) = 'simon.derman@gmail.com';
 
     IF v_user_id IS NULL THEN
-        RAISE EXCEPTION 'Expected Simon Derman user simon.derman@gmail.com was not found';
+        -- Absent on fresh/local databases; the grant only applies where the
+        -- production user exists. Hard-failing here broke `supabase db reset`.
+        RAISE NOTICE 'Simon Derman user not found; skipping one-off grant';
+        RETURN;
     END IF;
 
     IF NOT EXISTS (
