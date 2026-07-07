@@ -20,53 +20,74 @@ interface TutorialSlide {
 
 export const TUTORIAL_SLIDES: TutorialSlide[] = [
   {
-    image: '/tutorial/01-welcome.png',
-    alt: 'AzureFilm Generator home screen with CAD Engineering and Mesh Generation modes',
-    title: 'Welcome to AzureFilm Generator',
+    image: '/tutorial/01-modes.png',
+    alt: 'Home screen with the CAD Engineering and Mesh Generation mode cards',
+    title: 'Two ways to create',
     description:
-      'Generate 3D-printable CAD models from plain text and images. Pick a creation mode: CAD Engineering for precise parametric parts, or Mesh Generation for organic shapes and figurines.',
+      'AzureFilm Generator has two modes. CAD Engineering is for practical models and 3D prints — precise parts and mechanisms. Mesh Generation is for figurines, sculptures, and organic shapes.',
   },
   {
     image: '/tutorial/02-prompt.png',
-    alt: 'Prompt box with reference image and model quality controls',
-    title: 'Describe what you want to build',
+    alt: 'Prompt box with a spice rack description typed in and the CAD mode selected',
+    title: 'Describe what you want',
     description:
-      'Type a prompt, attach reference images, and choose the model quality. The wand button can enhance your prompt automatically.',
+      'Type a prompt with the details that matter — like exact widths, slot sizes, or wall thickness. Use the wand to enhance or generate a prompt for you, or attach a reference image.',
   },
   {
-    image: '/tutorial/03-editor.png',
-    alt: 'Editor with an interactive 3D viewer and view gizmo',
-    title: 'Review your model in 3D',
+    image: '/tutorial/03-generating.png',
+    alt: 'Editor showing the generation point cloud while a model is being built',
+    title: 'Let the AI build it',
     description:
-      'Every generation opens in the editor with an interactive 3D viewer. Orbit with the mouse, snap views with the cube gizmo, and tune lighting from the toolbar.',
+      'Generation takes about a minute. You can orbit the preview while your model takes shape.',
   },
   {
     image: '/tutorial/04-parameters.png',
-    alt: 'Parametric model with dimension sliders in the parameters panel',
-    title: 'Tweak parameters live',
+    alt: 'Spice rack model with the parameters panel showing dimension sliders',
+    title: 'Adjust parameters — completely free',
     description:
-      'CAD Engineering models are fully parametric: adjust dimensions with sliders and the model recompiles instantly. No regeneration tokens needed.',
+      'CAD models come out fully parametric. Drag the sliders to change any dimension — width, slot count, wall thickness — and the model rebuilds instantly. Adjustments cost nothing, so go nuts.',
   },
   {
-    image: '/tutorial/05-download.png',
-    alt: 'Export menu showing STL, STEP, OBJ, DXF, SCAD and color 3MF formats',
-    title: 'Export in any format',
+    image: '/tutorial/05-edit-chat.png',
+    alt: 'Chat asking to add a wall on the back, with the updated model as version 2',
+    title: 'Ask for bigger changes',
     description:
-      'Download STL for printing, or STEP, OBJ, DXF, SCAD and color 3MF for editing elsewhere. The export menu lives at the bottom of the parameters panel.',
+      'Need something the sliders can’t do? Tell the assistant — "add a wall on the back" — and it builds a new version. You can flip between versions any time.',
   },
   {
-    image: '/tutorial/06-history.png',
-    alt: 'Sidebar generation history and the Generations gallery',
-    title: 'Find everything you made',
+    image: '/tutorial/06-export.png',
+    alt: 'Export menu listing STL, SCAD, DXF, STEP and OBJ formats',
+    title: 'Export for print or CAD',
     description:
-      'The sidebar keeps every generation one click away, and the Generations gallery gives you a visual overview. Rename, share, or delete from the card menu.',
+      'Download STL for 3D printing, or SCAD, DXF, STEP and OBJ for other tools — all from the export menu under the parameters panel.',
   },
   {
-    image: '/tutorial/07-pricing.png',
-    alt: 'Pricing page with per-workflow token costs and the sidebar token widget',
-    title: 'Tokens power everything',
+    image: '/tutorial/07-image-input.png',
+    alt: 'Create input image dialog with the 3D Object Agent and Premium or Lite quality options',
+    title: 'Mesh mode can start from an image',
     description:
-      'Each generation costs tokens depending on the workflow and quality. Check the pricing page for exact costs, and top up from the token widget in the sidebar.',
+      'In Mesh Generation you can generate an input image first: the Object Agent turns your prompt into a clean object reference, so you preview what the 3D model will look like before generating it. Pick Lite or Premium quality.',
+  },
+  {
+    image: '/tutorial/08-multiview.png',
+    alt: 'Multiview strip with front reference plus generated left, back and right views of a dragon',
+    title: 'Multiview for all-around models',
+    description:
+      'Want a model that looks good from every angle? Generate left, back and right views from your front reference — regenerate any angle you don’t like (Premium is more likely to give a good output) — then build from all four.',
+  },
+  {
+    image: '/tutorial/09-mesh-export.png',
+    alt: 'Finished mushroom figurine with the download menu showing 3MF color print and other formats',
+    title: 'Download your mesh — with color',
+    description:
+      'Mesh models export to STL, OBJ, GLB and more. If you want color in your 3D print, choose 3MF — it keeps the colors.',
+  },
+  {
+    image: '/tutorial/10-gallery.png',
+    alt: 'Past Creations gallery with cards for previous generations',
+    title: 'Everything stays in Creations',
+    description:
+      'Every generation is saved — find it in the sidebar or browse the visual gallery. Keep iterating: each edit becomes a new version you can come back to.',
   },
 ];
 
