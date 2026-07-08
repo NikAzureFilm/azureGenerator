@@ -23,6 +23,14 @@ export function normalizeParametricGenerationModel(model: unknown): string {
   return DEFAULT_CODE_GENERATION_MODEL;
 }
 
+// Gemini code-gen takes the effort-based / larger-token-cap path; every other
+// model (notably Fable) takes the reasoning-max_tokens path. Keyed on the
+// provider prefix, NOT the default-model id (the default is now Fable, so an
+// id-equality check misrouted Fable into the Gemini branch and vice-versa).
+export function isGeminiCodeGenerationModel(model: string): boolean {
+  return model.startsWith('google/');
+}
+
 export function getCodeGenerationProviderCandidates(
   model: unknown,
 ): CodeGenerationProviderCandidate[] {

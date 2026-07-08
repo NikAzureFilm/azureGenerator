@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { isGeminiCodeGenerationModel } from '../../../shared/parametricRouting.ts';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+// Routes on the provider prefix, NOT the default-model id (the default is Fable
+// now, so an id-equality check misrouted Fable into the Gemini branch).
+assert.equal(isGeminiCodeGenerationModel('google/gemini-3.5-flash'), true);
+assert.equal(isGeminiCodeGenerationModel('anthropic/claude-fable-5'), false);
+assert.equal(isGeminiCodeGenerationModel('openai/gpt-5.5'), false);
 
 assert.match(
   source,
@@ -35,12 +42,12 @@ assert.match(
 );
 assert.match(
   source,
-  /const FABLE_REASONING_TOKEN_LIMIT = 1024/,
+  /const FABLE_REASONING_TOKEN_LIMIT = 8000/,
   'Claude Fable 5 should use a bounded reasoning budget that OpenRouter accepts under current key limits',
 );
 assert.match(
   source,
-  /const FABLE_COMPLETION_TOKEN_LIMIT = 4096/,
+  /const FABLE_COMPLETION_TOKEN_LIMIT = 24000/,
   'Claude Fable 5 should use a bounded completion budget instead of the generic 20k/60k caps',
 );
 assert.match(
@@ -50,8 +57,8 @@ assert.match(
 );
 assert.match(
   source,
-  /isGeminiCodeGenerationModel\(codeModel\)[\s\S]*effort: 'minimal'[\s\S]*exclude: true/,
-  'Gemini code generation should request minimal hidden reasoning and exclude it from the response',
+  /isGeminiCodeGenerationModel\(codeModel\)[\s\S]*effort: 'medium'[\s\S]*exclude: true/,
+  'Gemini code generation should request medium hidden reasoning and exclude it from the response',
 );
 assert.match(
   source,

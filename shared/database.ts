@@ -9,6 +9,45 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      parametric_loop_state: {
+        Row: {
+          conversation_id: string;
+          created_at: string;
+          message_id: string;
+          repairs: number;
+          round: number;
+          spent_usd: number;
+          status: string;
+          tier: string;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          conversation_id: string;
+          created_at?: string;
+          message_id: string;
+          repairs?: number;
+          round?: number;
+          spent_usd?: number;
+          status: string;
+          tier: string;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          conversation_id?: string;
+          created_at?: string;
+          message_id?: string;
+          repairs?: number;
+          round?: number;
+          spent_usd?: number;
+          status?: string;
+          tier?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       conversations: {
         Row: {
           created_at: string | null;

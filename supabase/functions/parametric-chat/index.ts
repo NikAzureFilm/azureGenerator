@@ -8,7 +8,10 @@ import {
   ParametricArtifact,
   ToolCall,
 } from '@shared/types.ts';
-import { getAnonSupabaseClient } from '../_shared/supabaseClient.ts';
+import {
+  getAnonSupabaseClient,
+  getServiceRoleSupabaseClient,
+} from '../_shared/supabaseClient.ts';
 import Tree from '@shared/Tree.ts';
 import parseParameters from '../_shared/parseParameter.ts';
 import { formatUserMessage } from '../_shared/messageUtils.ts';
@@ -28,12 +31,37 @@ import {
   getParametricBuildTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import {
+  CLAUDE_FABLE_5_MODEL,
   DEFAULT_CODE_GENERATION_MODEL,
   getCodeGenerationProviderCandidates,
+  isGeminiCodeGenerationModel,
   normalizeParametricGenerationModel,
 } from '../../../shared/parametricRouting.ts';
 import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
+import type { LoopState, LoopStatus } from '@shared/types.ts';
+import {
+  COST_CEILING_USD,
+  MAX_PROMPT_BASE_CODE_CHARS,
+  MAX_PROMPT_USER_TEXT_CHARS,
+  MISSING_USAGE_FALLBACK_USD,
+  type ContinuationResult,
+  affordableContinuationOutputCap,
+  buildGoogleCodeGenConfig,
+  canAffordReview,
+  clampText,
+  computeLlmCallCostUsd,
+  decideContinuation,
+  effectiveOutputCap,
+  expectedInspectionPath,
+  initialLoopState,
+  isValidInspectionPng,
+  loopStateFromRow,
+  parseContinuationBody,
+  parseReviewerVerdict,
+  tierForModel,
+  truncateError,
+} from './loop.ts';
 
 const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
@@ -60,8 +88,8 @@ const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '';
 const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
-const FABLE_REASONING_TOKEN_LIMIT = 1024;
-const FABLE_COMPLETION_TOKEN_LIMIT = 4096;
+const FABLE_REASONING_TOKEN_LIMIT = 8000;
+const FABLE_COMPLETION_TOKEN_LIMIT = 24000;
 const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000;
 
 const googleGenAI = new GoogleGenAI({
@@ -161,10 +189,6 @@ function getReasoningCompletionTokenLimit(
   defaultLimit: number,
 ): number {
   return isClaudeFable5(model) ? FABLE_COMPLETION_TOKEN_LIMIT : defaultLimit;
-}
-
-function isGeminiCodeGenerationModel(model: string): boolean {
-  return model === DEFAULT_CODE_GENERATION_MODEL;
 }
 
 // Helper to stream updated assistant message rows.
@@ -737,6 +761,1155 @@ module torus(r1, r2) {
     circle(r=r2);
 }`;
 
+// Concise vision reviewer for the premium inspection loop. Judges the rendered
+// 7-view sheet against the user's request; must answer with JSON only.
+const PARAMETRIC_REVIEWER_PROMPT = `You are a meticulous CAD reviewer for AzureFilm Generator. You are shown a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of a 3D-printable OpenSCAD model, the user's original request, and the OpenSCAD source.
+
+Judge whether the model faithfully and completely satisfies the request. Look for:
+- Missing, wrong, or incomplete features the request asked for.
+- Disconnected or floating parts, or parts not resting on the build plate for a kit.
+- Non-printable geometry (paper-thin walls, gaps, self-intersections, no overlap where parts should fuse).
+- Over-simplified results that ignore requested detail.
+- Hidden or internal features that the views suggest are absent.
+Apply the same multi-feature checklists a careful modeler would (e.g. a mug needs body, hollow interior, rim, base, handle; a phone case needs pocket, lip, camera + port + button cutouts).
+
+Reply with a SINGLE JSON object and NOTHING else:
+- If the model is good enough to ship: {"verdict":"good","final_message":"<one or two friendly sentences describing what was made>"}
+- If it needs another pass: {"verdict":"revise","revision_instructions":"<specific, actionable changes for the code generator>"}
+Do not include markdown, code fences, or any prose outside the JSON.`;
+
+// Module-scoped fence stripper for the continuation code path (round 0 keeps
+// its own local copy inside the streaming handler).
+function stripScadCodeFences(s: string): string {
+  let out = s;
+  out = out.replace(/^```(?:openscad)?\s*\n?/, '');
+  out = out.replace(/\n?```\s*$/, '');
+  return out;
+}
+
+// Chunked base64 for the inspection PNG — avoids blowing the call stack that a
+// single String.fromCharCode(...bytes) spread would hit on large buffers.
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+type ContinuationSupabaseClient = ReturnType<typeof getAnonSupabaseClient>;
+
+// True cost so far for this generation: sum of provider_usage.cost_usd rows
+// that share the assistant message id as reference_id. Read via the service
+// role (the table has no anon policy). Swallows errors → 0 so a read failure
+// can never brick or over-block the loop.
+async function sumGenerationCostUsd(referenceId: string): Promise<number> {
+  try {
+    const { data } = await getServiceRoleSupabaseClient()
+      .from('provider_usage')
+      .select('cost_usd')
+      .eq('reference_id', referenceId)
+      .limit(5000);
+    if (!data) return 0;
+    return data.reduce(
+      (sum, row) => sum + (typeof row.cost_usd === 'number' ? row.cost_usd : 0),
+      0,
+    );
+  } catch (error) {
+    console.error('[parametric-chat] cost sum failed', error);
+    return 0;
+  }
+}
+
+// Concatenated user request text along the branch leading to the assistant
+// message — the shared context for repair/revision code-gen and the reviewer.
+async function getBranchUserText(
+  supabaseClient: ContinuationSupabaseClient,
+  conversationId: string,
+  assistantMessageId: string,
+): Promise<string> {
+  const { data: messages } = await supabaseClient
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
+  if (!messages || messages.length === 0) return '';
+  const collectText = (rows: Array<{ role: string; content: Content }>) =>
+    rows
+      .filter((m) => m.role === 'user' && m.content?.text)
+      .map((m) => m.content.text as string)
+      .join('\n\n')
+      .trim();
+  try {
+    const path = new Tree<Message>(messages).getPath(assistantMessageId);
+    const text = collectText(path);
+    if (text) return text;
+  } catch (error) {
+    console.error('[parametric-chat] branch resolve failed', error);
+  }
+  return collectText(messages);
+}
+
+// Shared code-gen for repair + revision rounds. Mirrors the round-0 provider
+// candidate loop (Google direct → OpenRouter) but carries NO token billing —
+// continuations must never charge — and logs usage under the assistant message
+// id. Streams partial artifacts through `onProgress`.
+async function generateContinuationCode(params: {
+  model: string;
+  codeMessages: OpenAIMessage[];
+  referenceId: string;
+  conversationId: string;
+  userId?: string | null;
+  remainingBudgetMs: () => number;
+  onProgress: (streamedCode: string) => void;
+  // Remaining budget + prompt shape at call start. The affordable output cap is
+  // RECOMPUTED per provider leg (remaining minus what earlier legs charged) so a
+  // fallback from google→OpenRouter can never spend the same budget twice.
+  budget: { remainingUsd: number; promptChars: number; hasImage: boolean };
+}): Promise<{ rawCode: string; codeGenFailed: boolean; costUsd: number }> {
+  const {
+    model,
+    codeMessages,
+    referenceId,
+    conversationId,
+    userId,
+    remainingBudgetMs,
+    onProgress,
+    budget,
+  } = params;
+  let rawCode = '';
+  let codeGenFailed = true;
+  // Synchronous spend accumulator for the ceiling (see computeLlmCallCostUsd).
+  let costUsd = 0;
+
+  for (const providerCandidate of getCodeGenerationProviderCandidates(model)) {
+    // Per-leg budget: subtract what prior legs already charged. If a minimal
+    // call is no longer affordable, stop trying legs.
+    const legOutputCap = affordableContinuationOutputCap({
+      model: providerCandidate.usageModel,
+      remainingUsd: budget.remainingUsd - costUsd,
+      promptChars: budget.promptChars,
+      hasImage: budget.hasImage,
+    });
+    if (legOutputCap === null) break;
+    rawCode = '';
+
+    if (providerCandidate.provider === 'google') {
+      if (!GOOGLE_API_KEY) continue;
+      try {
+        const result = (await googleGenAI.models.generateContent({
+          model: providerCandidate.model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: codeMessages
+                    .map((message) =>
+                      typeof message.content === 'string'
+                        ? `${message.role}: ${message.content}`
+                        : JSON.stringify(message.content),
+                    )
+                    .join('\n\n'),
+                },
+              ],
+            },
+          ],
+          // Honor the per-leg budget-derived output cap in the google-direct
+          // branch too (the OpenRouter branch clamps below).
+          config: buildGoogleCodeGenConfig({
+            systemInstruction: STRICT_CODE_PROMPT,
+            baseOutputCap: GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+            maxOutputTokens: legOutputCap,
+          }),
+        })) as GoogleGenerateContentResult;
+
+        const usage = result.usageMetadata;
+        costUsd += computeLlmCallCostUsd(
+          providerCandidate.usageModel,
+          usage
+            ? {
+                inputTokens: usage.promptTokenCount ?? 0,
+                outputTokens: usage.candidatesTokenCount ?? 0,
+              }
+            : null,
+        );
+        EdgeRuntime.waitUntil(
+          logLlmUsage({
+            functionName: 'parametric-chat',
+            operation: 'parametric',
+            provider: 'google',
+            model: providerCandidate.usageModel,
+            userId,
+            conversationId,
+            referenceId,
+            inputTokens: usage?.promptTokenCount ?? 0,
+            outputTokens: usage?.candidatesTokenCount ?? 0,
+          }),
+        );
+
+        rawCode = extractGoogleGeneratedText(result);
+        if (hasRenderableScadCode(stripScadCodeFences(rawCode))) {
+          codeGenFailed = false;
+          break;
+        }
+        continue;
+      } catch (error) {
+        console.error(
+          '[parametric-chat] continuation google code-gen failed',
+          error,
+        );
+        continue;
+      }
+    }
+
+    if (!OPENROUTER_API_KEY) continue;
+    const codeModel = providerCandidate.model;
+    const codeRequestBody: OpenRouterRequest = {
+      model: codeModel,
+      messages: [
+        { role: 'system', content: STRICT_CODE_PROMPT },
+        ...codeMessages,
+      ],
+      stream: true,
+      usage: { include: true },
+    };
+    let outputCap = 48000;
+    if (isGeminiCodeGenerationModel(codeModel)) {
+      codeRequestBody.reasoning = { effort: 'medium', exclude: true };
+      outputCap = GEMINI_CODE_GENERATION_TOKEN_LIMIT;
+    } else if (usesAutomaticReasoning(codeModel)) {
+      codeRequestBody.reasoning = {
+        max_tokens: getReasoningTokenLimit(codeModel),
+      };
+      outputCap = getReasoningCompletionTokenLimit(codeModel, 60000);
+    }
+    // Clamp to what the remaining USD budget can afford for this leg.
+    outputCap = effectiveOutputCap(outputCap, legOutputCap);
+    applyCompletionTokenLimit(codeRequestBody, codeModel, outputCap);
+
+    const codeGenAbort = new AbortController();
+    const codeGenTimeout = setTimeout(
+      () => codeGenAbort.abort(new Error('continuation code-gen timeout')),
+      remainingBudgetMs(),
+    );
+    try {
+      const codeResponse = await fetchOpenRouterChatCompletion(
+        codeRequestBody,
+        codeGenAbort.signal,
+      );
+      if (!codeResponse.ok) {
+        await codeResponse.text().catch(() => '');
+        continue;
+      }
+      const codeReader = codeResponse.body?.getReader();
+      if (!codeReader) continue;
+      const codeDecoder = new TextDecoder();
+      let codeBuffer = '';
+      let lastFlushTime = 0;
+      let lastFlushedLen = 0;
+      let sawUsageThisCall = false;
+      const FLUSH_INTERVAL_MS = 120;
+
+      while (true) {
+        const { done, value } = await codeReader.read();
+        if (done) break;
+        codeBuffer += codeDecoder.decode(value, { stream: true });
+        const codeLines = codeBuffer.split('\n');
+        codeBuffer = codeLines.pop() || '';
+        for (const line of codeLines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          let chunk: {
+            error?: { message?: string };
+            usage?: {
+              prompt_tokens?: number;
+              completion_tokens?: number;
+              cost?: number;
+            };
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          try {
+            chunk = JSON.parse(data);
+          } catch {
+            continue;
+          }
+          if (chunk.error) {
+            throw new Error(
+              chunk.error.message || 'continuation code-gen error',
+            );
+          }
+          if (chunk.usage) {
+            sawUsageThisCall = true;
+            costUsd += computeLlmCallCostUsd(providerCandidate.usageModel, {
+              inputTokens: chunk.usage.prompt_tokens ?? 0,
+              outputTokens: chunk.usage.completion_tokens ?? 0,
+              costUsdOverride:
+                typeof chunk.usage.cost === 'number'
+                  ? chunk.usage.cost
+                  : undefined,
+            });
+            EdgeRuntime.waitUntil(
+              logLlmUsage({
+                functionName: 'parametric-chat',
+                operation: 'parametric',
+                provider: 'openrouter',
+                model: providerCandidate.usageModel,
+                userId,
+                conversationId,
+                referenceId,
+                inputTokens: chunk.usage.prompt_tokens ?? 0,
+                outputTokens: chunk.usage.completion_tokens ?? 0,
+                costUsdOverride:
+                  typeof chunk.usage.cost === 'number'
+                    ? chunk.usage.cost
+                    : undefined,
+              }),
+            );
+          }
+          const deltaContent = chunk.choices?.[0]?.delta?.content;
+          if (typeof deltaContent === 'string' && deltaContent) {
+            rawCode += deltaContent;
+            const now = Date.now();
+            if (
+              now - lastFlushTime >= FLUSH_INTERVAL_MS &&
+              rawCode.length > lastFlushedLen
+            ) {
+              const streamed = stripScadCodeFences(rawCode);
+              if (hasRenderableScadCode(streamed)) {
+                onProgress(streamed);
+                lastFlushTime = now;
+                lastFlushedLen = rawCode.length;
+              }
+            }
+          }
+        }
+      }
+
+      // Consumed a full response but the provider never sent usage — charge a
+      // conservative flat fee so a usage-less provider can't run past the cap.
+      if (!sawUsageThisCall) costUsd += MISSING_USAGE_FALLBACK_USD;
+
+      if (hasRenderableScadCode(stripScadCodeFences(rawCode))) {
+        codeGenFailed = false;
+        break;
+      }
+    } catch (error) {
+      console.error('[parametric-chat] continuation code-gen failed', error);
+    } finally {
+      clearTimeout(codeGenTimeout);
+    }
+  }
+
+  return { rawCode, codeGenFailed, costUsd };
+}
+
+// Premium vision review: download the inspection sheet, ask Fable for a
+// JSON-only verdict. Any failure resolves to `good` so the loop finalizes
+// cleanly rather than bricking.
+async function runInspectionReview(params: {
+  service: ContinuationSupabaseClient;
+  imagePath: string;
+  userRequestText: string;
+  code: string;
+  conversationId: string;
+  assistantMessageId: string;
+  userId?: string | null;
+  remainingBudgetMs: () => number;
+}): Promise<{
+  verdict: ReturnType<typeof parseReviewerVerdict>;
+  costUsd: number;
+}> {
+  const {
+    service,
+    imagePath,
+    userRequestText,
+    code,
+    conversationId,
+    assistantMessageId,
+    userId,
+    remainingBudgetMs,
+  } = params;
+  try {
+    const { data: blob, error } = await service.storage
+      .from('images')
+      .download(imagePath);
+    if (error || !blob) {
+      console.error('[parametric-chat] inspection download failed', error);
+      return { verdict: { verdict: 'good' }, costUsd: 0 };
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // Don't feed the vision model a non-PNG or an oversized blob — a client
+    // could upload garbage to the (client-writable) inspection path.
+    if (!isValidInspectionPng(bytes)) {
+      console.error('[parametric-chat] inspection asset failed validation');
+      return { verdict: { verdict: 'good' }, costUsd: 0 };
+    }
+    const dataUrl = `data:image/png;base64,${base64FromBytes(bytes)}`;
+
+    const reviewBody: OpenRouterRequest = {
+      model: CLAUDE_FABLE_5_MODEL,
+      messages: [
+        { role: 'system', content: PARAMETRIC_REVIEWER_PROMPT },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `User request:\n${userRequestText || '(no text provided)'}\n\nCurrent OpenSCAD source:\n${code}\n\nReview the attached 7-view render and reply with the required JSON only.`,
+            },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      stream: false,
+      usage: { include: true },
+    };
+    // The reviewer only returns a small JSON verdict, so keep it cheap: a small
+    // reasoning budget plus a modest completion cap that still clears it (an
+    // Anthropic model counts thinking tokens against max_tokens).
+    const REVIEW_REASONING_TOKENS = 1000;
+    const REVIEW_COMPLETION_TOKENS = 2000;
+    if (usesAutomaticReasoning(CLAUDE_FABLE_5_MODEL)) {
+      reviewBody.reasoning = { max_tokens: REVIEW_REASONING_TOKENS };
+    }
+    applyCompletionTokenLimit(
+      reviewBody,
+      CLAUDE_FABLE_5_MODEL,
+      REVIEW_COMPLETION_TOKENS,
+    );
+
+    const abort = new AbortController();
+    const timeout = setTimeout(
+      () => abort.abort(new Error('review timeout')),
+      remainingBudgetMs(),
+    );
+    try {
+      const response = await fetchOpenRouterChatCompletion(
+        reviewBody,
+        abort.signal,
+      );
+      if (!response.ok) {
+        await response.text().catch(() => '');
+        return { verdict: { verdict: 'good' }, costUsd: 0 };
+      }
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          cost?: number;
+        };
+      };
+      const costUsd = computeLlmCallCostUsd(
+        CLAUDE_FABLE_5_MODEL,
+        payload.usage
+          ? {
+              inputTokens: payload.usage.prompt_tokens ?? 0,
+              outputTokens: payload.usage.completion_tokens ?? 0,
+              costUsdOverride:
+                typeof payload.usage.cost === 'number'
+                  ? payload.usage.cost
+                  : undefined,
+            }
+          : null,
+      );
+      if (payload.usage) {
+        EdgeRuntime.waitUntil(
+          logLlmUsage({
+            functionName: 'parametric-chat',
+            operation: 'parametric-review',
+            provider: 'openrouter',
+            model: CLAUDE_FABLE_5_MODEL,
+            userId,
+            conversationId,
+            referenceId: assistantMessageId,
+            inputTokens: payload.usage.prompt_tokens ?? 0,
+            outputTokens: payload.usage.completion_tokens ?? 0,
+            costUsdOverride:
+              typeof payload.usage.cost === 'number'
+                ? payload.usage.cost
+                : undefined,
+          }),
+        );
+      }
+      return {
+        verdict: parseReviewerVerdict(
+          payload.choices?.[0]?.message?.content ?? '',
+        ),
+        costUsd,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    console.error('[parametric-chat] inspection review failed', error);
+    return { verdict: { verdict: 'good' }, costUsd: 0 };
+  }
+}
+
+const continuationStreamHeaders = {
+  'Content-Type': 'text/plain',
+  'Cache-Control': 'no-cache',
+  Connection: 'keep-alive',
+  ...corsHeaders,
+};
+
+function continuationJson(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+type LoopStateRow = {
+  message_id: string;
+  user_id: string;
+  conversation_id: string;
+  tier: string;
+  round: number;
+  repairs: number;
+  spent_usd: number;
+  status: string;
+};
+
+// INSERT the authoritative loop-state row at the end of round 0. The message's
+// content.loop is only a display mirror; THIS row is what every continuation
+// decision (caps, round, repairs, spend, ownership) is read from.
+async function insertLoopStateRow(params: {
+  service: ContinuationSupabaseClient;
+  messageId: string;
+  userId: string;
+  conversationId: string;
+  tier: string;
+  spentUsd?: number;
+}): Promise<void> {
+  try {
+    const { error } = await params.service
+      .from('parametric_loop_state')
+      .insert({
+        message_id: params.messageId,
+        user_id: params.userId,
+        conversation_id: params.conversationId,
+        tier: params.tier,
+        round: 0,
+        repairs: 0,
+        spent_usd: params.spentUsd ?? 0,
+        status: 'awaiting_client',
+      });
+    if (error) {
+      console.error('[parametric-chat] loop state insert failed', error);
+    }
+  } catch (error) {
+    console.error('[parametric-chat] loop state insert threw', error);
+  }
+}
+
+type PersistResult = { ok: true } | { ok: false; reason: 'lost' | 'error' };
+
+// Persist the authoritative row at round end / on finalize. When `expectStatus`
+// is given the UPDATE is a compare-and-swap (`.eq('status', expectStatus)`): a
+// matched-nothing result is a DEFINITIVE lost-ownership outcome (another writer
+// won) — reported as `lost`, not retried. Transient errors retry once, then
+// report `error` so the caller can fail CLOSED.
+async function persistLoopStateRow(
+  service: ContinuationSupabaseClient,
+  messageId: string,
+  fields: {
+    status: string;
+    round?: number;
+    repairs?: number;
+    spent_usd?: number;
+  },
+  expectStatus?: string,
+): Promise<PersistResult> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      let query = service
+        .from('parametric_loop_state')
+        .update({ ...fields, updated_at: new Date().toISOString() })
+        .eq('message_id', messageId);
+      if (expectStatus) query = query.eq('status', expectStatus);
+      const { data, error } = await query.select('message_id');
+      if (!error) {
+        if (expectStatus && (!data || data.length === 0)) {
+          console.error(
+            '[parametric-chat] loop state CAS lost ownership',
+            messageId,
+          );
+          return { ok: false, reason: 'lost' };
+        }
+        return { ok: true };
+      }
+      console.error('[parametric-chat] loop state persist error', error);
+    } catch (error) {
+      console.error('[parametric-chat] loop state persist threw', error);
+    }
+  }
+  return { ok: false, reason: 'error' };
+}
+
+function streamSingleMessage(message: Message): Response {
+  const stream = new ReadableStream({
+    start(controller) {
+      streamMessage(controller, message);
+      try {
+        controller.close();
+      } catch {
+        // client gone
+      }
+    },
+  });
+  return new Response(stream, { headers: continuationStreamHeaders });
+}
+
+// Re-read the message row, falling back to the in-memory copy on any failure.
+async function fetchMessageOr(
+  service: ContinuationSupabaseClient,
+  message: Message,
+): Promise<Message> {
+  try {
+    const { data } = await service
+      .from('messages')
+      .select('*')
+      .eq('id', message.id)
+      .maybeSingle()
+      .overrideTypes<{ content: Content; role: 'assistant' }>();
+    return (data as Message | null) ?? message;
+  } catch {
+    return message;
+  }
+}
+
+// A terminal, NON-resumable mirror — used when an authoritative write fails so
+// nothing streams a resumable state.
+function failedMirror(message: Message, loopState: LoopState): Message {
+  return {
+    ...message,
+    content: {
+      ...message.content,
+      loop: loopStateFromRow({
+        round: loopState.round,
+        repairs: loopState.repairs,
+        status: 'failed',
+        tier: loopState.tier,
+      }),
+    },
+  };
+}
+
+// Finalize the loop without running a round (caps reached, user moved on,
+// ceiling crossed, or a clean-compile close). CAS-transitions the row from
+// `fromStatus` → terminal `status`; on lost ownership it streams the fresh row
+// (the winner's result) without clobbering, and on a hard write failure it
+// fails CLOSED with a terminal 'failed' mirror.
+async function finalizeState(
+  service: ContinuationSupabaseClient,
+  message: Message,
+  loopState: LoopState,
+  status: 'final' | 'failed',
+  fromStatus: string,
+): Promise<Response> {
+  const persist = await persistLoopStateRow(
+    service,
+    message.id,
+    { status, round: loopState.round, repairs: loopState.repairs },
+    fromStatus,
+  );
+  if (!persist.ok) {
+    if (persist.reason === 'lost') {
+      // Another writer already moved the row — show its result, don't clobber.
+      return streamSingleMessage(await fetchMessageOr(service, message));
+    }
+    // Hard DB error: the finalize write (retried once inside persist) failed and
+    // the row may still be a RESUMABLE `fromStatus`. Best-effort poison it to a
+    // non-resumable 'failed' so it can't be re-driven; if THAT also errors, log
+    // loudly and accept — residual exposure is bounded by the repair/round caps
+    // and the cost ceiling.
+    const poison = await persistLoopStateRow(
+      service,
+      message.id,
+      { status: 'failed', round: loopState.round, repairs: loopState.repairs },
+      fromStatus,
+    );
+    if (!poison.ok && poison.reason === 'error') {
+      console.error(
+        '[parametric-chat] finalize poison write failed; residual exposure bounded by caps + ceiling',
+        message.id,
+      );
+    }
+    return streamSingleMessage(failedMirror(message, loopState));
+  }
+  const terminalContent: Content = {
+    ...message.content,
+    loop: loopStateFromRow({
+      round: loopState.round,
+      repairs: loopState.repairs,
+      status,
+      tier: loopState.tier,
+    }),
+  };
+  let saved: Message | null = null;
+  try {
+    const { data } = await service
+      .from('messages')
+      .update({ content: terminalContent })
+      .eq('id', message.id)
+      .select()
+      .single()
+      .overrideTypes<{ content: Content; role: 'assistant' }>();
+    saved = data as Message | null;
+  } catch (error) {
+    console.error('[parametric-chat] finalize persist failed', error);
+  }
+  return streamSingleMessage(saved ?? { ...message, content: terminalContent });
+}
+
+// Client-driven loop continuation. Authorized and decided ENTIRELY from the
+// service-role parametric_loop_state row (content.loop is client-writable and
+// must never be trusted). Never charges tokens (round 0 already did). Every
+// failure path lands the message in a terminal state with the artifact kept.
+async function handleContinuation(
+  userId: string,
+  body: unknown,
+  remainingBudgetMs: () => number,
+): Promise<Response> {
+  const parsed = parseContinuationBody(body);
+  if (!parsed.ok) {
+    return continuationJson(400, { error: parsed.error });
+  }
+  const { conversationId, assistantMessageId, round } = parsed.continuation;
+  // Server-side truncation — never rely on the client to bound the error text.
+  const result: ContinuationResult =
+    parsed.continuation.result.type === 'compile_error'
+      ? {
+          type: 'compile_error',
+          error: truncateError(parsed.continuation.result.error, 4000),
+        }
+      : parsed.continuation.result;
+
+  const service = getServiceRoleSupabaseClient();
+
+  // Authoritative state row — the ONLY trusted source for loop decisions.
+  const { data: stateRow } = await service
+    .from('parametric_loop_state')
+    .select('*')
+    .eq('message_id', assistantMessageId)
+    .maybeSingle();
+  const row = stateRow as LoopStateRow | null;
+  if (!row) {
+    return continuationJson(409, { error: 'no_loop' });
+  }
+  // Ownership check replaces visibility-based authz and closes the
+  // public-conversation cross-user hole — a viewer's id won't match.
+  if (row.user_id !== userId) {
+    return continuationJson(403, { error: 'forbidden' });
+  }
+  if (row.conversation_id !== conversationId) {
+    return continuationJson(400, { error: 'conversation_mismatch' });
+  }
+
+  // Load the message via service role — already authorized via the row.
+  const { data: messageRow } = await service
+    .from('messages')
+    .select('*')
+    .eq('id', assistantMessageId)
+    .maybeSingle()
+    .overrideTypes<{ content: Content; role: 'assistant' }>();
+  const message = messageRow as Message | null;
+  if (!message) {
+    return continuationJson(404, { error: 'message_not_found' });
+  }
+  const content: Content = message.content;
+  const loopState = loopStateFromRow(row);
+
+  // User moved on (a newer message is the leaf) → finalize gracefully.
+  const { data: conversation } = await service
+    .from('conversations')
+    .select('current_message_leaf_id')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (
+    conversation?.current_message_leaf_id &&
+    conversation.current_message_leaf_id !== assistantMessageId
+  ) {
+    return finalizeState(
+      service,
+      message,
+      loopState,
+      'final',
+      'awaiting_client',
+    );
+  }
+
+  const decision = decideContinuation(loopState, result, round);
+  if (decision.action === 'reject') {
+    if (decision.finalize) {
+      return finalizeState(
+        service,
+        message,
+        loopState,
+        'final',
+        'awaiting_client',
+      );
+    }
+    // Stale / busy / mismatched — no spend, no state change.
+    return continuationJson(decision.httpStatus, { error: decision.reason });
+  }
+
+  // Ceiling from the authoritative row; the provider_usage sum is a secondary,
+  // lagging check that also captures round-0 cost.
+  const providerSum = await sumGenerationCostUsd(assistantMessageId);
+  if (Math.max(row.spent_usd, providerSum) >= COST_CEILING_USD) {
+    return finalizeState(
+      service,
+      message,
+      loopState,
+      'final',
+      'awaiting_client',
+    );
+  }
+
+  // Atomic claim: exactly one continuation may take awaiting_client@round →
+  // working. A lost race returns zero rows → 409, before any LLM call or spend.
+  const { data: claimed } = await service
+    .from('parametric_loop_state')
+    .update({ status: 'working', updated_at: new Date().toISOString() })
+    .eq('message_id', assistantMessageId)
+    .eq('status', 'awaiting_client')
+    .eq('round', round)
+    .select();
+  if (!claimed || claimed.length === 0) {
+    return continuationJson(409, { error: 'loop_busy' });
+  }
+
+  // Clean-compile close: we now own the claim; finalize with no LLM / no spend.
+  if (decision.action === 'finalize_clean') {
+    return finalizeState(service, message, loopState, 'final', 'working');
+  }
+
+  const model = normalizeParametricGenerationModel(content.model);
+  const rawBaseCode = content.artifact?.code ?? '';
+  // Bound input cost: never feed an unbounded artifact into the code-gen prompt.
+  const baseCode = clampText(rawBaseCode, MAX_PROMPT_BASE_CODE_CHARS);
+  if (baseCode.length < rawBaseCode.length) {
+    console.warn(
+      `[parametric-chat] clamped baseCode ${rawBaseCode.length}→${baseCode.length} chars`,
+    );
+  }
+  const startingSpend = row.spent_usd;
+  const tier = row.tier;
+  const mirror = (status: LoopStatus, r: number, repairs: number): LoopState =>
+    loopStateFromRow({ round: r, repairs, status, tier });
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let working: Content = content;
+      let roundCostUsd = 0;
+      let nextStatus: 'awaiting_client' | 'final' | 'failed' = 'final';
+      let nextRound = loopState.round;
+      let nextRepairs = loopState.repairs;
+
+      const emit = (next: Content) => {
+        working = next;
+        streamMessage(controller, { ...message, content: working });
+      };
+      const buildArtifact = (code: string): ParametricArtifact => ({
+        title: content.artifact?.title ?? 'Generated Object',
+        version: content.artifact?.version ?? 'v1',
+        code,
+        parameters: parseParameters(code),
+      });
+      const streamProgress = (streamedCode: string) =>
+        emit({
+          ...working,
+          artifact: {
+            title: content.artifact?.title ?? 'Generated Object',
+            version: content.artifact?.version ?? 'v1',
+            code: streamedCode,
+            parameters: [],
+          },
+        });
+
+      // Budget-derived output cap for the NEXT code-gen call, accounting for
+      // BOTH the remaining USD (row spend + this round) and the estimated input
+      // cost of `promptChars`. Returns null when even a minimal call can't be
+      // afforded, so the caller finalizes instead of spending.
+      const affordableOutputCap = (promptChars: number): number | null =>
+        affordableContinuationOutputCap({
+          model,
+          remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
+          promptChars,
+          hasImage: false,
+        });
+
+      try {
+        const rawUserText = await getBranchUserText(
+          service,
+          conversationId,
+          assistantMessageId,
+        );
+        // Bound input cost: clamp the branch user text fed into the prompt.
+        const userText = clampText(rawUserText, MAX_PROMPT_USER_TEXT_CHARS);
+        if (userText.length < rawUserText.length) {
+          console.warn(
+            `[parametric-chat] clamped userText ${rawUserText.length}→${userText.length} chars`,
+          );
+        }
+
+        if (decision.action === 'repair') {
+          const compileError =
+            result.type === 'compile_error' ? result.error : '';
+          const promptChars =
+            userText.length * 2 +
+            baseCode.length +
+            compileError.length +
+            STRICT_CODE_PROMPT.length;
+          const budgetCap = affordableOutputCap(promptChars);
+          if (budgetCap === null) {
+            // Can't afford input + a minimal output under the ceiling — finalize
+            // and keep the current artifact.
+            nextStatus = 'final';
+            working = {
+              ...content,
+              loop: mirror('final', loopState.round, loopState.repairs),
+            };
+          } else {
+            emit({
+              ...content,
+              loop: mirror('generating', loopState.round, loopState.repairs),
+            });
+            const codeMessages: OpenAIMessage[] = [
+              { role: 'user', content: userText || 'Generate the model.' },
+              { role: 'assistant', content: baseCode },
+              {
+                role: 'user',
+                content: `${userText}\n\nFix this OpenSCAD error: ${compileError}`,
+              },
+            ];
+            const gen = await generateContinuationCode({
+              model,
+              codeMessages,
+              referenceId: assistantMessageId,
+              conversationId,
+              userId,
+              remainingBudgetMs,
+              onProgress: streamProgress,
+              budget: {
+                remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
+                promptChars,
+                hasImage: false,
+              },
+            });
+            roundCostUsd += gen.costUsd;
+            if (gen.codeGenFailed) {
+              nextStatus = 'final';
+              working = {
+                ...content,
+                loop: mirror('final', loopState.round, loopState.repairs),
+              };
+            } else {
+              nextRepairs = loopState.repairs + 1;
+              nextStatus = 'awaiting_client';
+              working = {
+                ...content,
+                artifact: buildArtifact(
+                  stripScadCodeFences(gen.rawCode.trim()).trim(),
+                ),
+                loop: mirror('awaiting_client', nextRound, nextRepairs),
+              };
+            }
+          }
+        } else if (
+          // inspect — gate the image-bearing review call on affordability
+          // FIRST (it is the dominant continuation cost). Unaffordable →
+          // finalize 'good' with the current artifact, no vision call.
+          !canAffordReview({
+            model: CLAUDE_FABLE_5_MODEL,
+            remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
+            promptChars:
+              PARAMETRIC_REVIEWER_PROMPT.length +
+              userText.length +
+              baseCode.length,
+          })
+        ) {
+          nextStatus = 'final';
+          working = {
+            ...content,
+            loop: mirror('final', loopState.round, loopState.repairs),
+          };
+        } else {
+          // inspect — server COMPUTES the trusted path, ignoring the client's.
+          emit({
+            ...content,
+            loop: mirror('reviewing', loopState.round, loopState.repairs),
+          });
+          const computedPath = expectedInspectionPath(
+            userId,
+            conversationId,
+            assistantMessageId,
+            loopState.round,
+          );
+          const review = await runInspectionReview({
+            service,
+            imagePath: computedPath,
+            userRequestText: userText,
+            code: baseCode,
+            conversationId,
+            assistantMessageId,
+            userId,
+            remainingBudgetMs,
+          });
+          roundCostUsd += review.costUsd;
+
+          const revisionInstructions =
+            review.verdict.verdict === 'revise'
+              ? review.verdict.revisionInstructions
+              : '';
+          const revisionPromptChars =
+            userText.length * 2 +
+            baseCode.length +
+            revisionInstructions.length +
+            STRICT_CODE_PROMPT.length;
+          const revisionBudgetCap =
+            review.verdict.verdict === 'revise'
+              ? affordableOutputCap(revisionPromptChars)
+              : 0;
+          if (review.verdict.verdict === 'good') {
+            nextStatus = 'final';
+            working = {
+              ...content,
+              text: review.verdict.finalMessage ?? content.text,
+              loop: mirror('final', loopState.round, loopState.repairs),
+            };
+          } else if (revisionBudgetCap === null) {
+            // The review already carried spend to (or past) the ceiling — don't
+            // run a revision code-gen. Finalize as good, keep current artifact.
+            nextStatus = 'final';
+            working = {
+              ...content,
+              loop: mirror('final', loopState.round, loopState.repairs),
+            };
+          } else {
+            // Reviewer asked for changes — flip the status line to "improving".
+            emit({
+              ...content,
+              loop: mirror('generating', loopState.round, loopState.repairs),
+            });
+            const codeMessages: OpenAIMessage[] = [
+              { role: 'user', content: userText || 'Generate the model.' },
+              { role: 'assistant', content: baseCode },
+              {
+                role: 'user',
+                content: `${userText}\n\nRevise the model to address this feedback: ${review.verdict.revisionInstructions}`,
+              },
+            ];
+            const gen = await generateContinuationCode({
+              model,
+              codeMessages,
+              referenceId: assistantMessageId,
+              conversationId,
+              userId,
+              remainingBudgetMs,
+              onProgress: streamProgress,
+              budget: {
+                remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
+                promptChars: revisionPromptChars,
+                hasImage: false,
+              },
+            });
+            roundCostUsd += gen.costUsd;
+            if (gen.codeGenFailed) {
+              nextStatus = 'final';
+              working = {
+                ...content,
+                loop: mirror('final', loopState.round, loopState.repairs),
+              };
+            } else {
+              nextRound = loopState.round + 1;
+              nextStatus = 'awaiting_client';
+              working = {
+                ...content,
+                artifact: buildArtifact(
+                  stripScadCodeFences(gen.rawCode.trim()).trim(),
+                ),
+                loop: mirror('awaiting_client', nextRound, nextRepairs),
+              };
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[parametric-chat] continuation round failed', error);
+        nextStatus = 'final';
+        working = {
+          ...content,
+          loop: mirror('final', loopState.round, loopState.repairs),
+        };
+      }
+
+      // Persist the authoritative row FIRST, CAS-guarded on our 'working' claim
+      // so a stale worker can never overwrite a row it no longer owns.
+      const persisted = await persistLoopStateRow(
+        service,
+        assistantMessageId,
+        {
+          status: nextStatus,
+          round: nextRound,
+          repairs: nextRepairs,
+          spent_usd: startingSpend + roundCostUsd,
+        },
+        'working',
+      );
+      if (!persisted.ok && persisted.reason === 'lost') {
+        // Another writer won this row — do NOT overwrite content. Stream the
+        // fresh authoritative state and stop.
+        streamMessage(controller, await fetchMessageOr(service, message));
+        try {
+          controller.close();
+        } catch {
+          // client gone
+        }
+        return;
+      }
+      if (!persisted.ok) {
+        // Hard write failure → fail CLOSED: the row is stuck at 'working'
+        // (unclaimable → no re-spend). Present a terminal, non-resumable mirror,
+        // never a resumable awaiting_client.
+        working = {
+          ...working,
+          loop: mirror('failed', nextRound, nextRepairs),
+        };
+      }
+
+      // Mirror the outcome into the message content (best-effort display only).
+      let saved: Message | null = null;
+      try {
+        const { data } = await service
+          .from('messages')
+          .update({ content: working })
+          .eq('id', assistantMessageId)
+          .select()
+          .single()
+          .overrideTypes<{ content: Content; role: 'assistant' }>();
+        saved = data as Message | null;
+      } catch (dbError) {
+        console.error('[parametric-chat] continuation persist failed', dbError);
+      }
+      streamMessage(controller, saved ?? { ...message, content: working });
+      try {
+        controller.close();
+      } catch {
+        // client gone
+      }
+    },
+  });
+
+  return new Response(stream, { headers: continuationStreamHeaders });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -777,6 +1950,23 @@ Deno.serve(async (req) => {
     });
   }
 
+  const requestPayload = await req.json();
+
+  // Client-driven loop continuations reuse this endpoint but must NEVER touch
+  // billing — round 0 already charged the user. Dispatch before the chat
+  // prepay / cost-control / token-consume path below.
+  if (
+    requestPayload &&
+    typeof requestPayload === 'object' &&
+    'continuation' in requestPayload
+  ) {
+    return await handleContinuation(
+      userData.user.id,
+      requestPayload,
+      remainingBudgetMs,
+    );
+  }
+
   // Deduct chat token (1) via adam-billing
   if (!userData.user.email) {
     return new Response(JSON.stringify({ error: 'User email missing' }), {
@@ -791,13 +1981,13 @@ Deno.serve(async (req) => {
     model: requestedModel,
     newMessageId,
     thinking, // Add thinking parameter
-  }: {
+  } = requestPayload as {
     messageId: string;
     conversationId: string;
     model: Model;
     newMessageId: string;
     thinking?: boolean;
-  } = await req.json();
+  };
   const model = normalizeParametricGenerationModel(requestedModel);
 
   const limitViolation = await checkGenerationCostControls({
@@ -1058,6 +2248,14 @@ Deno.serve(async (req) => {
           arguments: string;
         } | null = null;
 
+        // Round-0 synchronous spend, seeded into the authoritative loop-state
+        // row so the $0.60 ceiling accounts for the initial generation (agent +
+        // code-gen) from the very first continuation. Code-gen calls charge a
+        // flat fallback per-call inline when usage is missing; the agent call
+        // (a single call) charges its fallback below if it never reported usage.
+        let roundZeroCostUsd = 0;
+        let sawAgentUsage = false;
+
         // Utility to mark all pending tools as error when finalizing on failure/cancel
         const markAllToolsError = () => {
           if (content.toolCalls) {
@@ -1137,6 +2335,15 @@ Deno.serve(async (req) => {
               }
 
               if (chunk.usage) {
+                sawAgentUsage = true;
+                roundZeroCostUsd += computeLlmCallCostUsd(model, {
+                  inputTokens: chunk.usage.prompt_tokens ?? 0,
+                  outputTokens: chunk.usage.completion_tokens ?? 0,
+                  costUsdOverride:
+                    typeof chunk.usage.cost === 'number'
+                      ? chunk.usage.cost
+                      : undefined,
+                });
                 EdgeRuntime.waitUntil(
                   logLlmUsage({
                     functionName: 'parametric-chat',
@@ -1313,6 +2520,25 @@ Deno.serve(async (req) => {
             console.error('Failed to update message in DB:', dbError);
           }
 
+          // Open the agentic loop only when a build produced an artifact
+          // (content.loop is the display mirror set in handleToolCall). INSERT
+          // the authoritative row here, seeded with round-0's synchronous cost
+          // (+ a flat fallback per call that reported no usage) so the ceiling
+          // accounts for it from the first continuation. Awaited so the row
+          // exists before the client drives the loop.
+          if (content.loop) {
+            await insertLoopStateRow({
+              service: getServiceRoleSupabaseClient(),
+              messageId: newMessageData.id,
+              userId: userData.user!.id,
+              conversationId,
+              tier: content.loop.tier,
+              spentUsd:
+                roundZeroCostUsd +
+                (sawAgentUsage ? 0 : MISSING_USAGE_FALLBACK_USD),
+            });
+          }
+
           // Always stream a final message — fall back to in-memory content
           // if the DB update failed, so the client never gets an empty stream
           streamMessage(
@@ -1471,12 +2697,28 @@ Deno.serve(async (req) => {
                           ],
                         },
                       ],
-                      config: {
+                      // Static output cap for parity with the round-0
+                      // OpenRouter path's applyCompletionTokenLimit (round 0 is
+                      // charged tokens + metered post-hoc, so no budget math).
+                      config: buildGoogleCodeGenConfig({
                         systemInstruction: STRICT_CODE_PROMPT,
-                      },
+                        baseOutputCap: GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+                      }),
                     })) as GoogleGenerateContentResult;
 
                     const usage = result.usageMetadata;
+                    // Per-CALL cost: charge the flat fallback the moment this
+                    // call returns without usable usage (a usage-less call in a
+                    // provider fallback chain must not ride for free).
+                    roundZeroCostUsd += computeLlmCallCostUsd(
+                      providerCandidate.usageModel,
+                      usage
+                        ? {
+                            inputTokens: usage.promptTokenCount ?? 0,
+                            outputTokens: usage.candidatesTokenCount ?? 0,
+                          }
+                        : null,
+                    );
                     EdgeRuntime.waitUntil(
                       logLlmUsage({
                         functionName: 'parametric-chat',
@@ -1540,7 +2782,7 @@ Deno.serve(async (req) => {
                   thinking || usesAutomaticReasoning(codeModel);
                 if (isGeminiCodeGenerationModel(codeModel)) {
                   codeRequestBody.reasoning = {
-                    effort: 'minimal',
+                    effort: 'medium',
                     exclude: true,
                   };
                   applyCompletionTokenLimit(
@@ -1599,6 +2841,9 @@ Deno.serve(async (req) => {
                   // re-serializes the full accumulated artifact.
                   let lastFlushTime = 0;
                   let lastFlushedLen = 0;
+                  // Per-CALL usage flag so a usage-less call in a provider
+                  // fallback chain still gets the flat fallback charge.
+                  let sawUsageThisCall = false;
                   const FLUSH_INTERVAL_MS = 120;
 
                   while (true) {
@@ -1652,6 +2897,18 @@ Deno.serve(async (req) => {
                       }
 
                       if (chunk.usage) {
+                        sawUsageThisCall = true;
+                        roundZeroCostUsd += computeLlmCallCostUsd(
+                          providerCandidate.usageModel,
+                          {
+                            inputTokens: chunk.usage.prompt_tokens ?? 0,
+                            outputTokens: chunk.usage.completion_tokens ?? 0,
+                            costUsdOverride:
+                              typeof chunk.usage.cost === 'number'
+                                ? chunk.usage.cost
+                                : undefined,
+                          },
+                        );
                         EdgeRuntime.waitUntil(
                           logLlmUsage({
                             functionName: 'parametric-chat',
@@ -1700,6 +2957,12 @@ Deno.serve(async (req) => {
                         }
                       }
                     }
+                  }
+
+                  // Consumed a full response with no usage — charge the flat
+                  // fallback for THIS call.
+                  if (!sawUsageThisCall) {
+                    roundZeroCostUsd += MISSING_USAGE_FALLBACK_USD;
                   }
 
                   if (hasRenderableScadCode(stripCodeFences(rawCode))) {
@@ -1782,6 +3045,10 @@ Deno.serve(async (req) => {
                     (c) => c.id !== toolCall.id,
                   ),
                   artifact,
+                  // content.loop is only a DISPLAY MIRROR — the authoritative
+                  // state row is INSERTed in the outer finally (where round-0
+                  // spend is fully accumulated).
+                  loop: initialLoopState(tierForModel(model)),
                 };
               }
               // Mark resolved *before* the side-effectful streamMessage:

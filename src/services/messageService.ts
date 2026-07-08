@@ -19,6 +19,9 @@ import {
 import * as Sentry from '@sentry/react';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
 import { shouldPollMessagesForGeneration } from '@/utils/generationStatus';
+import { consumeMessageStream } from '@/services/messageStream';
+import { driveParametricLoop } from '@/utils/parametricLoop';
+import { isDrivableLoopMessage } from '@/utils/parametricLoopDecision';
 
 function messageSentConversationUpdate(
   newMessage: Message,
@@ -293,93 +296,17 @@ export function useCreativeChatMutation({
         );
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('No reader available');
-      }
-
-      const decoder = new TextDecoder();
-      let leftover = '';
-
-      let finalMessage: Message | null = null;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          // Append decoded chunk to leftover buffer
-          leftover += decoder.decode(value, { stream: true });
-
-          // Split into lines; keep the last partial line in leftover
-          const lines = leftover.split('\n');
-          leftover = lines.pop() ?? '';
-
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line) continue;
-            try {
-              const data: Message = JSON.parse(line);
-
-              finalMessage = data;
-
-              // Update existing streaming message
-              queryClient.setQueryData(
-                ['messages', conversationId],
-                (oldMessages: Message[] | undefined) => {
-                  if (!oldMessages || oldMessages.length === 0) {
-                    return [data];
-                  }
-                  if (oldMessages.find((msg) => msg.id === data.id)) {
-                    return oldMessages.map((msg) =>
-                      msg.id === data.id ? data : msg,
-                    );
-                  } else {
-                    return [...oldMessages, data];
-                  }
-                },
-              );
-
-              if (!initialized) {
-                await initialize();
-                initialized = true;
-              }
-            } catch (parseError) {
-              console.error('Error parsing streaming data:', parseError);
-            }
+      const finalMessage = await consumeMessageStream({
+        response,
+        queryClient,
+        conversationId,
+        onFirstMessage: async () => {
+          if (!initialized) {
+            await initialize();
+            initialized = true;
           }
-        }
-
-        // Flush decoder and process any remaining buffered content
-        const flushRemainder = decoder.decode();
-        if (flushRemainder) leftover += flushRemainder;
-        const tail = leftover.trim();
-        if (tail) {
-          try {
-            const data: Message = JSON.parse(tail);
-            finalMessage = data;
-            queryClient.setQueryData(
-              ['messages', conversationId],
-              (oldMessages: Message[] | undefined) => {
-                if (!oldMessages || oldMessages.length === 0) {
-                  return [data];
-                }
-                if (oldMessages.find((msg) => msg.id === data.id)) {
-                  return oldMessages.map((msg) =>
-                    msg.id === data.id ? data : msg,
-                  );
-                } else {
-                  return [...oldMessages, data];
-                }
-              },
-            );
-          } catch (parseError) {
-            console.error('Error parsing final streaming data:', parseError);
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
+        },
+      });
 
       if (!finalMessage) {
         throw new Error('No final message received');
@@ -495,96 +422,33 @@ export function useParametricChatMutation({
         );
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('No reader available');
-      }
-
-      const decoder = new TextDecoder();
-      let leftover = '';
-
-      let finalMessage: Message | null = null;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          // Append decoded chunk to leftover buffer
-          leftover += decoder.decode(value, { stream: true });
-
-          // Split into lines; keep the last partial line in leftover
-          const lines = leftover.split('\n');
-          leftover = lines.pop() ?? '';
-
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line) continue;
-            try {
-              const data: Message = JSON.parse(line);
-
-              finalMessage = data;
-
-              // Update existing streaming message
-              queryClient.setQueryData(
-                ['messages', conversationId],
-                (oldMessages: Message[] | undefined) => {
-                  if (!oldMessages || oldMessages.length === 0) {
-                    return [data];
-                  }
-                  if (oldMessages.find((msg) => msg.id === data.id)) {
-                    return oldMessages.map((msg) =>
-                      msg.id === data.id ? data : msg,
-                    );
-                  } else {
-                    return [...oldMessages, data];
-                  }
-                },
-              );
-
-              if (!initialized) {
-                await initialize();
-                initialized = true;
-              }
-            } catch (parseError) {
-              console.error('Error parsing streaming data:', parseError);
-            }
+      const finalMessage = await consumeMessageStream({
+        response,
+        queryClient,
+        conversationId,
+        onFirstMessage: async () => {
+          if (!initialized) {
+            await initialize();
+            initialized = true;
           }
-        }
-
-        // Flush decoder and process any remaining buffered content
-        const flushRemainder = decoder.decode();
-        if (flushRemainder) leftover += flushRemainder;
-        const tail = leftover.trim();
-        if (tail) {
-          try {
-            const data: Message = JSON.parse(tail);
-            finalMessage = data;
-            queryClient.setQueryData(
-              ['messages', conversationId],
-              (oldMessages: Message[] | undefined) => {
-                if (!oldMessages || oldMessages.length === 0) {
-                  return [data];
-                }
-                if (oldMessages.find((msg) => msg.id === data.id)) {
-                  return oldMessages.map((msg) =>
-                    msg.id === data.id ? data : msg,
-                  );
-                } else {
-                  return [...oldMessages, data];
-                }
-              },
-            );
-          } catch (parseError) {
-            console.error('Error parsing final streaming data:', parseError);
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
+        },
+      });
 
       if (!finalMessage) {
         throw new Error('No final message received');
+      }
+
+      // Round 0 is done. If the server left the message awaiting a client
+      // continuation, drive the agentic loop (compile auto-repair + premium
+      // visual inspection) in the background — do NOT await it, so the
+      // mutation resolves and isLoading clears while later rounds stream into
+      // the cache through the same reader.
+      if (isDrivableLoopMessage(finalMessage)) {
+        void driveParametricLoop({
+          message: finalMessage,
+          queryClient,
+          conversationId,
+        });
       }
 
       return finalMessage;

@@ -1,4 +1,4 @@
-import { Message, Model } from '@shared/types';
+import { Content, Message, Model } from '@shared/types';
 import {
   ArrowUpRight,
   Box,
@@ -357,6 +357,9 @@ export function AssistantMessage({
                     currentVersion={currentVersion}
                   />
                 )}
+              {message.content.loop && (
+                <LoopStatusLine loop={message.content.loop} />
+              )}
             </>
           )}
 
@@ -548,6 +551,31 @@ export function AssistantMessage({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Lightweight progress line for the agentic generation loop, driven off the
+// message's persisted loop state. Renders only for the non-terminal states the
+// client sees while a loop is actively driving; terminal loops render nothing.
+function LoopStatusLine({ loop }: { loop: NonNullable<Content['loop']> }) {
+  let label: string | null = null;
+  if (loop.status === 'reviewing') {
+    label = `Reviewing model (round ${loop.round + 1}/${loop.maxRounds})...`;
+  } else if (loop.status === 'generating') {
+    label = 'Improving model...';
+  } else if (loop.status === 'awaiting_client') {
+    label = 'Checking model...';
+  }
+  if (!label) return null;
+
+  return (
+    <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
+      <div className="flex h-full items-center justify-center gap-2">
+        <Sparkles className="h-4 w-4 text-white" />
+        <span>{label}</span>
+      </div>
+      <Loader2 className="h-4 w-4 animate-spin text-white" />
     </div>
   );
 }

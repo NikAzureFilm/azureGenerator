@@ -136,6 +136,19 @@ function normalizeModelId(model: string): string {
   return model.replace(/-\d{8}$/, '');
 }
 
+// Output $/1M-token rate for a model (0 when unknown). Shares the LLM_PRICES
+// table with llmCostUsd so budget math and cost accounting never diverge.
+export function llmOutputPerMUsd(model: string): number {
+  const price = LLM_PRICES[model] ?? LLM_PRICES[normalizeModelId(model)];
+  return price?.outputPerM ?? 0;
+}
+
+// Input $/1M-token rate for a model (0 when unknown), same table.
+export function llmInputPerMUsd(model: string): number {
+  const price = LLM_PRICES[model] ?? LLM_PRICES[normalizeModelId(model)];
+  return price?.inputPerM ?? 0;
+}
+
 export function llmCostUsd(
   model: string,
   inputTokens: number,

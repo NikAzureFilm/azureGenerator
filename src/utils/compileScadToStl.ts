@@ -29,7 +29,20 @@ export async function compileScadToStl(code: string): Promise<Blob> {
           worker.removeEventListener('message', handleMessage);
 
           if (data.err) {
-            reject(new Error(data.err.message || 'OpenSCAD compile failed'));
+            // The worker flattens OpenSCADError to a plain object; its real
+            // compiler diagnostics live in `stdErr`, not `message` (which is a
+            // generic "did not exit correctly"). Surface stdErr so callers —
+            // e.g. the agentic repair loop — get the actionable error text.
+            const stdErr = Array.isArray(data.err.stdErr)
+              ? (data.err.stdErr as string[])
+              : null;
+            const message =
+              stdErr && stdErr.length > 0
+                ? stdErr.join('\n')
+                : data.err.message || 'OpenSCAD compile failed';
+            const error = new Error(message) as Error & { stdErr?: string[] };
+            if (stdErr) error.stdErr = stdErr;
+            reject(error);
           } else {
             resolve(data.data as OpenSCADWorkerResponseData);
           }

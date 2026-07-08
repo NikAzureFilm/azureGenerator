@@ -22,6 +22,8 @@ import posthog from 'posthog-js';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
 import { isAssistantGenerationInFlight } from '@/utils/generationStatus';
+import { driveParametricLoop, isLoopActive } from '@/utils/parametricLoop';
+import { isDrivableLoopMessage } from '@/utils/parametricLoopDecision';
 
 export function ParametricEditorView() {
   const { conversation, updateConversationAsync } = useConversation();
@@ -118,6 +120,21 @@ export function ParametricEditorView() {
   useEffect(() => {
     setCurrentMessage(null);
   }, [conversation.id, setCurrentMessage]);
+
+  // Resume the agentic loop for a leaf message the server left awaiting a
+  // client continuation (e.g. the tab was closed mid-loop, or another device
+  // ran round 0). The per-message-id guard in the driver prevents this from
+  // double-driving a loop that the send mutation is already running.
+  useEffect(() => {
+    if (!lastMessage) return;
+    if (!isDrivableLoopMessage(lastMessage)) return;
+    if (isLoopActive(lastMessage.id)) return;
+    void driveParametricLoop({
+      message: lastMessage,
+      queryClient,
+      conversationId: conversation.id,
+    });
+  }, [lastMessage, queryClient, conversation.id]);
 
   useEffect(() => {
     if (lastMessage?.role === 'assistant' && !isTabletOrMobile) {
