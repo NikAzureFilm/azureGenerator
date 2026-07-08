@@ -16,9 +16,11 @@ import {
   maxAffordableOutputTokens,
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
+  buildGoogleContents,
   canAffordReview,
   clampText,
   effectiveOutputCap,
+  MAX_GOOGLE_PROMPT_CHARS,
   MIN_AFFORDABLE_OUTPUT_TOKENS,
   parseContinuationBody,
   parseReviewerVerdict,
@@ -197,20 +199,33 @@ test('parseReviewerVerdict extracts JSON from surrounding prose/fences', () => {
   assert.equal(v.revisionInstructions, 'Thicken walls');
 });
 
-test('parseReviewerVerdict falls back to good on malformed input', () => {
+test('parseReviewerVerdict reports unparseable on malformed/truncated input', () => {
+  // The caller (not the parser) decides revise-vs-finalize on unparseable, so a
+  // truncated JSON no longer silently passes a bad model as 'good'.
   assert.deepEqual(parseReviewerVerdict('not json at all'), {
-    verdict: 'good',
+    verdict: 'unparseable',
   });
   assert.deepEqual(parseReviewerVerdict('{ verdict: broken'), {
-    verdict: 'good',
+    verdict: 'unparseable',
   });
-  assert.deepEqual(parseReviewerVerdict(''), { verdict: 'good' });
+  assert.deepEqual(parseReviewerVerdict(''), { verdict: 'unparseable' });
+  // Truncated mid-JSON (the exact failure that used to default to good).
+  assert.deepEqual(
+    parseReviewerVerdict(
+      '{"verdict":"revise","revision_instructions":"Add the',
+    ),
+    { verdict: 'unparseable' },
+  );
+  // Unknown verdict value.
+  assert.deepEqual(parseReviewerVerdict('{"verdict":"maybe"}'), {
+    verdict: 'unparseable',
+  });
 });
 
-test('parseReviewerVerdict treats an empty revise as good', () => {
+test('parseReviewerVerdict treats an empty revise as unparseable', () => {
   assert.deepEqual(
     parseReviewerVerdict('{"verdict":"revise","revision_instructions":"  "}'),
-    { verdict: 'good' },
+    { verdict: 'unparseable' },
   );
 });
 
@@ -442,6 +457,77 @@ test('clampText truncates only past the limit', () => {
   assert.equal(clampText('ab', 3), 'ab');
 });
 
+test('buildGoogleContents maps text messages to role-scoped text parts', () => {
+  const { contents, clampedTextChars } = buildGoogleContents([
+    { role: 'user', content: 'make a mug' },
+    { role: 'assistant', content: 'cube(1);' },
+  ]);
+  assert.equal(clampedTextChars, false);
+  assert.deepEqual(contents, [
+    { role: 'user', parts: [{ text: 'make a mug' }] },
+    { role: 'model', parts: [{ text: 'cube(1);' }] },
+  ]);
+});
+
+test('buildGoogleContents turns an image data URL into inlineData, not text', () => {
+  const base64 = 'AAAABBBBCCCC';
+  const { contents } = buildGoogleContents([
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'use this reference' },
+        {
+          type: 'image_url',
+          image_url: { url: `data:image/png;base64,${base64}` },
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(contents, [
+    {
+      role: 'user',
+      parts: [
+        { text: 'use this reference' },
+        { inlineData: { mimeType: 'image/png', data: base64 } },
+      ],
+    },
+  ]);
+  // The base64 must NEVER end up stringified into prompt text.
+  const serialized = JSON.stringify(contents);
+  assert.ok(!serialized.includes(`data:image/png;base64,${base64}`));
+});
+
+test('buildGoogleContents drops non-data image URLs and unknown blocks', () => {
+  const { contents } = buildGoogleContents([
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'hi' },
+        { type: 'image_url', image_url: { url: 'https://example.com/a.png' } },
+        { type: 'mystery', foo: 'bar' },
+      ],
+    },
+  ]);
+  assert.deepEqual(contents, [{ role: 'user', parts: [{ text: 'hi' }] }]);
+});
+
+test('buildGoogleContents drops system messages', () => {
+  const { contents } = buildGoogleContents([
+    { role: 'system', content: 'system prompt' },
+    { role: 'user', content: 'hi' },
+  ]);
+  assert.deepEqual(contents, [{ role: 'user', parts: [{ text: 'hi' }] }]);
+});
+
+test('buildGoogleContents clamps total prompt text to the char cap', () => {
+  const big = 'x'.repeat(MAX_GOOGLE_PROMPT_CHARS + 500);
+  const { contents, clampedTextChars } = buildGoogleContents([
+    { role: 'user', content: big },
+  ]);
+  assert.equal(clampedTextChars, true);
+  assert.equal(contents[0].parts[0].text.length, MAX_GOOGLE_PROMPT_CHARS);
+});
+
 test('canAffordReview gates the image-bearing review call on remaining budget', () => {
   // Fable, 4000 prompt chars → input 1000 + 2000 image = 3000 tokens ($0.03),
   // output 3000 tokens ($0.15) → needs $0.18.
@@ -464,13 +550,13 @@ test('canAffordReview gates the image-bearing review call on remaining budget', 
 });
 
 test('canAffordReview includes the image token estimate', () => {
-  // $0.165 would cover the review WITHOUT the image (1000 input tok = $0.01 +
-  // $0.15 output = $0.16) but NOT with the 2000-token image ($0.03 + $0.15 =
-  // $0.18) — so it must be unaffordable.
+  // $0.145 would cover the review WITHOUT the image (1000 input tok = $0.01 +
+  // 2500 output = $0.125 → $0.135) but NOT with the 2000-token image ($0.03 +
+  // $0.125 = $0.155) — so it must be unaffordable.
   assert.equal(
     canAffordReview({
       model: 'anthropic/claude-fable-5',
-      remainingUsd: 0.165,
+      remainingUsd: 0.145,
       promptChars: 4000,
     }),
     false,

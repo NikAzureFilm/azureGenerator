@@ -101,9 +101,10 @@ export function effectiveOutputCap(
     : baseCap;
 }
 
-// Fixed output-token estimate for the vision reviewer call (2000 completion +
-// 1000 reasoning); its output is hard-capped, so affordability is a boolean.
-export const REVIEW_OUTPUT_TOKEN_ESTIMATE = 3000;
+// Fixed output-token estimate for the vision reviewer call: 2000 completion
+// (max_tokens) plus a small buffer for the now-minimal excluded reasoning. Its
+// output is hard-capped, so affordability is a boolean.
+export const REVIEW_OUTPUT_TOKEN_ESTIMATE = 2500;
 
 // Whether the remaining budget can cover the inspection-review call: its
 // estimated INPUT (prompt chars + one image) plus its fixed output. The
@@ -121,6 +122,89 @@ export function canAffordReview(params: {
   const outputUsd =
     (REVIEW_OUTPUT_TOKEN_ESTIMATE * llmOutputPerMUsd(model)) / 1_000_000;
   return remainingUsd >= estimatedInputUsd + outputUsd;
+}
+
+// Hard cap on total PROMPT TEXT chars sent to the google-direct code-gen call.
+// Belt-and-braces so no content shape can ever explode text input again.
+export const MAX_GOOGLE_PROMPT_CHARS = 200_000;
+
+export type GooglePart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+export type GoogleContent = { role: 'user' | 'model'; parts: GooglePart[] };
+
+type GoogleSourceBlock = {
+  type?: string;
+  text?: string;
+  image_url?: { url?: string };
+};
+type GoogleSourceMessage = {
+  role: string;
+  content: string | GoogleSourceBlock[];
+};
+
+function parseDataUrl(url: string): { mimeType: string; data: string } | null {
+  const match = /^data:([^;]+);base64,(.*)$/s.exec(url);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
+
+// Build proper @google/genai `contents` from OpenAI-style messages. Text blocks
+// become {text}; image data URLs become {inlineData} (NEVER JSON.stringified
+// into prompt text — that was the megabyte-of-base64 blowup); non-data image
+// URLs and unknown block types are dropped. Total TEXT is clamped to
+// `maxTextChars` (image bytes are not counted — they're proper image input).
+export function buildGoogleContents(
+  messages: GoogleSourceMessage[],
+  maxTextChars = MAX_GOOGLE_PROMPT_CHARS,
+): { contents: GoogleContent[]; clampedTextChars: boolean } {
+  let remainingChars = maxTextChars;
+  let clampedTextChars = false;
+  const contents: GoogleContent[] = [];
+
+  for (const message of messages) {
+    if (message.role === 'system') continue; // system → systemInstruction
+    const role: 'user' | 'model' =
+      message.role === 'assistant' ? 'model' : 'user';
+    const parts: GooglePart[] = [];
+
+    const pushText = (text: string) => {
+      if (!text) return;
+      if (remainingChars <= 0) {
+        clampedTextChars = true;
+        return;
+      }
+      let slice = text;
+      if (slice.length > remainingChars) {
+        slice = slice.slice(0, remainingChars);
+        clampedTextChars = true;
+      }
+      remainingChars -= slice.length;
+      parts.push({ text: slice });
+    };
+
+    if (typeof message.content === 'string') {
+      pushText(message.content);
+    } else if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          pushText(block.text);
+        } else if (block.type === 'image_url' && block.image_url?.url) {
+          const parsed = parseDataUrl(block.image_url.url);
+          if (parsed) {
+            parts.push({
+              inlineData: { mimeType: parsed.mimeType, data: parsed.data },
+            });
+          }
+          // Non-data (http) image URLs and unknown block types are dropped.
+        }
+      }
+    }
+
+    if (parts.length > 0) contents.push({ role, parts });
+  }
+
+  return { contents, clampedTextChars };
 }
 
 // Build the @google/genai config for a continuation code-gen call so the
@@ -436,28 +520,31 @@ export function decideContinuation(
 
 export type ReviewerVerdict =
   | { verdict: 'good'; finalMessage?: string }
-  | { verdict: 'revise'; revisionInstructions: string };
+  | { verdict: 'revise'; revisionInstructions: string }
+  // The reply wasn't a usable verdict (no JSON, truncated/malformed JSON,
+  // unknown verdict, or an empty "revise"). The CALLER decides what to do:
+  // treat as a revision if rounds remain, else finalize — so a truncated JSON
+  // no longer silently passes a bad model as 'good'.
+  | { verdict: 'unparseable' };
 
 // Defensively parse the reviewer's JSON-only reply. Extracts the first {...}
-// block so leading prose or code fences don't break it. Any failure — no JSON,
-// malformed JSON, missing fields, unknown verdict — resolves to `good` so the
-// loop always terminates cleanly rather than bricking on a bad reply.
+// block so leading prose or code fences don't break it. A clean 'good' / 'revise'
+// is returned as-is; anything unusable returns 'unparseable'.
 export function parseReviewerVerdict(raw: string): ReviewerVerdict {
-  const good = (finalMessage?: string): ReviewerVerdict =>
-    finalMessage ? { verdict: 'good', finalMessage } : { verdict: 'good' };
-  if (typeof raw !== 'string' || !raw.trim()) return good();
+  const unparseable: ReviewerVerdict = { verdict: 'unparseable' };
+  if (typeof raw !== 'string' || !raw.trim()) return unparseable;
 
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return good();
+  if (start === -1 || end === -1 || end <= start) return unparseable;
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.slice(start, end + 1));
   } catch {
-    return good();
+    return unparseable;
   }
-  if (typeof parsed !== 'object' || parsed === null) return good();
+  if (typeof parsed !== 'object' || parsed === null) return unparseable;
 
   const obj = parsed as Record<string, unknown>;
   if (obj.verdict === 'revise') {
@@ -465,17 +552,14 @@ export function parseReviewerVerdict(raw: string): ReviewerVerdict {
       typeof obj.revision_instructions === 'string'
         ? obj.revision_instructions.trim()
         : '';
-    // A "revise" with no actionable instructions can't drive a revision —
-    // finalize instead of looping on an empty instruction.
-    if (!instructions) return good();
+    // A "revise" with no actionable instructions can't drive a revision.
+    if (!instructions) return unparseable;
     return { verdict: 'revise', revisionInstructions: instructions };
   }
   if (obj.verdict === 'good') {
-    return good(
-      typeof obj.final_message === 'string' && obj.final_message.trim()
-        ? obj.final_message.trim()
-        : undefined,
-    );
+    return typeof obj.final_message === 'string' && obj.final_message.trim()
+      ? { verdict: 'good', finalMessage: obj.final_message.trim() }
+      : { verdict: 'good' };
   }
-  return good();
+  return unparseable;
 }

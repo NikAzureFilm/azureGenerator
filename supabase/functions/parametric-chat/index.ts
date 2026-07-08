@@ -48,6 +48,7 @@ import {
   type ContinuationResult,
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
+  buildGoogleContents,
   canAffordReview,
   clampText,
   computeLlmCallCostUsd,
@@ -765,18 +766,24 @@ module torus(r1, r2) {
 // 7-view sheet against the user's request; must answer with JSON only.
 const PARAMETRIC_REVIEWER_PROMPT = `You are a meticulous CAD reviewer for AzureFilm Generator. You are shown a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of a 3D-printable OpenSCAD model, the user's original request, and the OpenSCAD source.
 
-Judge whether the model faithfully and completely satisfies the request. Look for:
-- Missing, wrong, or incomplete features the request asked for.
-- Disconnected or floating parts, or parts not resting on the build plate for a kit.
-- Non-printable geometry (paper-thin walls, gaps, self-intersections, no overlap where parts should fuse).
-- Over-simplified results that ignore requested detail.
-- Hidden or internal features that the views suggest are absent.
-Apply the same multi-feature checklists a careful modeler would (e.g. a mug needs body, hollow interior, rim, base, handle; a phone case needs pocket, lip, camera + port + button cutouts).
+Method (do this before deciding):
+1. Enumerate EVERY distinct feature the user explicitly named in their request (e.g. "mug with a handle and a lid" → body, handle, lid).
+2. For EACH named feature, check it against EVERY relevant view: is it present, the right shape, correctly placed, connected to the body, and 3D-printable?
+3. Also watch for: disconnected/floating parts or parts not resting on the build plate (kits); non-printable geometry (paper-thin walls, gaps, self-intersections, features that only touch instead of overlapping); and over-simplified results that ignore requested detail.
 
-Reply with a SINGLE JSON object and NOTHING else:
-- If the model is good enough to ship: {"verdict":"good","final_message":"<one or two friendly sentences describing what was made>"}
-- If it needs another pass: {"verdict":"revise","revision_instructions":"<specific, actionable changes for the code generator>"}
-Do not include markdown, code fences, or any prose outside the JSON.`;
+Verdict rule (strict):
+- Return "revise" if ANY user-named feature is missing, malformed, disconnected, not visible in the views, or non-printable — even if the rest looks good.
+- Return "good" ONLY when every user-named feature is confirmed present, correct, connected, and printable.
+
+Reply with a SINGLE JSON object and NOTHING else (no markdown, no code fences, no prose outside the JSON):
+- Good: {"verdict":"good","final_message":"<one or two friendly sentences describing what was made>"}
+- Revise: {"verdict":"revise","revision_instructions":"<specific, actionable changes naming each feature to fix>"}`;
+
+// Fallback instructions when the reviewer's JSON is truncated/unparseable but
+// inspection rounds remain — better to attempt one corrective pass than to
+// silently ship a possibly-bad model as 'good'.
+const GENERIC_REVISION_INSTRUCTIONS =
+  'Re-examine the inspection sheet against the user’s request; fix any missing, wrong, disconnected, non-printable, or unclear features; return the complete corrected script.';
 
 // Module-scoped fence stripper for the continuation code path (round 0 keeps
 // its own local copy inside the streaming handler).
@@ -899,24 +906,17 @@ async function generateContinuationCode(params: {
     if (providerCandidate.provider === 'google') {
       if (!GOOGLE_API_KEY) continue;
       try {
+        const googleContents = buildGoogleContents(codeMessages);
+        if (googleContents.clampedTextChars) {
+          console.warn(
+            '[parametric-chat] clamped google-direct continuation prompt text',
+          );
+        }
         const result = (await googleGenAI.models.generateContent({
           model: providerCandidate.model,
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  text: codeMessages
-                    .map((message) =>
-                      typeof message.content === 'string'
-                        ? `${message.role}: ${message.content}`
-                        : JSON.stringify(message.content),
-                    )
-                    .join('\n\n'),
-                },
-              ],
-            },
-          ],
+          // Proper multimodal contents — text as {text}, images as {inlineData}
+          // — never JSON.stringify content blocks into prompt text.
+          contents: googleContents.contents,
           // Honor the per-leg budget-derived output cap in the google-direct
           // branch too (the OpenRouter branch clamps below).
           config: buildGoogleCodeGenConfig({
@@ -1168,14 +1168,12 @@ async function runInspectionReview(params: {
       stream: false,
       usage: { include: true },
     };
-    // The reviewer only returns a small JSON verdict, so keep it cheap: a small
-    // reasoning budget plus a modest completion cap that still clears it (an
-    // Anthropic model counts thinking tokens against max_tokens).
-    const REVIEW_REASONING_TOKENS = 1000;
+    // The reviewer must return a small JSON verdict that NEVER truncates. Fable's
+    // adaptive reasoning previously ate the 2000-token budget and cut off the
+    // JSON (which then defaulted to 'good'). Force minimal, excluded reasoning so
+    // the whole budget is available for the visible verdict.
     const REVIEW_COMPLETION_TOKENS = 2000;
-    if (usesAutomaticReasoning(CLAUDE_FABLE_5_MODEL)) {
-      reviewBody.reasoning = { max_tokens: REVIEW_REASONING_TOKENS };
-    }
+    reviewBody.reasoning = { effort: 'minimal', exclude: true };
     applyCompletionTokenLimit(
       reviewBody,
       CLAUDE_FABLE_5_MODEL,
@@ -1765,36 +1763,48 @@ async function handleContinuation(
           });
           roundCostUsd += review.costUsd;
 
+          // A truncated/unparseable verdict no longer silently passes as 'good':
+          // if inspection rounds remain, treat it as a revise with generic
+          // instructions; at the round cap it finalizes (anti-brick). Transport
+          // / LLM errors already resolve to 'good' inside runInspectionReview.
+          const wantsRevision =
+            review.verdict.verdict === 'revise' ||
+            (review.verdict.verdict === 'unparseable' &&
+              loopState.round < loopState.maxRounds);
           const revisionInstructions =
             review.verdict.verdict === 'revise'
               ? review.verdict.revisionInstructions
-              : '';
+              : GENERIC_REVISION_INSTRUCTIONS;
           const revisionPromptChars =
             userText.length * 2 +
             baseCode.length +
             revisionInstructions.length +
             STRICT_CODE_PROMPT.length;
-          const revisionBudgetCap =
-            review.verdict.verdict === 'revise'
-              ? affordableOutputCap(revisionPromptChars)
-              : 0;
-          if (review.verdict.verdict === 'good') {
+          const revisionBudgetCap = wantsRevision
+            ? affordableOutputCap(revisionPromptChars)
+            : 0;
+          if (!wantsRevision) {
+            // 'good', or 'unparseable' at the round cap — finalize, keep artifact.
             nextStatus = 'final';
             working = {
               ...content,
-              text: review.verdict.finalMessage ?? content.text,
+              text:
+                review.verdict.verdict === 'good'
+                  ? (review.verdict.finalMessage ?? content.text)
+                  : content.text,
               loop: mirror('final', loopState.round, loopState.repairs),
             };
           } else if (revisionBudgetCap === null) {
-            // The review already carried spend to (or past) the ceiling — don't
-            // run a revision code-gen. Finalize as good, keep current artifact.
+            // Can't afford the revision under the ceiling — finalize, keep
+            // current artifact.
             nextStatus = 'final';
             working = {
               ...content,
               loop: mirror('final', loopState.round, loopState.repairs),
             };
           } else {
-            // Reviewer asked for changes — flip the status line to "improving".
+            // Revise (reviewer asked, or unparseable-with-rounds-remaining) —
+            // flip the status line to "improving".
             emit({
               ...content,
               loop: mirror('generating', loopState.round, loopState.repairs),
@@ -1804,7 +1814,7 @@ async function handleContinuation(
               { role: 'assistant', content: baseCode },
               {
                 role: 'user',
-                content: `${userText}\n\nRevise the model to address this feedback: ${review.verdict.revisionInstructions}`,
+                content: `${userText}\n\nRevise the model to address this feedback: ${revisionInstructions}`,
               },
             ];
             const gen = await generateContinuationCode({
@@ -2679,24 +2689,18 @@ Deno.serve(async (req) => {
                   }
 
                   try {
+                    const googleContents = buildGoogleContents(codeMessages);
+                    if (googleContents.clampedTextChars) {
+                      console.warn(
+                        '[parametric-chat] clamped google-direct round-0 prompt text',
+                      );
+                    }
                     const result = (await googleGenAI.models.generateContent({
                       model: providerCandidate.model,
-                      contents: [
-                        {
-                          role: 'user',
-                          parts: [
-                            {
-                              text: codeMessages
-                                .map((message) =>
-                                  typeof message.content === 'string'
-                                    ? `${message.role}: ${message.content}`
-                                    : JSON.stringify(message.content),
-                                )
-                                .join('\n\n'),
-                            },
-                          ],
-                        },
-                      ],
+                      // Proper multimodal contents — the reference image goes in
+                      // as {inlineData}, NOT JSON.stringified base64 in prompt
+                      // text (the ~888k-token / ~$1.33 Lite blowup).
+                      contents: googleContents.contents,
                       // Static output cap for parity with the round-0
                       // OpenRouter path's applyCompletionTokenLimit (round 0 is
                       // charged tokens + metered post-hoc, so no budget math).
