@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requireAdmin } from '@/lib/auth';
 import { generationKindLabel, truncateText } from '@/lib/content';
 import { fetchGenerationsPage } from '@/lib/metrics';
+import { generationModelDisplay } from '@/lib/generationModels';
 import { absoluteTime, num, relativeTime, usdSmall } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import Nav from '@/app/components/Nav';
@@ -140,6 +141,7 @@ export default async function GenerationsPage({
           <thead>
             <tr>
               <th>Type</th>
+              <th>Model</th>
               <th>User</th>
               <th>Conversation</th>
               <th>Prompt</th>
@@ -154,86 +156,101 @@ export default async function GenerationsPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="muted">
+                <td colSpan={11} className="muted">
                   No generated content matches.
                 </td>
               </tr>
             ) : (
-              rows.map((g) => (
-                <tr key={`${g.kind}-${g.id}`}>
-                  <td>
-                    <span className="badge">{generationKindLabel(g.kind)}</span>
-                  </td>
-                  <td className="ellip">
-                    <Link href={`/users/${g.user_id}`}>
-                      {g.email ?? g.user_id}
-                    </Link>
-                  </td>
-                  <td className="ellip">
-                    <Link href={`/conversations/${g.conversation_id}`}>
-                      {g.conversation_title ?? g.conversation_id}
-                    </Link>
-                    {g.conversation_type && (
-                      <div className="muted tiny">{g.conversation_type}</div>
-                    )}
-                  </td>
-                  <td className="prompt-cell">
-                    <div className="prompt-wrap">
-                      {g.kind === 'image' && g.status === 'success' && (
-                        <Link
-                          className="thumb-link"
-                          href={`/generations/${g.kind}/${g.id}`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            className="gen-thumb"
-                            src={`/api/generations/image/${g.id}/asset?type=image`}
-                            alt=""
-                            loading="lazy"
-                          />
-                        </Link>
+              rows.map((g) => {
+                const modelDisplay = generationModelDisplay(g);
+                return (
+                  <tr key={`${g.kind}-${g.id}`}>
+                    <td>
+                      <span className="badge">
+                        {generationKindLabel(g.kind)}
+                      </span>
+                    </td>
+                    <td className="ellip" title={modelDisplay?.id}>
+                      {modelDisplay ? (
+                        <>
+                          <div>{modelDisplay.tier}</div>
+                          <div className="muted tiny">{modelDisplay.name}</div>
+                        </>
+                      ) : (
+                        <span className="muted">-</span>
                       )}
-                      <div className="prompt-body">
-                        <PromptPreview value={g.prompt} />
-                        <JsonBlock value={g.prompt} summary="Prompt JSON" />
-                        {g.error && (
-                          <div className="error-inline">
-                            {truncateText(g.error, 200)}
-                          </div>
+                    </td>
+                    <td className="ellip">
+                      <Link href={`/users/${g.user_id}`}>
+                        {g.email ?? g.user_id}
+                      </Link>
+                    </td>
+                    <td className="ellip">
+                      <Link href={`/conversations/${g.conversation_id}`}>
+                        {g.conversation_title ?? g.conversation_id}
+                      </Link>
+                      {g.conversation_type && (
+                        <div className="muted tiny">{g.conversation_type}</div>
+                      )}
+                    </td>
+                    <td className="prompt-cell">
+                      <div className="prompt-wrap">
+                        {g.kind === 'image' && g.status === 'success' && (
+                          <Link
+                            className="thumb-link"
+                            href={`/generations/${g.kind}/${g.id}`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              className="gen-thumb"
+                              src={`/api/generations/image/${g.id}/asset?type=image`}
+                              alt=""
+                              loading="lazy"
+                            />
+                          </Link>
                         )}
+                        <div className="prompt-body">
+                          <PromptPreview value={g.prompt} />
+                          <JsonBlock value={g.prompt} summary="Prompt JSON" />
+                          {g.error && (
+                            <div className="error-inline">
+                              {truncateText(g.error, 200)}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>
-                    <StatusBadge status={g.status} />
-                  </td>
-                  <td className="muted">
-                    {g.file_type ?? (g.kind === 'image' ? 'png' : '-')}
-                  </td>
-                  <td className="right mono">
-                    {g.actual_cost_usd == null
-                      ? '-'
-                      : usdSmall(g.actual_cost_usd)}
-                  </td>
-                  <td className="right mono">
-                    {g.tokens_used == null ? '-' : num(g.tokens_used)}
-                  </td>
-                  <td
-                    className="right muted"
-                    title={absoluteTime(g.created_at)}
-                  >
-                    {relativeTime(g.created_at)}
-                  </td>
-                  <td className="right">
-                    <Link
-                      className="view-link"
-                      href={`/generations/${g.kind}/${g.id}`}
+                    </td>
+                    <td>
+                      <StatusBadge status={g.status} />
+                    </td>
+                    <td className="muted">
+                      {g.file_type ?? (g.kind === 'image' ? 'png' : '-')}
+                    </td>
+                    <td className="right mono">
+                      {g.actual_cost_usd == null
+                        ? '-'
+                        : usdSmall(g.actual_cost_usd)}
+                    </td>
+                    <td className="right mono">
+                      {g.tokens_used == null ? '-' : num(g.tokens_used)}
+                    </td>
+                    <td
+                      className="right muted"
+                      title={absoluteTime(g.created_at)}
                     >
-                      View
-                    </Link>
-                  </td>
-                </tr>
-              ))
+                      {relativeTime(g.created_at)}
+                    </td>
+                    <td className="right">
+                      <Link
+                        className="view-link"
+                        href={`/generations/${g.kind}/${g.id}`}
+                      >
+                        View
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

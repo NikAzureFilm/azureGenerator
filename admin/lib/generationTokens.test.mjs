@@ -1,11 +1,55 @@
 import assert from 'node:assert/strict';
 import { displayGenerationTokens } from './generationTokens.ts';
 
-assert.equal(displayGenerationTokens({ kind: 'parametric', tokens_used: 15 }), 25);
-assert.equal(displayGenerationTokens({ kind: 'parametric', tokens_used: 50 }), 25);
-assert.equal(displayGenerationTokens({ kind: 'parametric', tokens_used: null }), 25);
+assert.equal(
+  displayGenerationTokens({ kind: 'parametric', tokens_used: 15 }),
+  15,
+);
+assert.equal(
+  displayGenerationTokens({ kind: 'parametric', tokens_used: 50 }),
+  50,
+);
+assert.equal(
+  displayGenerationTokens({
+    kind: 'parametric',
+    tokens_used: null,
+    prompt: { model: 'google/gemini-3.5-flash' },
+  }),
+  15,
+);
+assert.equal(
+  displayGenerationTokens({
+    kind: 'parametric',
+    tokens_used: null,
+    prompt: { model: 'anthropic/claude-fable-5' },
+  }),
+  50,
+);
+assert.equal(
+  displayGenerationTokens({
+    kind: 'cad',
+    tokens_used: null,
+    provider_model: 'anthropic/claude-fable-5',
+  }),
+  50,
+);
+assert.equal(
+  displayGenerationTokens({
+    kind: 'cad',
+    tokens_used: null,
+    prompt: { model: 'legacy-model' },
+  }),
+  15,
+);
+assert.equal(
+  displayGenerationTokens({ kind: 'parametric', tokens_used: null }),
+  null,
+);
 assert.equal(displayGenerationTokens({ kind: 'mesh', tokens_used: 61 }), 61);
-assert.equal(displayGenerationTokens({ kind: 'image', tokens_used: null }), null);
+assert.equal(
+  displayGenerationTokens({ kind: 'image', tokens_used: null }),
+  null,
+);
 assert.equal(
   displayGenerationTokens({
     kind: 'image',

@@ -13,6 +13,7 @@ import {
 import { getStripeMetrics } from '@/lib/stripe';
 import { fetchBudgetAlerts } from '@/lib/providers';
 import { PLAN_DISPLAY } from '@/lib/pricing';
+import { cadModelDisplayText } from '@/lib/generationModels';
 import { usd, usdFromDollars, num, pct, relativeTime } from '@/lib/format';
 import { generationKindLabel } from '@/lib/content';
 import ActivityChart from './components/ActivityChart';
@@ -337,7 +338,9 @@ export default async function DashboardPage() {
             ) : (
               cadFailures.map((row) => (
                 <div className="kv" key={row.model}>
-                  <span className="k mono">{row.model}</span>
+                  <span className="k" title={row.model}>
+                    {cadModelDisplayText(row.model) ?? row.model}
+                  </span>
                   <span className="mono">
                     {num(row.failures)} of {num(row.total)} failed ·{' '}
                     <span className={row.failures > 0 ? 'down' : 'up'}>

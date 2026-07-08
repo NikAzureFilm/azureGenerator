@@ -6,6 +6,7 @@ import {
   parseWorkerError,
   truncateText,
 } from '@/lib/content';
+import { generationModelDisplay } from '@/lib/generationModels';
 import {
   fetchCadSourceCode,
   fetchGenerationDetail,
@@ -61,6 +62,7 @@ export default async function GenerationDetailPage({
   ]);
   const succeeded = detail.status === 'success';
   const workerError = detail.error ? parseWorkerError(detail.error) : null;
+  const modelDisplay = generationModelDisplay(detail);
   const usageCostUsd = (usage ?? []).reduce(
     (sum, row) => sum + row.cost_usd,
     0,
@@ -101,6 +103,12 @@ export default async function GenerationDetailPage({
               {detail.conversation_type && ` - ${detail.conversation_type}`}
             </div>
             <div className="sub mono tiny">{detail.id}</div>
+            {modelDisplay && (
+              <div className="sub">
+                Model {modelDisplay.tier} - {modelDisplay.name}{' '}
+                <span className="mono tiny">({modelDisplay.id})</span>
+              </div>
+            )}
           </div>
           <div className="sub right">
             <div>

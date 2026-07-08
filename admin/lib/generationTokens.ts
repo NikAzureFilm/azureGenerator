@@ -1,4 +1,8 @@
-const PARAMETRIC_GENERATION_TOKENS = 25;
+import {
+  cadTokensForModel,
+  extractGenerationModelId,
+} from './generationModels.ts';
+
 const PREMIUM_IMAGE_TOKENS = 22;
 const NORMAL_IMAGE_TOKENS = 14;
 const LITE_IMAGE_TOKENS = 7;
@@ -68,8 +72,11 @@ export function displayGenerationTokens(row: {
   provider_model?: string | null;
   asset_metadata?: MetadataLike;
 }): number | null {
-  if (row.kind === 'parametric') {
-    return PARAMETRIC_GENERATION_TOKENS;
+  if (row.kind === 'cad' || row.kind === 'parametric') {
+    return (
+      row.tokens_used ??
+      cadTokensForModel(extractGenerationModelId(row) ?? row.provider_model)
+    );
   }
 
   if (row.kind === 'image') {

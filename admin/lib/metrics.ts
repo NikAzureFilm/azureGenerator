@@ -1,6 +1,7 @@
 import 'server-only';
 import { getAdminClient } from './supabaseAdmin';
 import { displayGenerationTokens } from './generationTokens';
+import { generationModelDisplayText } from './generationModels';
 import { TOKEN_INTERNAL_USD_COST, TOKEN_USD_VALUE } from './pricing';
 
 export type Overview = {
@@ -510,6 +511,7 @@ function matchesGenerationSearch(row: GenerationRow, search?: string | null) {
     row.conversation_id,
     row.conversation_title,
     row.conversation_type,
+    generationModelDisplayText(row),
     JSON.stringify(row.prompt ?? {}),
   ]
     .filter(Boolean)
@@ -1311,6 +1313,7 @@ async function fetchParametricRowsDirect(
       conversation_type: conversation?.type ?? null,
       prompt: {
         text: typeof content.text === 'string' ? content.text : undefined,
+        model: typeof content.model === 'string' ? content.model : undefined,
         artifact: {
           title: artifact.title,
           version: artifact.version,
