@@ -40,6 +40,7 @@
     "typecheck": "tsc -b --noEmit",
     "lint:supabase": "deno lint supabase",
     "pricing:fal": "node --experimental-strip-types scripts/fal-cost-report.mjs",
+    "benchmarks": "node scripts/benchmarks/run.mjs",
     "format": "prettier --write .",
     "preview": "vite preview",
     "prepare": "husky"
