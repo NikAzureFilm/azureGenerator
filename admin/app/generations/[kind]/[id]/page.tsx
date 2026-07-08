@@ -7,6 +7,7 @@ import {
   truncateText,
 } from '@/lib/content';
 import { generationModelDisplay } from '@/lib/generationModels';
+import { formatGenerationMargin } from '@/lib/generationCosts';
 import {
   fetchCadSourceCode,
   fetchGenerationDetail,
@@ -67,6 +68,11 @@ export default async function GenerationDetailPage({
     (sum, row) => sum + row.cost_usd,
     0,
   );
+  // AI cost vs the internal budget implied by the tokens charged for the tier.
+  const hasUsage = usage != null && usage.length > 0;
+  const aiMargin = hasUsage
+    ? formatGenerationMargin(usageCostUsd, modelDisplay?.tokens ?? null)
+    : null;
 
   return (
     <div className="wrap wide">
@@ -109,6 +115,17 @@ export default async function GenerationDetailPage({
                 <span className="mono tiny">({modelDisplay.id})</span>
               </div>
             )}
+            <div className="sub">
+              AI cost{' '}
+              {aiMargin == null ? (
+                <span className="muted">—</span>
+              ) : (
+                <span className={aiMargin.overBudget ? 'down' : undefined}>
+                  <span className="mono">{aiMargin.costText}</span>
+                  <span className="muted"> / {aiMargin.budgetText}</span>
+                </span>
+              )}
+            </div>
           </div>
           <div className="sub right">
             <div>

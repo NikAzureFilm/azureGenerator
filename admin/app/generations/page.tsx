@@ -3,7 +3,11 @@ import { requireAdmin } from '@/lib/auth';
 import { generationKindLabel, truncateText } from '@/lib/content';
 import { fetchGenerationsPage } from '@/lib/metrics';
 import { generationModelDisplay } from '@/lib/generationModels';
-import { absoluteTime, num, relativeTime, usdSmall } from '@/lib/format';
+import {
+  fetchGenerationCosts,
+  formatGenerationMargin,
+} from '@/lib/generationCosts';
+import { absoluteTime, num, relativeTime } from '@/lib/format';
 import JsonBlock, { PromptPreview } from '@/app/components/JsonBlock';
 import Nav from '@/app/components/Nav';
 import StatusBadge from '@/app/components/StatusBadge';
@@ -82,6 +86,28 @@ export default async function GenerationsPage({
     offset: (page - 1) * PAGE_SIZE,
   });
 
+  // Summed provider cost per generation, matched on reference_id. Only the
+  // reference ids of the rows on this page are queried, so the fetch scales
+  // with the page size rather than the whole table.
+  const generationCosts = await fetchGenerationCosts(
+    rows.flatMap((g) => [g.id, g.message_id].filter(Boolean) as string[]),
+  );
+  function aiCostForRow(g: (typeof rows)[number]): {
+    cost: number;
+    present: boolean;
+  } {
+    const ids = [...new Set([g.id, g.message_id].filter(Boolean) as string[])];
+    let cost = 0;
+    let present = false;
+    for (const id of ids) {
+      if (generationCosts.has(id)) {
+        present = true;
+        cost += generationCosts.get(id) ?? 0;
+      }
+    }
+    return { cost, present };
+  }
+
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const from = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const to = Math.min(total, page * PAGE_SIZE);
@@ -147,8 +173,8 @@ export default async function GenerationsPage({
               <th>Prompt</th>
               <th>Status</th>
               <th>Format</th>
-              <th className="right">Cost</th>
               <th className="right">Tokens</th>
+              <th className="right">AI cost</th>
               <th className="right">When</th>
               <th className="right">Output</th>
             </tr>
@@ -163,6 +189,13 @@ export default async function GenerationsPage({
             ) : (
               rows.map((g) => {
                 const modelDisplay = generationModelDisplay(g);
+                const aiCost = aiCostForRow(g);
+                const margin = aiCost.present
+                  ? formatGenerationMargin(
+                      aiCost.cost,
+                      modelDisplay?.tokens ?? null,
+                    )
+                  : null;
                 return (
                   <tr key={`${g.kind}-${g.id}`}>
                     <td>
@@ -227,12 +260,19 @@ export default async function GenerationsPage({
                       {g.file_type ?? (g.kind === 'image' ? 'png' : '-')}
                     </td>
                     <td className="right mono">
-                      {g.actual_cost_usd == null
-                        ? '-'
-                        : usdSmall(g.actual_cost_usd)}
+                      {g.tokens_used == null ? '-' : num(g.tokens_used)}
                     </td>
                     <td className="right mono">
-                      {g.tokens_used == null ? '-' : num(g.tokens_used)}
+                      {margin == null ? (
+                        <span className="muted">—</span>
+                      ) : (
+                        <span
+                          className={margin.overBudget ? 'down' : undefined}
+                        >
+                          {margin.costText}
+                          <span className="muted"> / {margin.budgetText}</span>
+                        </span>
+                      )}
                     </td>
                     <td
                       className="right muted"

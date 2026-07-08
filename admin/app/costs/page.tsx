@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { requireAdmin } from '@/lib/auth';
 import { fetchCostExplorer, type CostExplorer } from '@/lib/costs';
+import { fetchGenerationCostSummary } from '@/lib/generationCosts';
 import {
   fetchCostBreakdown,
   fetchCostDaily,
@@ -50,10 +51,11 @@ export default async function CostsPage({
   const windowChoice =
     WINDOWS.find((w) => w.key === (sp.days ?? '30')) ?? WINDOWS[1];
 
-  const [breakdown, daily, explorer] = await Promise.all([
+  const [breakdown, daily, explorer, generationSummary] = await Promise.all([
     fetchCostBreakdown(),
     fetchCostDaily(Math.min(windowChoice.days ?? 90, 90)),
     fetchCostExplorer(windowChoice.days),
+    fetchGenerationCostSummary(windowChoice.days),
   ]);
 
   const hasPU = breakdown.has_provider_usage;
@@ -319,6 +321,54 @@ export default async function CostsPage({
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="section-title">Per-generation cost ({label})</div>
+      <div className="card table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Tier</th>
+              <th className="right">Generations</th>
+              <th className="right">Avg cost</th>
+              <th className="right">p90 cost</th>
+              <th className="right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {generationSummary.count === 0 ? (
+              <tr>
+                <td colSpan={5} className="muted">
+                  No text-to-CAD generations recorded in this window.
+                </td>
+              </tr>
+            ) : (
+              [
+                { label: 'All', stats: generationSummary },
+                { label: 'Premium', stats: generationSummary.premium },
+                { label: 'Lite', stats: generationSummary.lite },
+              ].map(({ label: tierLabel, stats }) => (
+                <tr key={tierLabel}>
+                  <td>{tierLabel}</td>
+                  <td className="right mono">{num(stats.count)}</td>
+                  <td className="right mono">
+                    {stats.count ? usdSmall(stats.avgUsd) : '-'}
+                  </td>
+                  <td className="right mono">
+                    {stats.count ? usdSmall(stats.p90Usd) : '-'}
+                  </td>
+                  <td className="right mono">
+                    {usdFromDollars(stats.totalUsd)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        <div className="sub" style={{ marginTop: 8 }}>
+          Provider cost summed per generation (all rounds share one reference
+          id), grouped by tier from the model id.
+        </div>
       </div>
 
       <div className="section-title">By model ({label})</div>
