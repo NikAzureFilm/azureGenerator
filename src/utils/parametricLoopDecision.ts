@@ -5,6 +5,7 @@ import type { Message } from '@shared/types';
 // issuing round-trips the server would reject anyway; the server still
 // enforces them.
 export const CLIENT_MAX_REPAIRS = 2;
+export const CLIENT_MAX_INSPECTION_ROUNDS = 1;
 
 export type LoopActionKind = 'compile_error' | 'inspection' | 'stop';
 
@@ -38,7 +39,11 @@ export function nextLoopAction(
     return loop.repairs < CLIENT_MAX_REPAIRS ? 'compile_error' : 'stop';
   }
 
-  if (capabilities.isPremium && loop.round < loop.maxRounds) {
+  const maxInspectionRounds = Math.min(
+    loop.maxRounds,
+    CLIENT_MAX_INSPECTION_ROUNDS,
+  );
+  if (capabilities.isPremium && loop.round < maxInspectionRounds) {
     return 'inspection';
   }
   return 'stop';

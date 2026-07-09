@@ -77,3 +77,15 @@ assert.doesNotMatch(
   /Retry with \{model\.name\}/,
   'assistant message retry controls should not expose model names in the interface',
 );
+
+assert.match(
+  source,
+  /label = 'Reviewing model\.\.\.';/,
+  'reviewing status should not show internal round counts',
+);
+
+assert.doesNotMatch(
+  source,
+  /Reviewing model \(round/,
+  'reviewing status should not expose review loop fractions',
+);

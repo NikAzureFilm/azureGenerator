@@ -106,6 +106,15 @@ describe('nextLoopAction', () => {
     ).toBe('stop');
   });
 
+  it('does not trust stale persisted six-round loop state', () => {
+    expect(
+      nextLoopAction(makeMessage({ ...premiumLoop, maxRounds: 6, round: 1 }), {
+        compileOk: true,
+        isPremium: true,
+      }),
+    ).toBe('stop');
+  });
+
   it('stops when the loop is already terminal', () => {
     expect(
       nextLoopAction(makeMessage({ ...premiumLoop, status: 'final' }), {

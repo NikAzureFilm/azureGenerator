@@ -561,7 +561,7 @@ export function AssistantMessage({
 function LoopStatusLine({ loop }: { loop: NonNullable<Content['loop']> }) {
   let label: string | null = null;
   if (loop.status === 'reviewing') {
-    label = `Reviewing model (round ${loop.round + 1}/${loop.maxRounds})...`;
+    label = 'Reviewing model...';
   } else if (loop.status === 'generating') {
     label = 'Improving model...';
   } else if (loop.status === 'awaiting_client') {
