@@ -29,7 +29,9 @@ function supabaseLink(path: string, fallback: string): string {
   return `https://supabase.com/dashboard/project/${ref}${path}`;
 }
 
-function vercelProjectLink(projectName: string): string {
+// Project names come from env so the public repo doesn't disclose them.
+function vercelProjectLink(projectName: string | undefined): string {
+  if (!projectName) return 'https://vercel.com/dashboard';
   const scope = process.env.VERCEL_TEAM_SLUG ?? process.env.VERCEL_SCOPE;
   if (!scope) {
     return `https://vercel.com/dashboard?query=${encodeURIComponent(projectName)}`;
@@ -44,8 +46,8 @@ export function getResourceGroups(): ResourceGroup[] {
       links: [
         {
           label: 'Admin app',
-          href: 'https://azurefilm-admin.vercel.app/',
-          description: 'Live internal admin dashboard.',
+          href: '/',
+          description: 'This internal admin dashboard.',
         },
         {
           label: 'Customer app',
@@ -150,12 +152,12 @@ export function getResourceGroups(): ResourceGroup[] {
       links: [
         {
           label: 'Admin project',
-          href: vercelProjectLink('azurefilm-admin'),
+          href: vercelProjectLink(process.env.ADMIN_VERCEL_PROJECT),
           description: 'Deployments, domains, logs, and environment variables.',
         },
         {
           label: 'Customer app project',
-          href: vercelProjectLink('azure-generator'),
+          href: vercelProjectLink(process.env.APP_VERCEL_PROJECT),
           description: 'Main Vite app deployments and production domain.',
         },
         {

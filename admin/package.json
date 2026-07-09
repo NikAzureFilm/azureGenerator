@@ -1,5 +1,5 @@
 {
-  "name": "azurefilm-admin",
+  "name": "admin-dashboard",
   "version": "0.1.0",
   "private": true,
   "description": "Admin analytics dashboard for the AzureFilm/Adam text-to-CAD app. Tracks users, generations, revenue and token costs.",

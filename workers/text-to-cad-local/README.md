@@ -27,8 +27,8 @@ Set the printed `https://...trycloudflare.com` URL as:
 ```powershell
 $env:PUBLIC_BASE_URL="https://your-tunnel-url"
 docker compose -f workers/text-to-cad-local/docker-compose.yml up -d
-npx supabase secrets set TEXT_TO_CAD_WORKER_URL="https://your-tunnel-url" TEXT_TO_CAD_WORKER_TOKEN="$env:TEXT_TO_CAD_WORKER_TOKEN" --project-ref zovnwxmgrzukgfywivgx
-npx supabase functions deploy cad-chat --use-api --project-ref zovnwxmgrzukgfywivgx
+npx supabase secrets set TEXT_TO_CAD_WORKER_URL="https://your-tunnel-url" TEXT_TO_CAD_WORKER_TOKEN="$env:TEXT_TO_CAD_WORKER_TOKEN" --project-ref <your-project-ref>
+npx supabase functions deploy cad-chat --use-api --project-ref <your-project-ref>
 ```
 
 Keep Docker and the tunnel running while using the `STEP` option.
