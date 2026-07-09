@@ -13,6 +13,8 @@ import { test } from 'node:test';
 import {
   parseTokenAdjustBody,
   parseBudgetBody,
+  parseKeySetBody,
+  parseKeyDeleteBody,
   isMissingFunctionError,
 } from './apiValidation.ts';
 
@@ -24,6 +26,9 @@ const BUDGET_RANGE_ERR =
   'monthlyBudgetUsd must be null or a number between 0 and 1000000';
 const PROVIDER_ERR = 'provider is required';
 const INVALID_BODY_ERR = 'Invalid request body';
+const KEY_MISSING_ERR = 'apiKey is required';
+const KEY_LEN_ERR = 'apiKey must be between 8 and 512 characters';
+const KEY_CHAR_ERR = 'apiKey must not contain whitespace or control characters';
 
 // ===========================================================================
 // parseTokenAdjustBody
@@ -374,4 +379,199 @@ test('isMissingFunctionError: unrelated code is not missing', () => {
   assert.equal(isMissingFunctionError({ code: '42P01' }), false);
   assert.equal(isMissingFunctionError({ code: '23505' }), false);
   assert.equal(isMissingFunctionError({}), false);
+});
+
+// ===========================================================================
+// parseKeySetBody
+// ===========================================================================
+
+test('keySet: valid body', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 'sk-abcd1234' });
+  assert.deepEqual(r, {
+    ok: true,
+    value: { provider: 'openai', apiKey: 'sk-abcd1234' },
+  });
+});
+
+test('keySet: surrounding whitespace is trimmed on the accepted value', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: '  sk-abcd1234  ' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.apiKey, 'sk-abcd1234');
+});
+
+test('keySet: boundary 8-char key is accepted', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 'abcdefgh' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.apiKey, 'abcdefgh');
+});
+
+test('keySet: boundary 512-char key is accepted', () => {
+  const key = 'a'.repeat(512);
+  const r = parseKeySetBody({ provider: 'openai', apiKey: key });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.apiKey, key);
+});
+
+test('keySet: 7-char key (under min) is rejected', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 'abcdefg' });
+  assert.deepEqual(r, { ok: false, error: KEY_LEN_ERR });
+});
+
+test('keySet: 513-char key (over max) is rejected', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 'a'.repeat(513) });
+  assert.deepEqual(r, { ok: false, error: KEY_LEN_ERR });
+});
+
+test('keySet: whitespace-only key fails the length check (trimmed to empty)', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: '          ' });
+  assert.deepEqual(r, { ok: false, error: KEY_LEN_ERR });
+});
+
+test('keySet: key with internal whitespace is rejected', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 'abcd efgh' });
+  assert.deepEqual(r, { ok: false, error: KEY_CHAR_ERR });
+});
+
+test('keySet: key with a control character is rejected', () => {
+  const key = `abcd${String.fromCharCode(1)}efgh`;
+  const r = parseKeySetBody({ provider: 'openai', apiKey: key });
+  assert.deepEqual(r, { ok: false, error: KEY_CHAR_ERR });
+});
+
+test('keySet: key with a DEL (0x7f) character is rejected', () => {
+  const key = `abcd${String.fromCharCode(127)}efgh`;
+  const r = parseKeySetBody({ provider: 'openai', apiKey: key });
+  assert.deepEqual(r, { ok: false, error: KEY_CHAR_ERR });
+});
+
+test('keySet: non-string apiKey is rejected', () => {
+  const r = parseKeySetBody({ provider: 'openai', apiKey: 12345678 });
+  assert.deepEqual(r, { ok: false, error: KEY_MISSING_ERR });
+});
+
+test('keySet: missing apiKey is rejected', () => {
+  const r = parseKeySetBody({ provider: 'openai' });
+  assert.deepEqual(r, { ok: false, error: KEY_MISSING_ERR });
+});
+
+test('keySet: missing provider is rejected', () => {
+  const r = parseKeySetBody({ apiKey: 'sk-abcd1234' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: empty provider is rejected', () => {
+  const r = parseKeySetBody({ provider: '', apiKey: 'sk-abcd1234' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: whitespace-only provider is rejected', () => {
+  const r = parseKeySetBody({ provider: '   ', apiKey: 'sk-abcd1234' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: non-string provider is rejected', () => {
+  const r = parseKeySetBody({ provider: 42, apiKey: 'sk-abcd1234' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: provider check runs before apiKey check', () => {
+  // Bad provider AND bad key -> provider error wins.
+  const r = parseKeySetBody({ provider: '', apiKey: 'x' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: provider is passed through un-normalized', () => {
+  const r = parseKeySetBody({ provider: '  OpenAI  ', apiKey: 'sk-abcd1234' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.provider, '  OpenAI  ');
+});
+
+test('keySet: null body -> Invalid request body', () => {
+  const r = parseKeySetBody(null);
+  assert.deepEqual(r, { ok: false, error: INVALID_BODY_ERR });
+});
+
+test('keySet: undefined body -> Invalid request body', () => {
+  const r = parseKeySetBody(undefined);
+  assert.deepEqual(r, { ok: false, error: INVALID_BODY_ERR });
+});
+
+test('keySet: string body -> falls through to provider check', () => {
+  const r = parseKeySetBody('nope');
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: array body -> falls through to provider check', () => {
+  const r = parseKeySetBody([]);
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keySet: number body -> falls through to provider check', () => {
+  const r = parseKeySetBody(7);
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+// ===========================================================================
+// parseKeyDeleteBody
+// ===========================================================================
+
+test('keyDelete: valid body', () => {
+  const r = parseKeyDeleteBody({ provider: 'fal' });
+  assert.deepEqual(r, { ok: true, value: { provider: 'fal' } });
+});
+
+test('keyDelete: extra fields are ignored', () => {
+  const r = parseKeyDeleteBody({ provider: 'fal', apiKey: 'ignored' });
+  assert.deepEqual(r, { ok: true, value: { provider: 'fal' } });
+});
+
+test('keyDelete: missing provider is rejected', () => {
+  const r = parseKeyDeleteBody({});
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: empty provider is rejected', () => {
+  const r = parseKeyDeleteBody({ provider: '' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: whitespace-only provider is rejected', () => {
+  const r = parseKeyDeleteBody({ provider: '   ' });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: non-string provider is rejected', () => {
+  const r = parseKeyDeleteBody({ provider: 42 });
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: provider is passed through un-normalized', () => {
+  const r = parseKeyDeleteBody({ provider: '  Fal  ' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.provider, '  Fal  ');
+});
+
+test('keyDelete: null body -> Invalid request body', () => {
+  const r = parseKeyDeleteBody(null);
+  assert.deepEqual(r, { ok: false, error: INVALID_BODY_ERR });
+});
+
+test('keyDelete: undefined body -> Invalid request body', () => {
+  const r = parseKeyDeleteBody(undefined);
+  assert.deepEqual(r, { ok: false, error: INVALID_BODY_ERR });
+});
+
+test('keyDelete: string body -> falls through to provider check', () => {
+  const r = parseKeyDeleteBody('nope');
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: array body -> falls through to provider check', () => {
+  const r = parseKeyDeleteBody([]);
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
+});
+
+test('keyDelete: number body -> falls through to provider check', () => {
+  const r = parseKeyDeleteBody(7);
+  assert.deepEqual(r, { ok: false, error: PROVIDER_ERR });
 });

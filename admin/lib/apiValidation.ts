@@ -143,6 +143,88 @@ export function parseBudgetBody(body: unknown): ParseResult<BudgetBody> {
 }
 
 // ---------------------------------------------------------------------------
+// Provider API-key bodies: { provider, apiKey } (set/test) and { provider }
+// (delete)
+// ---------------------------------------------------------------------------
+
+const MIN_KEY_LEN = 8;
+const MAX_KEY_LEN = 512;
+
+export type KeySetBody = {
+  provider: string;
+  apiKey: string;
+};
+
+export type KeyDeleteBody = {
+  provider: string;
+};
+
+// Validates a key set/test body:
+//   - provider: non-empty (after trim) string, passed through un-normalized
+//     (the route maps it to a secret name via PROVIDER_META)
+//   - apiKey: string; the accepted value is trimmed, must be 8–512 chars after
+//     trimming, and must contain no whitespace or control characters
+//
+// The trimmed length is what's measured, so a whitespace-only key fails the
+// length check (not the whitespace check).
+export function parseKeySetBody(body: unknown): ParseResult<KeySetBody> {
+  if (throwsOnPropertyAccess(body)) {
+    return { ok: false, error: 'Invalid request body' };
+  }
+
+  const record = body as Record<string, unknown>;
+  const provider: unknown = record.provider;
+  const apiKey: unknown = record.apiKey;
+
+  if (typeof provider !== 'string' || !provider.trim()) {
+    return { ok: false, error: 'provider is required' };
+  }
+
+  if (typeof apiKey !== 'string') {
+    return { ok: false, error: 'apiKey is required' };
+  }
+
+  const trimmed = apiKey.trim();
+  if (trimmed.length < MIN_KEY_LEN || trimmed.length > MAX_KEY_LEN) {
+    return {
+      ok: false,
+      error: `apiKey must be between ${MIN_KEY_LEN} and ${MAX_KEY_LEN} characters`,
+    };
+  }
+
+  // Reject whitespace (code point <= 0x20) and control chars (DEL = 0x7f).
+  if (
+    [...trimmed].some(
+      (ch) => (ch.codePointAt(0) ?? 0) <= 0x20 || ch.codePointAt(0) === 0x7f,
+    )
+  ) {
+    return {
+      ok: false,
+      error: 'apiKey must not contain whitespace or control characters',
+    };
+  }
+
+  return { ok: true, value: { provider, apiKey: trimmed } };
+}
+
+// Validates a key delete body: provider non-empty (after trim) string, passed
+// through un-normalized.
+export function parseKeyDeleteBody(body: unknown): ParseResult<KeyDeleteBody> {
+  if (throwsOnPropertyAccess(body)) {
+    return { ok: false, error: 'Invalid request body' };
+  }
+
+  const record = body as Record<string, unknown>;
+  const provider: unknown = record.provider;
+
+  if (typeof provider !== 'string' || !provider.trim()) {
+    return { ok: false, error: 'provider is required' };
+  }
+
+  return { ok: true, value: { provider } };
+}
+
+// ---------------------------------------------------------------------------
 // Shared error classification
 // ---------------------------------------------------------------------------
 

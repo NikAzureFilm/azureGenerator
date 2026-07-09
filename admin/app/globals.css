@@ -966,6 +966,62 @@ th .arrow {
   padding: 6px 0;
   font-size: 13px;
 }
+/* External console / keys / billing / status links under a provider head. */
+.provider-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+.provider-links a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.provider-links a:hover {
+  text-decoration: underline;
+}
+.provider-links .sep {
+  color: var(--muted);
+}
+/* Live-credit line (remaining balance / muted hint). */
+.provider-credit {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.provider-credit b {
+  font-weight: 600;
+}
+/* Inline API-key manager (Test / Save / Remove), mirrors .budget-editor. */
+.keyrow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.keyrow input {
+  width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.keyrow input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.keyrow .ok-note {
+  color: var(--green);
+  font-size: 12px;
+}
+.keyrow .err {
+  color: var(--red);
+  font-size: 12px;
+  flex-basis: 100%;
+}
 
 /* =========================================================================
    Token adjustment panel (user detail page).

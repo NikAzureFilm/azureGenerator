@@ -1,9 +1,13 @@
+import { Fragment } from 'react';
 import { requireAdmin } from '@/lib/auth';
 import { fetchProviderCredit, type ProviderStatus } from '@/lib/providers';
+import { fetchProviderKeys, type CreditBalance } from '@/lib/providerKeys';
+import { metaFor } from '@/lib/providerMeta';
 import { PRICING_CATALOG } from '@/lib/providerPricing';
 import { absoluteTime, num, pct, usdFromDollars, usdSmall } from '@/lib/format';
 import Nav from '@/app/components/Nav';
 import BudgetEditor from '@/app/components/BudgetEditor';
+import ApiKeyRow from '@/app/components/ApiKeyRow';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -15,9 +19,53 @@ const STATUS_LABEL: Record<ProviderStatus, string> = {
   none: 'no budget',
 };
 
+// Live-credit line for a provider with a credit strategy. Openrouter/fal report
+// a remaining balance; error and unconfigured fall back to a tiny muted hint
+// naming the right admin env var.
+function CreditLine({
+  balance,
+  strategy,
+}: {
+  balance: CreditBalance | undefined;
+  strategy: 'openrouter' | 'fal';
+}) {
+  const envVar = strategy === 'openrouter' ? 'OPENROUTER_API_KEY' : 'FAL_KEY';
+
+  if (!balance || balance.kind === 'unconfigured') {
+    return (
+      <div className="provider-credit muted tiny">
+        add {envVar} to the admin env for live credits
+      </div>
+    );
+  }
+  if (balance.kind === 'error') {
+    return (
+      <div className="provider-credit muted tiny">credits unavailable</div>
+    );
+  }
+  if (balance.kind === 'openrouter') {
+    return (
+      <div className="provider-credit">
+        Credits remaining: <b>{usdFromDollars(balance.remainingUsd)}</b>{' '}
+        <span className="muted">
+          of {usdFromDollars(balance.totalCreditsUsd)} purchased
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="provider-credit">
+      Credits remaining: <b>{usdFromDollars(balance.remainingUsd)}</b>
+    </div>
+  );
+}
+
 export default async function ProvidersPage() {
   const admin = await requireAdmin();
-  const credit = await fetchProviderCredit();
+  const [credit, keys] = await Promise.all([
+    fetchProviderCredit(),
+    fetchProviderKeys(),
+  ]);
 
   return (
     <div className="wrap wide">
@@ -60,6 +108,17 @@ export default async function ProvidersPage() {
                 : p.status === 'warn'
                   ? 'fill warn'
                   : 'fill';
+            const meta = metaFor(p.provider);
+            const links = meta
+              ? [
+                  { label: 'Console', url: meta.dashboardUrl },
+                  { label: 'API keys', url: meta.keysUrl },
+                  { label: 'Billing', url: meta.billingUrl },
+                  { label: 'Status', url: meta.statusUrl },
+                ].filter(
+                  (l): l is { label: string; url: string } => l.url !== null,
+                )
+              : [];
             return (
               <div className="card" key={p.provider}>
                 <div className="provider-card-head">
@@ -69,12 +128,32 @@ export default async function ProvidersPage() {
                   </span>
                 </div>
 
+                {links.length > 0 && (
+                  <div className="provider-links">
+                    {links.map((l, i) => (
+                      <Fragment key={l.label}>
+                        {i > 0 && <span className="sep">·</span>}
+                        <a href={l.url} target="_blank" rel="noreferrer">
+                          {l.label}
+                        </a>
+                      </Fragment>
+                    ))}
+                  </div>
+                )}
+
                 <div className="sub" style={{ marginTop: 8 }}>
                   <b>{usdFromDollars(p.mtdCostUsd)}</b> month-to-date
                   {p.budgetUsd != null && (
                     <> of {usdFromDollars(p.budgetUsd)} budget</>
                   )}
                 </div>
+
+                {meta?.credits && (
+                  <CreditLine
+                    balance={keys.credits.get(p.provider)}
+                    strategy={meta.credits}
+                  />
+                )}
 
                 {p.budgetUsd != null && p.budgetUsd > 0 && (
                   <div
@@ -132,6 +211,68 @@ export default async function ProvidersPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ---------------- API keys ---------------- */}
+      <div className="section-title">API keys</div>
+      <p className="muted tiny" style={{ margin: '-6px 0 14px' }}>
+        These manage the Supabase edge-function secrets the product reads at
+        runtime. Stored keys can never be read back — status shows only a digest
+        fingerprint, and Test validates a pasted key without storing it.
+      </p>
+      {!keys.available ? (
+        <div className="banner">
+          Key management is disabled until <code>SUPABASE_ACCESS_TOKEN</code> is
+          set in the admin Vercel environment. <code>SUPABASE_PROJECT_REF</code>{' '}
+          is optional — the project ref is otherwise derived from{' '}
+          <code>SUPABASE_URL</code>.
+        </div>
+      ) : keys.error ? (
+        <div className="banner">{keys.error}</div>
+      ) : (
+        <div className="card table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Secret</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.keys.map((k) => (
+                <tr key={k.provider}>
+                  <td className="muted" style={{ textTransform: 'capitalize' }}>
+                    {k.provider}
+                  </td>
+                  <td className="mono tiny">{k.secretName}</td>
+                  <td>
+                    {k.isSet ? (
+                      <>
+                        set{' '}
+                        {k.digestShort && (
+                          <span className="muted tiny">
+                            sha-256 {k.digestShort}…
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="muted">not set</span>
+                    )}
+                  </td>
+                  <td>
+                    <ApiKeyRow
+                      provider={k.provider}
+                      secretName={k.secretName}
+                      isSet={k.isSet}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
