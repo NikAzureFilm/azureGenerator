@@ -9,7 +9,6 @@ import {
   LayoutGrid,
   ArrowUpRight,
   CircleDollarSign,
-  CircleHelp,
   ShieldCheck,
   Zap,
 } from 'lucide-react';
@@ -55,7 +54,6 @@ import { isMeaningfulTitle } from '@/utils/file-utils';
 interface SidebarProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: (open: boolean) => void;
-  onOpenTutorial?: () => void;
 }
 
 type SidebarPath =
@@ -187,11 +185,7 @@ function TokenBalanceWidget({
   );
 }
 
-function DesktopSidebar({
-  isSidebarOpen,
-  setIsSidebarOpen,
-  onOpenTutorial,
-}: SidebarProps) {
+function DesktopSidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, signOut } = useAuth();
@@ -487,39 +481,6 @@ function DesktopSidebar({
               onNavigate={sidebarNavigate}
             />
 
-            {/* Tutorial button - Collapsed state */}
-            {!isSidebarOpen && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="adam_dark_collapsed"
-                    className="mb-0 ml-[1px] h-[46px] w-[46px] p-0"
-                    onClick={onOpenTutorial}
-                  >
-                    <CircleHelp className="h-[22px] w-[22px]" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="flex flex-col">
-                  <span className="font-semibold">Tutorial</span>
-                  <span className="text-xs text-muted-foreground">
-                    Replay the intro walkthrough
-                  </span>
-                </TooltipContent>
-              </Tooltip>
-            )}
-
-            {/* Tutorial button - Expanded state */}
-            {isSidebarOpen && (
-              <Button
-                variant="adam_dark"
-                className="flex h-10 w-full items-center justify-start gap-2"
-                onClick={onOpenTutorial}
-              >
-                <CircleHelp className="h-[22px] w-[22px] min-w-[22px]" />
-                Tutorial
-              </Button>
-            )}
-
             {showAdminNav && !isSidebarOpen && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -606,7 +567,6 @@ function MobileSidebar({
   isSidebarOpen,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   setIsSidebarOpen,
-  onOpenTutorial,
 }: SidebarProps) {
   const [open, setOpen] = useState(false);
 
@@ -634,21 +594,13 @@ function MobileSidebar({
             AI-powered 3D model generator by AzureFilm
           </SheetDescription>
         </SheetHeader>
-        <DesktopSidebar
-          isSidebarOpen={true}
-          setIsSidebarOpen={setOpen}
-          onOpenTutorial={onOpenTutorial}
-        />
+        <DesktopSidebar isSidebarOpen={true} setIsSidebarOpen={setOpen} />
       </SheetContent>
     </Sheet>
   );
 }
 
-export function Sidebar({
-  isSidebarOpen,
-  setIsSidebarOpen,
-  onOpenTutorial,
-}: SidebarProps) {
+export function Sidebar({ isSidebarOpen, setIsSidebarOpen }: SidebarProps) {
   const isMobile = useIsMobile();
   const { user } = useAuth();
 
@@ -661,13 +613,11 @@ export function Sidebar({
     <MobileSidebar
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
-      onOpenTutorial={onOpenTutorial}
     />
   ) : (
     <DesktopSidebar
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
-      onOpenTutorial={onOpenTutorial}
     />
   );
 }

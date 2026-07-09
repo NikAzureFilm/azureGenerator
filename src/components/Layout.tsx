@@ -14,7 +14,6 @@ import {
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { Loader2 } from 'lucide-react';
 import { LayoutContext } from '@/contexts/LayoutContext';
-import { TutorialDialog } from '@/components/tutorial/TutorialDialog';
 
 export function Layout() {
   const { user, isLoading } = useAuth();
@@ -23,7 +22,6 @@ export function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [hasLoadedSidebarPreference, setHasLoadedSidebarPreference] =
     useState(false);
-  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
 
   useEffect(() => {
     const storedSidebarPreference = localStorage.getItem('sidebarOpen');
@@ -40,22 +38,6 @@ export function Layout() {
       localStorage.setItem('sidebarOpen', isSidebarOpen.toString());
     }
   }, [hasLoadedSidebarPreference, isSidebarOpen]);
-
-  // First-run auto-show: open the tutorial once per browser for signed-in
-  // users. The "seen" flag is written when the dialog closes (see
-  // handleTutorialOpenChange), not here, so an unfinished tutorial reopens.
-  useEffect(() => {
-    if (user && localStorage.getItem('hasSeenTutorial') === null) {
-      setIsTutorialOpen(true);
-    }
-  }, [user]);
-
-  const handleTutorialOpenChange = (open: boolean) => {
-    setIsTutorialOpen(open);
-    if (!open) {
-      localStorage.setItem('hasSeenTutorial', 'true');
-    }
-  };
 
   if (isLoading) {
     return (
@@ -81,15 +63,10 @@ export function Layout() {
 
   return (
     <div className="h-dvh overflow-hidden">
-      <TutorialDialog
-        open={isTutorialOpen}
-        onOpenChange={handleTutorialOpenChange}
-      />
       <div className="flex h-dvh transition-all ease-in-out">
         <Sidebar
           isSidebarOpen={isSidebarOpen}
           setIsSidebarOpen={setIsSidebarOpen}
-          onOpenTutorial={() => setIsTutorialOpen(true)}
         />
         <div className="relative flex-1 overflow-auto bg-adam-bg-dark">
           {/* Credits button — home page only. Mirrors the sidebar-toggle's
