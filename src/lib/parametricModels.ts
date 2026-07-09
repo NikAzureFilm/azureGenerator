@@ -1,35 +1,25 @@
-import { FEATURE_COSTS } from '../../shared/tokenCosts.ts';
 import {
-  CLAUDE_FABLE_5_MODEL,
   DEFAULT_CODE_GENERATION_MODEL,
-  GEMINI_35_FLASH_MODEL,
+  PARAMETRIC_MODEL_ROSTER,
 } from '../../shared/parametricRouting.ts';
 import type { ModelConfig } from '../types/misc.ts';
 
 export const DEFAULT_PARAMETRIC_MODEL = DEFAULT_CODE_GENERATION_MODEL;
 
-export const PARAMETRIC_MODELS: ModelConfig[] = [
-  {
-    id: CLAUDE_FABLE_5_MODEL,
-    name: 'Premium',
-    description: 'Best reasoning for complex CAD generation',
-    provider: 'Anthropic',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametricCadReasoning.tokens,
-  },
-  {
-    id: GEMINI_35_FLASH_MODEL,
-    name: 'Lite',
-    description: 'Fast CAD drafts at lower token cost',
-    provider: 'Google',
-    supportsTools: true,
-    supportsThinking: true,
-    supportsVision: true,
-    tokenCost: FEATURE_COSTS.parametric.tokens,
-  },
-];
+// Derived from the canonical shared roster so the picker, the server allow-list,
+// and per-model token costs never drift.
+export const PARAMETRIC_MODELS: ModelConfig[] = Object.values(
+  PARAMETRIC_MODEL_ROSTER,
+).map((entry) => ({
+  id: entry.id,
+  name: entry.label,
+  description: entry.description,
+  provider: entry.provider,
+  supportsTools: true,
+  supportsThinking: true,
+  supportsVision: entry.supportsVision,
+  tokenCost: entry.tokenCost,
+}));
 
 export function normalizeParametricChatModel(
   model: string | undefined,

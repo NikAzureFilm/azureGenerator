@@ -4,7 +4,10 @@
 // these decisions and performs the actual LLM / storage / DB work.
 
 import type { LoopState, LoopStatus, LoopTier } from '@shared/types.ts';
-import { CLAUDE_FABLE_5_MODEL } from '../../../shared/parametricRouting.ts';
+import {
+  inspectionRoundsForModel,
+  normalizeParametricGenerationModel,
+} from '../../../shared/parametricRouting.ts';
 import {
   llmCostUsd,
   llmInputPerMUsd,
@@ -26,9 +29,16 @@ export const MISSING_USAGE_FALLBACK_USD = 0.08;
 // Reject inspection PNGs larger than this before base64-ing / sending to the
 // vision model.
 export const MAX_INSPECTION_BYTES = 8 * 1024 * 1024;
-// Reject PNGs whose IHDR reports a dimension larger than this (or zero) — our
-// own sheet is 1568x800, so anything near this is not one of ours.
-export const MAX_INSPECTION_DIMENSION = 4096;
+// The inspection sheet is rendered at a FIXED, deterministic pixel size
+// (src/utils/renderInspectionSheet.ts: SHEET_W = CELL_W*COLS = 1568,
+// SHEET_H = CELL_H*ROWS = 800, with renderer.setPixelRatio(1) and a fixed
+// composite canvas — NOT devicePixelRatio-scaled). So a legitimate sheet is
+// EXACTLY these dimensions. Enforcing the exact size (not just an upper bound)
+// tightens the guard: a client can write to the inspection path, and an
+// oversized-but-under-8MB PNG that merely passed a loose bound could still run
+// up input-token cost on the vision model.
+export const EXPECTED_INSPECTION_WIDTH = 1568;
+export const EXPECTED_INSPECTION_HEIGHT = 800;
 // A continuation code-gen call is only worth making if it can afford at least
 // this many output tokens under the remaining budget; otherwise finalize.
 export const MIN_AFFORDABLE_OUTPUT_TOKENS = 2000;
@@ -228,23 +238,47 @@ export function buildGoogleCodeGenConfig(params: {
   };
 }
 
+// A model gets inspection rounds ('premium') when its roster
+// maxInspectionRounds > 0; otherwise it's a no-inspection draft ('lite'). The
+// tier string is still stored on the row for display, but the actual round count
+// is derived per-model (see loopStateFromRow / inspectionRoundsForModel).
 export function tierForModel(model: string): LoopTier {
-  return model === CLAUDE_FABLE_5_MODEL ? 'premium' : 'lite';
+  return inspectionRoundsForModel(model) > 0 ? 'premium' : 'lite';
 }
 
 // Build the in-memory LoopState the decision functions expect from a persisted
-// state row. maxRounds is derived from tier (not stored) so it stays a single
-// source of truth.
-export function loopStateFromRow(row: {
-  round: number;
-  repairs: number;
-  status: string;
-  tier: string;
-}): LoopState {
+// state row. maxRounds is DERIVED (never stored): recomputed each continuation
+// from the AUTHORITATIVE paid model so per-model round counts (Gemini 3.1 Pro =
+// 4, Fable/GPT/Opus = 6, Lite = 0) stay a single source of truth.
+//
+// SECURITY: the authoritative model is `row.model` — persisted by the edge
+// function (service-role only, RLS-locked) at round 0. The passed `model` is
+// only a fallback for pre-migration rows whose `model` column is null (it comes
+// from the client-writable content.model, so it must never override the row).
+// When neither is present, fall back to the stored tier (legacy behavior).
+export function loopStateFromRow(
+  row: {
+    round: number;
+    repairs: number;
+    status: string;
+    tier: string;
+    model?: string | null;
+  },
+  model?: string,
+): LoopState {
   const tier: LoopTier = row.tier === 'premium' ? 'premium' : 'lite';
+  const rawModel = row.model ?? model;
+  const authoritativeModel =
+    rawModel != null ? normalizeParametricGenerationModel(rawModel) : undefined;
+  const maxRounds =
+    authoritativeModel !== undefined
+      ? inspectionRoundsForModel(authoritativeModel)
+      : tier === 'premium'
+        ? PREMIUM_MAX_ROUNDS
+        : 0;
   return {
     round: row.round,
-    maxRounds: tier === 'premium' ? PREMIUM_MAX_ROUNDS : 0,
+    maxRounds,
     repairs: row.repairs,
     status: row.status as LoopStatus,
     tier,
@@ -274,12 +308,21 @@ export function computeLlmCallCostUsd(
   ) {
     return Math.max(0, usage.costUsdOverride);
   }
-  return llmCostUsd(
+  const rateCost = llmCostUsd(
     model,
     usage.inputTokens,
     usage.outputTokens,
     usage.cachedInputTokens ?? 0,
   );
+  // llmCostUsd returns 0 for a model absent from the price table. If the call
+  // actually consumed tokens (e.g. OpenRouter silently rerouted to an unpriced
+  // served id that returned usage but no billed cost), meter the conservative
+  // flat fee instead of $0 so an unpriced leg can never escape spend accounting
+  // and slip the $0.60 ceiling.
+  if (rateCost <= 0 && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
+    return MISSING_USAGE_FALLBACK_USD;
+  }
+  return rateCost;
 }
 
 // The one legitimate storage path for a round's inspection sheet. The server
@@ -327,11 +370,10 @@ export function isValidInspectionPng(
     0;
   const width = readU32(16);
   const height = readU32(20);
+  // Exact-size match against our own render (see the constants above).
   if (
-    width === 0 ||
-    height === 0 ||
-    width > MAX_INSPECTION_DIMENSION ||
-    height > MAX_INSPECTION_DIMENSION
+    width !== EXPECTED_INSPECTION_WIDTH ||
+    height !== EXPECTED_INSPECTION_HEIGHT
   ) {
     return false;
   }
@@ -339,15 +381,17 @@ export function isValidInspectionPng(
 }
 
 // State stamped onto the assistant message once round 0 produced an artifact.
-// Both tiers start `awaiting_client` so the client can drive compile repairs;
-// lite simply has no inspection rounds (maxRounds 0).
-export function initialLoopState(tier: LoopTier): LoopState {
+// Every model starts `awaiting_client` so the client can drive compile repairs;
+// maxRounds comes from the model's roster inspection rounds (Lite = 0 → no
+// inspection, cheap draft).
+export function initialLoopState(model: string): LoopState {
+  const maxRounds = inspectionRoundsForModel(model);
   return {
     round: 0,
-    maxRounds: tier === 'premium' ? PREMIUM_MAX_ROUNDS : 0,
+    maxRounds,
     repairs: 0,
     status: 'awaiting_client',
-    tier,
+    tier: maxRounds > 0 ? 'premium' : 'lite',
   };
 }
 
@@ -498,11 +542,12 @@ export function decideContinuation(
     }
     return { action: 'repair' };
   }
-  // inspection
-  if (loop.tier !== 'premium') {
+  // inspection — driven off the per-model round budget, not the tier enum, so
+  // every vision model with maxRounds > 0 inspects and Lite (0) is skipped.
+  if (loop.maxRounds <= 0) {
     return {
       action: 'reject',
-      reason: 'inspection_not_premium',
+      reason: 'inspection_disabled',
       finalize: true,
       httpStatus: 200,
     };

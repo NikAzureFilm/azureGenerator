@@ -21,6 +21,7 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   'google/gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9 },
   'google/gemini-3.1-pro-preview': { inputPerM: 1.25, outputPerM: 10 },
   'anthropic/claude-fable-5': { inputPerM: 10, outputPerM: 50 },
+  'anthropic/claude-opus-4.8': { inputPerM: 5, outputPerM: 25 },
   'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
 };

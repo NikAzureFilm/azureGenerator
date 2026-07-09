@@ -48,6 +48,8 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   'google/gemini-3.1-pro-preview': { inputPerM: 1.25, outputPerM: 10 },
   // Claude Fable 5 via OpenRouter / Anthropic — verified $10 / $50.
   'anthropic/claude-fable-5': { inputPerM: 10, outputPerM: 50 },
+  // Claude Opus 4.8 via OpenRouter — Anthropic list price $5 / $25.
+  'anthropic/claude-opus-4.8': { inputPerM: 5, outputPerM: 25 },
   // prompt-generator + code-gen fallback — verified $5 / $30.
   'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
   // prompt-generator fallback (Haiku-class; estimate).

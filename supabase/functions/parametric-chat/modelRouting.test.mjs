@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isGeminiCodeGenerationModel } from '../../../shared/parametricRouting.ts';
+import {
+  isGeminiCodeGenerationModel,
+  outputTokenCapForModel,
+} from '../../../shared/parametricRouting.ts';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
@@ -50,10 +53,18 @@ assert.match(
   /const FABLE_COMPLETION_TOKEN_LIMIT = 24000/,
   'Claude Fable 5 should use a bounded completion budget instead of the generic 20k/60k caps',
 );
+// Code-gen output caps now come from the shared roster (outputTokenCapForModel),
+// not an index.ts constant. Assert the roster values behaviorally: Gemini / GPT /
+// Opus 32000, Fable 24000.
+assert.equal(outputTokenCapForModel('google/gemini-3.5-flash'), 32000);
+assert.equal(outputTokenCapForModel('google/gemini-3.1-pro-preview'), 32000);
+assert.equal(outputTokenCapForModel('openai/gpt-5.5'), 32000);
+assert.equal(outputTokenCapForModel('anthropic/claude-opus-4.8'), 32000);
+assert.equal(outputTokenCapForModel('anthropic/claude-fable-5'), 24000);
 assert.match(
   source,
-  /const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000/,
-  'Gemini Flash code generation should use a larger bounded token budget for CADAM-style OpenSCAD',
+  /const codeOutputCap = outputTokenCapForModel\(codeModel\)/,
+  'code generation should derive its output cap from the shared per-model roster',
 );
 assert.match(
   source,
@@ -77,8 +88,8 @@ assert.match(
 );
 assert.match(
   source,
-  /codeRequestBody,\s+codeModel,\s+getReasoningCompletionTokenLimit\(codeModel, 60000\)/s,
-  'parametric chat code-generation call should cap reasoning completion tokens through the budget helper',
+  /codeRequestBody,\s+codeModel,\s+getReasoningCompletionTokenLimit\(codeModel, codeOutputCap\)/s,
+  'parametric chat code-generation call should cap reasoning completion tokens through the per-model roster cap',
 );
 assert.match(
   source,

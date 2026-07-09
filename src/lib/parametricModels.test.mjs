@@ -36,9 +36,16 @@ const liteModel = PARAMETRIC_MODELS.find(
 );
 
 assert.equal(DEFAULT_PARAMETRIC_MODEL, 'anthropic/claude-fable-5');
+// The picker now lists the full canonical roster (derived from shared/).
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['anthropic/claude-fable-5', 'google/gemini-3.5-flash'],
+  [
+    'google/gemini-3.5-flash',
+    'google/gemini-3.1-pro-preview',
+    'anthropic/claude-fable-5',
+    'openai/gpt-5.5',
+    'anthropic/claude-opus-4.8',
+  ],
 );
 assert.ok(premiumModel);
 assert.equal(premiumModel.name, 'Premium');
@@ -52,22 +59,30 @@ assert.equal(liteModel.description.includes('Gemini'), false);
 assert.equal(liteModel.description.includes('Flash'), false);
 assert.equal(liteModel.tokenCost, 15);
 assert.notEqual(liteModel.disabled, true);
-assert.equal(
-  normalizeParametricChatModel('anthropic/claude-fable-5'),
-  'anthropic/claude-fable-5',
+// The 3 added picker models carry their roster labels, token costs, and vision.
+const geminiProModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'google/gemini-3.1-pro-preview',
 );
-assert.equal(
-  normalizeParametricChatModel('google/gemini-3.5-flash'),
-  'google/gemini-3.5-flash',
+const gptModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'openai/gpt-5.5',
 );
-assert.equal(
-  normalizeParametricChatModel('google/gemini-3.1-pro-preview'),
-  DEFAULT_PARAMETRIC_MODEL,
+const opusModel = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'anthropic/claude-opus-4.8',
 );
-assert.equal(
-  normalizeParametricChatModel('openai/gpt-5.5'),
-  DEFAULT_PARAMETRIC_MODEL,
-);
+assert.ok(geminiProModel);
+assert.equal(geminiProModel.name, 'Gemini 3.1 Pro');
+assert.equal(geminiProModel.tokenCost, 30);
+assert.equal(geminiProModel.supportsVision, true);
+assert.ok(gptModel);
+assert.equal(gptModel.name, 'GPT-5.5');
+assert.equal(gptModel.tokenCost, 60);
+assert.ok(opusModel);
+assert.equal(opusModel.name, 'Opus 4.8');
+assert.equal(opusModel.tokenCost, 90);
+// Every roster model is a valid picker choice (normalizes to itself).
+for (const model of PARAMETRIC_MODELS) {
+  assert.equal(normalizeParametricChatModel(model.id), model.id);
+}
 assert.equal(normalizeParametricChatModel(undefined), DEFAULT_PARAMETRIC_MODEL);
 assert.equal(normalizeParametricChatModel('quality'), DEFAULT_PARAMETRIC_MODEL);
 for (const source of [

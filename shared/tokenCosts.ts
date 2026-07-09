@@ -1,5 +1,5 @@
 import type { CadBackend, CreativeModel } from './types.ts';
-import { CLAUDE_FABLE_5_MODEL } from './parametricRouting.ts';
+import { PARAMETRIC_MODEL_ROSTER } from './parametricRouting.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
@@ -146,9 +146,9 @@ export function getCreativeModelCost(model: CreativeModel): PublicFeatureCost {
 }
 
 export function getParametricModelTokenCost(model: string): number {
-  return model === CLAUDE_FABLE_5_MODEL
-    ? CAD_PREMIUM_GENERATION_TOKEN_COST
-    : CAD_LITE_GENERATION_TOKEN_COST;
+  return (
+    PARAMETRIC_MODEL_ROSTER[model]?.tokenCost ?? CAD_LITE_GENERATION_TOKEN_COST
+  );
 }
 
 export function getParametricBuildTokenCost(

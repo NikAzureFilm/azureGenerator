@@ -44,6 +44,13 @@ assert.equal(classifyGenerationTier(CAD_PREMIUM_MODEL_ID), 'premium');
 assert.equal(classifyGenerationTier(CAD_LITE_MODEL_ID), 'lite');
 assert.equal(classifyGenerationTier('anthropic/claude-fable-5'), 'premium');
 assert.equal(classifyGenerationTier('google/gemini-3.5-flash'), 'lite');
+// The 3 added picker models are premium inspection tiers, not 'other'.
+assert.equal(
+  classifyGenerationTier('google/gemini-3.1-pro-preview'),
+  'premium',
+);
+assert.equal(classifyGenerationTier('openai/gpt-5.5'), 'premium');
+assert.equal(classifyGenerationTier('anthropic/claude-opus-4.8'), 'premium');
 assert.equal(classifyGenerationTier('some-other-model'), 'other');
 assert.equal(classifyGenerationTier(null), 'other');
 assert.equal(classifyGenerationTier(''), 'other');

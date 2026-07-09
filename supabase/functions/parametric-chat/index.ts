@@ -35,7 +35,9 @@ import {
   DEFAULT_CODE_GENERATION_MODEL,
   getCodeGenerationProviderCandidates,
   isGeminiCodeGenerationModel,
+  modelSupportsVision,
   normalizeParametricGenerationModel,
+  outputTokenCapForModel,
 } from '../../../shared/parametricRouting.ts';
 import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
@@ -60,7 +62,6 @@ import {
   loopStateFromRow,
   parseContinuationBody,
   parseReviewerVerdict,
-  tierForModel,
   truncateError,
 } from './loop.ts';
 
@@ -86,12 +87,12 @@ const logRefundFailure = ({ error, charge }: RefundFailure) => {
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY')?.trim() ?? '';
-const OPENROUTER_GPT_5_5_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 8000;
 const FABLE_COMPLETION_TOKEN_LIMIT = 24000;
-const GEMINI_CODE_GENERATION_TOKEN_LIMIT = 32000;
+// Per-model code-gen output caps now come from the shared roster via
+// outputTokenCapForModel() (Lite/Gemini/GPT/Opus = 32000, Fable = 24000).
 
 const googleGenAI = new GoogleGenAI({
   apiKey: GOOGLE_API_KEY,
@@ -177,6 +178,27 @@ function usesAutomaticReasoning(model: string): boolean {
 
 function isClaudeFable5(model: string): boolean {
   return bareAnthropicModelId(model) === 'claude-fable-5';
+}
+
+// The 7-view inspection reviewer judges the selected model's own render, so use
+// that same model when it supports vision; fall back to Fable for a (currently
+// non-existent) text-only model so the reviewer never gets an image it can't
+// read.
+function reviewerModelFor(model: string): string {
+  return modelSupportsVision(model) ? model : CLAUDE_FABLE_5_MODEL;
+}
+
+// Attribute usage/cost to the model OpenRouter actually served (its responses
+// echo a top-level `model`), not the requested id — so an OpenRouter-side reroute
+// or an explicit fallback bills and logs the real model instead of misreporting
+// cost against a model that never ran.
+function servedModelFrom(
+  responseModel: unknown,
+  requestedModel: string,
+): string {
+  return typeof responseModel === 'string' && responseModel
+    ? responseModel
+    : requestedModel;
 }
 
 function getReasoningTokenLimit(model: string): number {
@@ -437,10 +459,11 @@ function openRouterHeaders(): Record<string, string> {
 }
 
 function getOpenRouterFallbackModel(model: string): string | null {
-  if (model === 'openai/gpt-5.5') {
-    return OPENROUTER_GPT_5_5_FALLBACK_MODEL;
-  }
-
+  // NOTE: gpt-5.5 deliberately has NO fallback. It's now a user-SELECTED premium
+  // CAD model, so silently downgrading it to a weaker model (it used to fall back
+  // to Haiku) would defeat the selection and mis-attribute the result/cost. A
+  // transient OpenRouter failure surfaces instead; the agentic loop tolerates a
+  // retry on the same model.
   if (model === 'deepseek/deepseek-v4-pro') {
     return OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL;
   }
@@ -921,7 +944,7 @@ async function generateContinuationCode(params: {
           // branch too (the OpenRouter branch clamps below).
           config: buildGoogleCodeGenConfig({
             systemInstruction: STRICT_CODE_PROMPT,
-            baseOutputCap: GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+            baseOutputCap: outputTokenCapForModel(model),
             maxOutputTokens: legOutputCap,
           }),
         })) as GoogleGenerateContentResult;
@@ -976,15 +999,15 @@ async function generateContinuationCode(params: {
       stream: true,
       usage: { include: true },
     };
-    let outputCap = 48000;
+    // Per-model roster output cap (Fable 24000, Gemini/GPT/Opus 32000).
+    let outputCap = outputTokenCapForModel(codeModel);
     if (isGeminiCodeGenerationModel(codeModel)) {
       codeRequestBody.reasoning = { effort: 'medium', exclude: true };
-      outputCap = GEMINI_CODE_GENERATION_TOKEN_LIMIT;
     } else if (usesAutomaticReasoning(codeModel)) {
       codeRequestBody.reasoning = {
         max_tokens: getReasoningTokenLimit(codeModel),
       };
-      outputCap = getReasoningCompletionTokenLimit(codeModel, 60000);
+      outputCap = getReasoningCompletionTokenLimit(codeModel, outputCap);
     }
     // Clamp to what the remaining USD budget can afford for this leg.
     outputCap = effectiveOutputCap(outputCap, legOutputCap);
@@ -1011,6 +1034,8 @@ async function generateContinuationCode(params: {
       let lastFlushTime = 0;
       let lastFlushedLen = 0;
       let sawUsageThisCall = false;
+      // Attribute to the model OpenRouter actually served (updated from chunks).
+      let servedModel = providerCandidate.usageModel;
       const FLUSH_INTERVAL_MS = 120;
 
       while (true) {
@@ -1025,6 +1050,7 @@ async function generateContinuationCode(params: {
           if (data === '[DONE]') continue;
           let chunk: {
             error?: { message?: string };
+            model?: string;
             usage?: {
               prompt_tokens?: number;
               completion_tokens?: number;
@@ -1042,9 +1068,10 @@ async function generateContinuationCode(params: {
               chunk.error.message || 'continuation code-gen error',
             );
           }
+          servedModel = servedModelFrom(chunk.model, servedModel);
           if (chunk.usage) {
             sawUsageThisCall = true;
-            costUsd += computeLlmCallCostUsd(providerCandidate.usageModel, {
+            costUsd += computeLlmCallCostUsd(servedModel, {
               inputTokens: chunk.usage.prompt_tokens ?? 0,
               outputTokens: chunk.usage.completion_tokens ?? 0,
               costUsdOverride:
@@ -1057,7 +1084,7 @@ async function generateContinuationCode(params: {
                 functionName: 'parametric-chat',
                 operation: 'parametric',
                 provider: 'openrouter',
-                model: providerCandidate.usageModel,
+                model: servedModel,
                 userId,
                 conversationId,
                 referenceId,
@@ -1112,6 +1139,7 @@ async function generateContinuationCode(params: {
 // cleanly rather than bricking.
 async function runInspectionReview(params: {
   service: ContinuationSupabaseClient;
+  reviewerModel: string;
   imagePath: string;
   userRequestText: string;
   code: string;
@@ -1122,9 +1150,14 @@ async function runInspectionReview(params: {
 }): Promise<{
   verdict: ReturnType<typeof parseReviewerVerdict>;
   costUsd: number;
+  // The validated 7-view render as a data URL, so the caller can feed the SAME
+  // pixels back to the revising code-gen call without re-downloading. null on
+  // any download/validation failure.
+  imageDataUrl: string | null;
 }> {
   const {
     service,
+    reviewerModel,
     imagePath,
     userRequestText,
     code,
@@ -1139,19 +1172,19 @@ async function runInspectionReview(params: {
       .download(imagePath);
     if (error || !blob) {
       console.error('[parametric-chat] inspection download failed', error);
-      return { verdict: { verdict: 'good' }, costUsd: 0 };
+      return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
     }
     const bytes = new Uint8Array(await blob.arrayBuffer());
     // Don't feed the vision model a non-PNG or an oversized blob — a client
     // could upload garbage to the (client-writable) inspection path.
     if (!isValidInspectionPng(bytes)) {
       console.error('[parametric-chat] inspection asset failed validation');
-      return { verdict: { verdict: 'good' }, costUsd: 0 };
+      return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
     }
     const dataUrl = `data:image/png;base64,${base64FromBytes(bytes)}`;
 
     const reviewBody: OpenRouterRequest = {
-      model: CLAUDE_FABLE_5_MODEL,
+      model: reviewerModel,
       messages: [
         { role: 'system', content: PARAMETRIC_REVIEWER_PROMPT },
         {
@@ -1176,7 +1209,7 @@ async function runInspectionReview(params: {
     reviewBody.reasoning = { effort: 'minimal', exclude: true };
     applyCompletionTokenLimit(
       reviewBody,
-      CLAUDE_FABLE_5_MODEL,
+      reviewerModel,
       REVIEW_COMPLETION_TOKENS,
     );
 
@@ -1192,9 +1225,10 @@ async function runInspectionReview(params: {
       );
       if (!response.ok) {
         await response.text().catch(() => '');
-        return { verdict: { verdict: 'good' }, costUsd: 0 };
+        return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
       }
       const payload = (await response.json()) as {
+        model?: string;
         choices?: Array<{ message?: { content?: string } }>;
         usage?: {
           prompt_tokens?: number;
@@ -1202,8 +1236,9 @@ async function runInspectionReview(params: {
           cost?: number;
         };
       };
+      const servedModel = servedModelFrom(payload.model, reviewerModel);
       const costUsd = computeLlmCallCostUsd(
-        CLAUDE_FABLE_5_MODEL,
+        servedModel,
         payload.usage
           ? {
               inputTokens: payload.usage.prompt_tokens ?? 0,
@@ -1221,7 +1256,7 @@ async function runInspectionReview(params: {
             functionName: 'parametric-chat',
             operation: 'parametric-review',
             provider: 'openrouter',
-            model: CLAUDE_FABLE_5_MODEL,
+            model: servedModel,
             userId,
             conversationId,
             referenceId: assistantMessageId,
@@ -1239,13 +1274,14 @@ async function runInspectionReview(params: {
           payload.choices?.[0]?.message?.content ?? '',
         ),
         costUsd,
+        imageDataUrl: dataUrl,
       };
     } finally {
       clearTimeout(timeout);
     }
   } catch (error) {
     console.error('[parametric-chat] inspection review failed', error);
-    return { verdict: { verdict: 'good' }, costUsd: 0 };
+    return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
   }
 }
 
@@ -1268,6 +1304,9 @@ type LoopStateRow = {
   user_id: string;
   conversation_id: string;
   tier: string;
+  // The authoritative (round-0-validated) paid model. Nullable for rows created
+  // before the model column existed; the handler falls back to content.model.
+  model: string | null;
   round: number;
   repairs: number;
   spent_usd: number;
@@ -1283,6 +1322,9 @@ async function insertLoopStateRow(params: {
   userId: string;
   conversationId: string;
   tier: string;
+  // The validated round-0 model — the authoritative paid model for every
+  // continuation decision (see the migration). Requires the `model` column.
+  model: string;
   spentUsd?: number;
 }): Promise<void> {
   try {
@@ -1293,6 +1335,7 @@ async function insertLoopStateRow(params: {
         user_id: params.userId,
         conversation_id: params.conversationId,
         tier: params.tier,
+        model: params.model,
         round: 0,
         repairs: 0,
         spent_usd: params.spentUsd ?? 0,
@@ -1522,7 +1565,14 @@ async function handleContinuation(
     return continuationJson(404, { error: 'message_not_found' });
   }
   const content: Content = message.content;
-  const loopState = loopStateFromRow(row);
+  // The validated PAID model drives every per-model decision (round budget,
+  // reviewer, code-gen model + output cap). It is authoritative from the
+  // service-role loop-state row (row.model); content.model is client-writable
+  // and MUST NOT drive continuations — it's only a fallback for pre-migration
+  // rows whose model column is null. loopState.maxRounds is derived from this,
+  // not the stored tier, so Gemini 3.1 Pro (4) and Fable/Opus/GPT (6) differ.
+  const model = normalizeParametricGenerationModel(row.model ?? content.model);
+  const loopState = loopStateFromRow(row, model);
 
   // User moved on (a newer message is the leaf) → finalize gracefully.
   const { data: conversation } = await service
@@ -1589,7 +1639,6 @@ async function handleContinuation(
     return finalizeState(service, message, loopState, 'final', 'working');
   }
 
-  const model = normalizeParametricGenerationModel(content.model);
   const rawBaseCode = content.artifact?.code ?? '';
   // Bound input cost: never feed an unbounded artifact into the code-gen prompt.
   const baseCode = clampText(rawBaseCode, MAX_PROMPT_BASE_CODE_CHARS);
@@ -1600,8 +1649,10 @@ async function handleContinuation(
   }
   const startingSpend = row.spent_usd;
   const tier = row.tier;
+  // Pass the model so the display mirror's maxRounds matches the per-model round
+  // budget the decision functions use (loopState below is likewise model-derived).
   const mirror = (status: LoopStatus, r: number, repairs: number): LoopState =>
-    loopStateFromRow({ round: r, repairs, status, tier });
+    loopStateFromRow({ round: r, repairs, status, tier }, model);
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -1636,12 +1687,15 @@ async function handleContinuation(
       // BOTH the remaining USD (row spend + this round) and the estimated input
       // cost of `promptChars`. Returns null when even a minimal call can't be
       // afforded, so the caller finalizes instead of spending.
-      const affordableOutputCap = (promptChars: number): number | null =>
+      const affordableOutputCap = (
+        promptChars: number,
+        hasImage = false,
+      ): number | null =>
         affordableContinuationOutputCap({
           model,
           remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
           promptChars,
-          hasImage: false,
+          hasImage,
         });
 
       try {
@@ -1726,7 +1780,7 @@ async function handleContinuation(
           // FIRST (it is the dominant continuation cost). Unaffordable →
           // finalize 'good' with the current artifact, no vision call.
           !canAffordReview({
-            model: CLAUDE_FABLE_5_MODEL,
+            model: reviewerModelFor(model),
             remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
             promptChars:
               PARAMETRIC_REVIEWER_PROMPT.length +
@@ -1753,6 +1807,7 @@ async function handleContinuation(
           );
           const review = await runInspectionReview({
             service,
+            reviewerModel: reviewerModelFor(model),
             imagePath: computedPath,
             userRequestText: userText,
             code: baseCode,
@@ -1780,8 +1835,18 @@ async function handleContinuation(
             baseCode.length +
             revisionInstructions.length +
             STRICT_CODE_PROMPT.length;
+          // CADAM-style visual self-correction: feed the SAME validated 7-view
+          // render back to the revising code-gen so it critiques its own
+          // geometry from pixels, not just the reviewer's text. Only when the
+          // reviewer validated an image AND the selected (revising) model can
+          // read one — the reviewer may fall back to Fable for a non-vision
+          // model, but we must never send that model an image it can't accept.
+          const reviseHasImage =
+            wantsRevision &&
+            review.imageDataUrl !== null &&
+            modelSupportsVision(model);
           const revisionBudgetCap = wantsRevision
-            ? affordableOutputCap(revisionPromptChars)
+            ? affordableOutputCap(revisionPromptChars, reviseHasImage)
             : 0;
           if (!wantsRevision) {
             // 'good', or 'unparseable' at the round cap — finalize, keep artifact.
@@ -1809,13 +1874,30 @@ async function handleContinuation(
               ...content,
               loop: mirror('generating', loopState.round, loopState.repairs),
             });
+            const revisionText = `${userText}\n\nRevise the model to address this feedback: ${revisionInstructions}`;
+            // Fold the render + revision request into a SINGLE user turn (text +
+            // image in one content array) rather than two consecutive user turns,
+            // so correctness doesn't depend on the provider merging same-role
+            // messages. buildGoogleContents converts the image_url data-URL to
+            // Google inlineData, so this one block works for BOTH providers.
             const codeMessages: OpenAIMessage[] = [
               { role: 'user', content: userText || 'Generate the model.' },
               { role: 'assistant', content: baseCode },
-              {
-                role: 'user',
-                content: `${userText}\n\nRevise the model to address this feedback: ${revisionInstructions}`,
-              },
+              reviseHasImage && review.imageDataUrl
+                ? {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'text',
+                        text: `Here is the 7-view render of your current model. Inspect it and revise the code to fix any geometry that is missing, wrong, disconnected, or unclear.\n\n${revisionText}`,
+                      },
+                      {
+                        type: 'image_url',
+                        image_url: { url: review.imageDataUrl },
+                      },
+                    ],
+                  }
+                : { role: 'user', content: revisionText },
             ];
             const gen = await generateContinuationCode({
               model,
@@ -1828,7 +1910,7 @@ async function handleContinuation(
               budget: {
                 remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
                 promptChars: revisionPromptChars,
-                hasImage: false,
+                hasImage: reviseHasImage,
               },
             });
             roundCostUsd += gen.costUsd;
@@ -2265,6 +2347,8 @@ Deno.serve(async (req) => {
         // (a single call) charges its fallback below if it never reported usage.
         let roundZeroCostUsd = 0;
         let sawAgentUsage = false;
+        // Attribute the agent (tool) turn to the model OpenRouter actually served.
+        let agentServedModel = model;
 
         // Utility to mark all pending tools as error when finalizing on failure/cancel
         const markAllToolsError = () => {
@@ -2303,6 +2387,7 @@ Deno.serve(async (req) => {
 
               let chunk: {
                 error?: { message?: string };
+                model?: string;
                 usage?: {
                   prompt_tokens?: number;
                   completion_tokens?: number;
@@ -2344,9 +2429,10 @@ Deno.serve(async (req) => {
                 throw new Error(upstreamMessage);
               }
 
+              agentServedModel = servedModelFrom(chunk.model, agentServedModel);
               if (chunk.usage) {
                 sawAgentUsage = true;
-                roundZeroCostUsd += computeLlmCallCostUsd(model, {
+                roundZeroCostUsd += computeLlmCallCostUsd(agentServedModel, {
                   inputTokens: chunk.usage.prompt_tokens ?? 0,
                   outputTokens: chunk.usage.completion_tokens ?? 0,
                   costUsdOverride:
@@ -2359,7 +2445,7 @@ Deno.serve(async (req) => {
                     functionName: 'parametric-chat',
                     operation: 'chat',
                     provider: 'openrouter',
-                    model,
+                    model: agentServedModel,
                     userId: userData.user?.id,
                     conversationId,
                     referenceId: newMessageId,
@@ -2543,6 +2629,9 @@ Deno.serve(async (req) => {
               userId: userData.user!.id,
               conversationId,
               tier: content.loop.tier,
+              // `model` here is the round-0 normalizeParametricGenerationModel
+              // value — the paid model, now authoritative for continuations.
+              model,
               spentUsd:
                 roundZeroCostUsd +
                 (sawAgentUsage ? 0 : MISSING_USAGE_FALLBACK_USD),
@@ -2701,12 +2790,12 @@ Deno.serve(async (req) => {
                       // as {inlineData}, NOT JSON.stringified base64 in prompt
                       // text (the ~888k-token / ~$1.33 Lite blowup).
                       contents: googleContents.contents,
-                      // Static output cap for parity with the round-0
+                      // Per-model roster output cap, for parity with the round-0
                       // OpenRouter path's applyCompletionTokenLimit (round 0 is
                       // charged tokens + metered post-hoc, so no budget math).
                       config: buildGoogleCodeGenConfig({
                         systemInstruction: STRICT_CODE_PROMPT,
-                        baseOutputCap: GEMINI_CODE_GENERATION_TOKEN_LIMIT,
+                        baseOutputCap: outputTokenCapForModel(model),
                       }),
                     })) as GoogleGenerateContentResult;
 
@@ -2780,7 +2869,14 @@ Deno.serve(async (req) => {
                   stream: true,
                   usage: { include: true },
                 };
-                applyCompletionTokenLimit(codeRequestBody, codeModel, 48000);
+                // Per-model roster output cap (Fable 24000, Gemini/GPT/Opus
+                // 32000). The reasoning branches below refine it in place.
+                const codeOutputCap = outputTokenCapForModel(codeModel);
+                applyCompletionTokenLimit(
+                  codeRequestBody,
+                  codeModel,
+                  codeOutputCap,
+                );
 
                 const codeReasoningEnabled =
                   thinking || usesAutomaticReasoning(codeModel);
@@ -2789,11 +2885,6 @@ Deno.serve(async (req) => {
                     effort: 'medium',
                     exclude: true,
                   };
-                  applyCompletionTokenLimit(
-                    codeRequestBody,
-                    codeModel,
-                    GEMINI_CODE_GENERATION_TOKEN_LIMIT,
-                  );
                 } else if (codeReasoningEnabled) {
                   codeRequestBody.reasoning = {
                     max_tokens: getReasoningTokenLimit(codeModel),
@@ -2801,7 +2892,7 @@ Deno.serve(async (req) => {
                   applyCompletionTokenLimit(
                     codeRequestBody,
                     codeModel,
-                    getReasoningCompletionTokenLimit(codeModel, 60000),
+                    getReasoningCompletionTokenLimit(codeModel, codeOutputCap),
                   );
                 }
 
@@ -2848,6 +2939,8 @@ Deno.serve(async (req) => {
                   // Per-CALL usage flag so a usage-less call in a provider
                   // fallback chain still gets the flat fallback charge.
                   let sawUsageThisCall = false;
+                  // Attribute to the model OpenRouter actually served.
+                  let servedModel = providerCandidate.usageModel;
                   const FLUSH_INTERVAL_MS = 120;
 
                   while (true) {
@@ -2867,6 +2960,7 @@ Deno.serve(async (req) => {
 
                       let chunk: {
                         error?: { message?: string };
+                        model?: string;
                         usage?: {
                           prompt_tokens?: number;
                           completion_tokens?: number;
@@ -2900,25 +2994,23 @@ Deno.serve(async (req) => {
                         throw new Error(upstreamMessage);
                       }
 
+                      servedModel = servedModelFrom(chunk.model, servedModel);
                       if (chunk.usage) {
                         sawUsageThisCall = true;
-                        roundZeroCostUsd += computeLlmCallCostUsd(
-                          providerCandidate.usageModel,
-                          {
-                            inputTokens: chunk.usage.prompt_tokens ?? 0,
-                            outputTokens: chunk.usage.completion_tokens ?? 0,
-                            costUsdOverride:
-                              typeof chunk.usage.cost === 'number'
-                                ? chunk.usage.cost
-                                : undefined,
-                          },
-                        );
+                        roundZeroCostUsd += computeLlmCallCostUsd(servedModel, {
+                          inputTokens: chunk.usage.prompt_tokens ?? 0,
+                          outputTokens: chunk.usage.completion_tokens ?? 0,
+                          costUsdOverride:
+                            typeof chunk.usage.cost === 'number'
+                              ? chunk.usage.cost
+                              : undefined,
+                        });
                         EdgeRuntime.waitUntil(
                           logLlmUsage({
                             functionName: 'parametric-chat',
                             operation: 'parametric',
                             provider: 'openrouter',
-                            model: providerCandidate.usageModel,
+                            model: servedModel,
                             userId: userData.user?.id,
                             conversationId,
                             referenceId: newMessageId,
@@ -3052,7 +3144,7 @@ Deno.serve(async (req) => {
                   // content.loop is only a DISPLAY MIRROR — the authoritative
                   // state row is INSERTed in the outer finally (where round-0
                   // spend is fully accumulated).
-                  loop: initialLoopState(tierForModel(model)),
+                  loop: initialLoopState(model),
                 };
               }
               // Mark resolved *before* the side-effectful streamMessage:

@@ -103,9 +103,18 @@ export function classifyGenerationTier(
 ): GenerationTier {
   const id = (model ?? '').trim().toLowerCase();
   if (!id) return 'other';
-  if (id === CAD_PREMIUM_MODEL_ID || id.includes('fable')) return 'premium';
+  // Lite is the only no-inspection draft tier; everything else in the picker
+  // (Fable, Gemini 3.1 Pro, GPT-5.5, Opus 4.8) is a premium inspection model.
   if (id === CAD_LITE_MODEL_ID || id.includes('gemini-3.5-flash'))
     return 'lite';
+  if (
+    id === CAD_PREMIUM_MODEL_ID ||
+    id.includes('fable') ||
+    id.includes('gemini-3.1-pro') ||
+    id.includes('gpt-5.5') ||
+    id.includes('opus-4.8')
+  )
+    return 'premium';
   return 'other';
 }
 
