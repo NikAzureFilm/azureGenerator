@@ -17,19 +17,20 @@ import {
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
   buildGoogleContents,
-  canAffordReview,
   clampText,
   effectiveOutputCap,
   MAX_GOOGLE_PROMPT_CHARS,
   MIN_AFFORDABLE_OUTPUT_TOKENS,
   parseContinuationBody,
-  parseReviewerVerdict,
+  parseSelfInspectionReply,
+  isSelfInspectionSentinelLead,
+  stripScadCodeFences,
   tierForModel,
   truncateError,
 } from './loop.ts';
 
-// Roster model ids (see shared/parametricRouting.ts). Inspection rounds:
-// Flash 0, Gemini 3.1 Pro 4, Fable/GPT/Opus 6.
+// Roster model ids (see shared/parametricRouting.ts). All roster models run
+// the full 6-round inspection loop; off-roster ids get 0.
 const FLASH = 'google/gemini-3.5-flash';
 const GEMINI_PRO = 'google/gemini-3.1-pro-preview';
 const FABLE = 'anthropic/claude-fable-5';
@@ -223,59 +224,131 @@ test('parseContinuationBody rejects malformed payloads', () => {
   );
 });
 
-test('parseReviewerVerdict parses a clean good verdict', () => {
-  const v = parseReviewerVerdict(
-    '{"verdict":"good","final_message":"Looks great."}',
-  );
-  assert.deepEqual(v, { verdict: 'good', finalMessage: 'Looks great.' });
+test('stripScadCodeFences removes a single leading/trailing fence', () => {
+  assert.equal(stripScadCodeFences('```openscad\ncube(1);\n```'), 'cube(1);');
+  assert.equal(stripScadCodeFences('```\ncube(1);\n```'), 'cube(1);');
+  // No fences → unchanged.
+  assert.equal(stripScadCodeFences('cube(1);'), 'cube(1);');
 });
 
-test('parseReviewerVerdict parses a revise verdict', () => {
-  const v = parseReviewerVerdict(
-    '{"verdict":"revise","revision_instructions":"Add the handle."}',
-  );
-  assert.deepEqual(v, {
-    verdict: 'revise',
-    revisionInstructions: 'Add the handle.',
-  });
-});
-
-test('parseReviewerVerdict extracts JSON from surrounding prose/fences', () => {
-  const v = parseReviewerVerdict(
-    'Sure!\n```json\n{"verdict":"revise","revision_instructions":"Thicken walls"}\n```\nDone.',
-  );
-  assert.equal(v.verdict, 'revise');
-  assert.equal(v.revisionInstructions, 'Thicken walls');
-});
-
-test('parseReviewerVerdict reports unparseable on malformed/truncated input', () => {
-  // The caller (not the parser) decides revise-vs-finalize on unparseable, so a
-  // truncated JSON no longer silently passes a bad model as 'good'.
-  assert.deepEqual(parseReviewerVerdict('not json at all'), {
-    verdict: 'unparseable',
-  });
-  assert.deepEqual(parseReviewerVerdict('{ verdict: broken'), {
-    verdict: 'unparseable',
-  });
-  assert.deepEqual(parseReviewerVerdict(''), { verdict: 'unparseable' });
-  // Truncated mid-JSON (the exact failure that used to default to good).
+test('parseSelfInspectionReply reads a LOOKS_GOOD approval with a message', () => {
   assert.deepEqual(
-    parseReviewerVerdict(
-      '{"verdict":"revise","revision_instructions":"Add the',
-    ),
-    { verdict: 'unparseable' },
+    parseSelfInspectionReply('LOOKS_GOOD: A sturdy mug with a handle.'),
+    { kind: 'good', message: 'A sturdy mug with a handle.' },
   );
-  // Unknown verdict value.
-  assert.deepEqual(parseReviewerVerdict('{"verdict":"maybe"}'), {
-    verdict: 'unparseable',
+});
+
+test('parseSelfInspectionReply requires the explicit colon for approval', () => {
+  // Case-insensitive + leading whitespace, but the colon IS required.
+  assert.deepEqual(parseSelfInspectionReply('looks_good: done'), {
+    kind: 'good',
+    message: 'done',
+  });
+  assert.deepEqual(parseSelfInspectionReply('  LOOKS_GOOD:  all good'), {
+    kind: 'good',
+    message: 'all good',
+  });
+  // Approval with no trailing sentence → empty message (caller falls back).
+  assert.deepEqual(parseSelfInspectionReply('LOOKS_GOOD:'), {
+    kind: 'good',
+    message: '',
   });
 });
 
-test('parseReviewerVerdict treats an empty revise as unparseable', () => {
-  assert.deepEqual(
-    parseReviewerVerdict('{"verdict":"revise","revision_instructions":"  "}'),
-    { verdict: 'unparseable' },
+test('parseSelfInspectionReply: bare LOOKS_GOOD (no colon) is NOT approval', () => {
+  // No colon and no OpenSCAD tokens → unusable, not a false approval.
+  assert.deepEqual(parseSelfInspectionReply('LOOKS_GOOD'), {
+    kind: 'unusable',
+  });
+  assert.deepEqual(parseSelfInspectionReply('LOOKS_GOOD - all fine'), {
+    kind: 'unusable',
+  });
+});
+
+test('parseSelfInspectionReply: a looks_good Customizer param is code, not approval', () => {
+  // A legit script whose first line declares `looks_good = true;` must classify
+  // as code (word boundary used to false-match the sentinel).
+  const r = parseSelfInspectionReply(
+    'looks_good = true; // [false,true]\ncube([10, 10, 2]);',
   );
+  assert.equal(r.kind, 'code');
+  assert.equal(r.code, 'looks_good = true; // [false,true]\ncube([10, 10, 2]);');
+});
+
+test('parseSelfInspectionReply: LOOKS_GOOD inside a mid-file comment is code', () => {
+  const r = parseSelfInspectionReply('cube(10); // LOOKS_GOOD: looks fine');
+  assert.equal(r.kind, 'code');
+});
+
+test('parseSelfInspectionReply strips fences around an approval', () => {
+  assert.deepEqual(
+    parseSelfInspectionReply('```\nLOOKS_GOOD: a clean bracket\n```'),
+    { kind: 'good', message: 'a clean bracket' },
+  );
+});
+
+test('parseSelfInspectionReply extracts ONLY the code from prose + fenced code', () => {
+  const r = parseSelfInspectionReply(
+    'Here is the corrected script:\n```openscad\ncube([10, 10, 2]);\n```',
+  );
+  // Just the code — no prose, no fences.
+  assert.deepEqual(r, { kind: 'code', code: 'cube([10, 10, 2]);' });
+});
+
+test('parseSelfInspectionReply picks the LARGEST fenced block among many', () => {
+  const r = parseSelfInspectionReply(
+    'A tiny stub:\n```\ncube(1);\n```\nand the real model:\n' +
+      '```openscad\ndifference() { cube(10); sphere(4); }\n```',
+  );
+  assert.equal(r.kind, 'code');
+  assert.equal(r.code, 'difference() { cube(10); sphere(4); }');
+});
+
+test('parseSelfInspectionReply: fenced non-SCAD prose is unusable', () => {
+  assert.deepEqual(
+    parseSelfInspectionReply('```\njust an explanation, no code here\n```'),
+    { kind: 'unusable' },
+  );
+});
+
+test('parseSelfInspectionReply tolerates raw code with trailing prose', () => {
+  // No fences: the SCAD gate keys off OpenSCAD tokens, so a real script with
+  // trailing prose still classifies as code (client compile-repair catches any
+  // non-compiling residue).
+  const r = parseSelfInspectionReply(
+    'difference() { cube(10); sphere(4); }\nThis fixes the handle.',
+  );
+  assert.equal(r.kind, 'code');
+});
+
+test('parseSelfInspectionReply reports unusable garbage / empty input', () => {
+  assert.deepEqual(parseSelfInspectionReply('I think it looks fine tbh'), {
+    kind: 'unusable',
+  });
+  assert.deepEqual(parseSelfInspectionReply(''), { kind: 'unusable' });
+  assert.deepEqual(parseSelfInspectionReply('   '), { kind: 'unusable' });
+});
+
+test('parseSelfInspectionReply prefers LOOKS_GOOD even when code-like text follows', () => {
+  const r = parseSelfInspectionReply('LOOKS_GOOD: cube(10); is correct');
+  assert.equal(r.kind, 'good');
+  assert.equal(r.message, 'cube(10); is correct');
+});
+
+test('isSelfInspectionSentinelLead holds a possible LOOKS_GOOD lead, streams a rebuild', () => {
+  // Empty / prefix / full-sentinel leads are held (no preview flash).
+  assert.equal(isSelfInspectionSentinelLead(''), true);
+  assert.equal(isSelfInspectionSentinelLead('   '), true);
+  assert.equal(isSelfInspectionSentinelLead('LOOK'), true);
+  assert.equal(isSelfInspectionSentinelLead('looks_g'), true);
+  assert.equal(
+    isSelfInspectionSentinelLead('LOOKS_GOOD: A decorative sphere on a base'),
+    true,
+  );
+  // A rebuild that provably isn't the sentinel streams normally.
+  assert.equal(isSelfInspectionSentinelLead('width = 10;'), false);
+  assert.equal(isSelfInspectionSentinelLead('linear_extrude(2) square(5);'), false);
+  assert.equal(isSelfInspectionSentinelLead('// corrected model\ncube(10);'), false);
 });
 
 // --- Authoritative-state helpers (fix round) ----------------------------
@@ -574,6 +647,14 @@ test('buildGoogleCodeGenConfig applies the budget clamp and keeps thinking under
   });
   assert.equal(uncapped.maxOutputTokens, 32000);
   assert.equal(uncapped.thinkingConfig.thinkingBudget, 8192);
+
+  // High-effort self-inspection raises the thinking budget cap (still ≤ cap/2).
+  const inspect = buildGoogleCodeGenConfig({
+    systemInstruction: 'sys',
+    baseOutputCap: 32000,
+    thinkingBudgetCap: 24576,
+  });
+  assert.equal(inspect.thinkingConfig.thinkingBudget, 16000); // min(24576, 16000)
 });
 
 test('clampText truncates only past the limit', () => {
@@ -650,41 +731,6 @@ test('buildGoogleContents clamps total prompt text to the char cap', () => {
   ]);
   assert.equal(clampedTextChars, true);
   assert.equal(contents[0].parts[0].text.length, MAX_GOOGLE_PROMPT_CHARS);
-});
-
-test('canAffordReview gates the image-bearing review call on remaining budget', () => {
-  // Fable, 4000 prompt chars → input 1000 + 2000 image = 3000 tokens ($0.03),
-  // output 3000 tokens ($0.15) → needs $0.18.
-  assert.equal(
-    canAffordReview({
-      model: 'anthropic/claude-fable-5',
-      remainingUsd: 0.6,
-      promptChars: 4000,
-    }),
-    true,
-  );
-  assert.equal(
-    canAffordReview({
-      model: 'anthropic/claude-fable-5',
-      remainingUsd: 0.15,
-      promptChars: 4000,
-    }),
-    false,
-  );
-});
-
-test('canAffordReview includes the image token estimate', () => {
-  // $0.145 would cover the review WITHOUT the image (1000 input tok = $0.01 +
-  // 2500 output = $0.125 → $0.135) but NOT with the 2000-token image ($0.03 +
-  // $0.125 = $0.155) — so it must be unaffordable.
-  assert.equal(
-    canAffordReview({
-      model: 'anthropic/claude-fable-5',
-      remainingUsd: 0.145,
-      promptChars: 4000,
-    }),
-    false,
-  );
 });
 
 test('expectedInspectionPath is the owner-scoped, round-scoped path', () => {

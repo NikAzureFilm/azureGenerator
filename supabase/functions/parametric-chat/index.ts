@@ -31,7 +31,6 @@ import {
   getParametricBuildTokenCost,
 } from '../../../shared/tokenCosts.ts';
 import {
-  CLAUDE_FABLE_5_MODEL,
   DEFAULT_CODE_GENERATION_MODEL,
   getCodeGenerationProviderCandidates,
   isGeminiCodeGenerationModel,
@@ -44,6 +43,7 @@ import { logLlmUsage } from '../_shared/providerUsage.ts';
 import type { LoopState, LoopStatus } from '@shared/types.ts';
 import {
   COST_CEILING_USD,
+  INSPECT_GOOGLE_THINKING_BUDGET_CAP,
   MAX_PROMPT_BASE_CODE_CHARS,
   MAX_PROMPT_USER_TEXT_CHARS,
   MISSING_USAGE_FALLBACK_USD,
@@ -51,17 +51,18 @@ import {
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
   buildGoogleContents,
-  canAffordReview,
   clampText,
   computeLlmCallCostUsd,
   decideContinuation,
   effectiveOutputCap,
   expectedInspectionPath,
   initialLoopState,
+  isSelfInspectionSentinelLead,
   isValidInspectionPng,
   loopStateFromRow,
   parseContinuationBody,
-  parseReviewerVerdict,
+  parseSelfInspectionReply,
+  stripScadCodeFences,
   truncateError,
 } from './loop.ts';
 
@@ -178,14 +179,6 @@ function usesAutomaticReasoning(model: string): boolean {
 
 function isClaudeFable5(model: string): boolean {
   return bareAnthropicModelId(model) === 'claude-fable-5';
-}
-
-// The 7-view inspection reviewer judges the selected model's own render, so use
-// that same model when it supports vision; fall back to Fable for a (currently
-// non-existent) text-only model so the reviewer never gets an image it can't
-// read.
-function reviewerModelFor(model: string): string {
-  return modelSupportsVision(model) ? model : CLAUDE_FABLE_5_MODEL;
 }
 
 // Attribute usage/cost to the model OpenRouter actually served (its responses
@@ -785,37 +778,36 @@ module torus(r1, r2) {
     circle(r=r2);
 }`;
 
-// Concise vision reviewer for the premium inspection loop. Judges the rendered
-// 7-view sheet against the user's request; must answer with JSON only.
-const PARAMETRIC_REVIEWER_PROMPT = `You are a meticulous CAD reviewer for AzureFilm Generator. You are shown a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of a 3D-printable OpenSCAD model, the user's original request, and the OpenSCAD source.
+// Self-inspection prompt for the merged review+revise round: the SAME model that
+// wrote the code is shown the 7-view render of what its code actually produces,
+// at full reasoning, and either rebuilds the model or approves it. Combines the
+// strict OpenSCAD output rules, a per-feature visual inspection method, and a
+// two-outcome reply protocol. Original text (concepts only; no third-party code
+// or prompt copy).
+const PARAMETRIC_SELF_INSPECTION_PROMPT = `You are AzureFilm Generator inspecting a 3D-printable OpenSCAD model you just wrote. You are given the user's request, your current OpenSCAD source, and a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of exactly what that source produces.
 
-Method (do this before deciding):
-1. Enumerate EVERY distinct feature the user explicitly named in their request (e.g. "mug with a handle and a lid" → body, handle, lid).
-2. For EACH named feature, check it against EVERY relevant view: is it present, the right shape, correctly placed, connected to the body, and 3D-printable?
-3. Also watch for: disconnected/floating parts or parts not resting on the build plate (kits); non-printable geometry (paper-thin walls, gaps, self-intersections, features that only touch instead of overlapping); and over-simplified results that ignore requested detail.
+Judge the model from the RENDER, not from reading the code — the render is the ground truth for what will actually print.
 
-Verdict rule (strict):
-- Return "revise" if ANY user-named feature is missing, malformed, disconnected, not visible in the views, or non-printable — even if the rest looks good.
-- Return "good" ONLY when every user-named feature is confirmed present, correct, connected, and printable.
+Inspection method:
+1. List every distinct feature the user explicitly asked for (e.g. "a mug with a handle and a lid" → body, handle, lid).
+2. For each feature, look across every relevant view and confirm it is genuinely present, has the right shape and proportions, sits in the correct place, physically connects to the rest of the model, and can be 3D-printed.
+3. Actively hunt for defects the code can hide: parts floating in mid-air or not resting on the build plate, walls too thin to print, pieces that only touch at a single edge or face instead of overlapping with real material, self-intersections, and results that are cruder or more simplified than what was requested.
 
-Reply with a SINGLE JSON object and NOTHING else (no markdown, no code fences, no prose outside the JSON):
-- Good: {"verdict":"good","final_message":"<one or two friendly sentences describing what was made>"}
-- Revise: {"verdict":"revise","revision_instructions":"<specific, actionable changes naming each feature to fix>"}`;
+A model that merely COMPILES is not good enough — approve it only when the rendered views actually match the request.
 
-// Fallback instructions when the reviewer's JSON is truncated/unparseable but
-// inspection rounds remain — better to attempt one corrective pass than to
-// silently ship a possibly-bad model as 'good'.
-const GENERIC_REVISION_INSTRUCTIONS =
-  'Re-examine the inspection sheet against the user’s request; fix any missing, wrong, disconnected, non-printable, or unclear features; return the complete corrected script.';
+Then respond in EXACTLY one of these two ways:
 
-// Module-scoped fence stripper for the continuation code path (round 0 keeps
-// its own local copy inside the streaming handler).
-function stripScadCodeFences(s: string): string {
-  let out = s;
-  out = out.replace(/^```(?:openscad)?\s*\n?/, '');
-  out = out.replace(/\n?```\s*$/, '');
-  return out;
-}
+A) If ANY requested feature is missing, malformed, misplaced, disconnected, non-printable, or over-simplified, output the COMPLETE corrected OpenSCAD script and nothing else — no prose, no explanation, no markdown, no code fences. Rewrite the whole model so every defect is fixed, following these rules:
+   - Raw OpenSCAD only: a single, complete, standalone script.
+   - Declare every editable value as a descriptive snake_case top-of-file variable with an OpenSCAD Customizer trailing comment (e.g. wall_thickness = 2; // [1:0.5:8]). Never abbreviate names to single letters.
+   - Keep the geometry watertight and manifold, and make it either ONE fully connected solid (each feature sunk into its parent by real overlapping material and combined with union()) OR a kit of separate pieces that each rest flat on the build plate — never leave a floating part or one that only touches at a point.
+   - Respect printability: use a sensible minimum wall thickness (about 1.2 mm when unspecified) and keep details large enough for a 0.4 mm FDM nozzle.
+
+B) If EVERY requested feature is verified present, correct, connected, and printable, reply with the literal token LOOKS_GOOD: at the very START of your response, followed by one short, friendly sentence describing the finished model. Output nothing else.`;
+
+// Instruction accompanying the render in the single self-inspection user turn.
+const SELF_INSPECTION_USER_INSTRUCTION =
+  'Below is the labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of the model your current code produces. Inspect every view against the request above using the method in your instructions. If anything is missing, wrong, disconnected, non-printable, or over-simplified, reply with the complete corrected OpenSCAD script only. If every requested feature is verified correct, reply with LOOKS_GOOD: and one short sentence. Remember: compiling is not enough — approve only if the views actually match the request.';
 
 // Chunked base64 for the inspection PNG — avoids blowing the call stack that a
 // single String.fromCharCode(...bytes) spread would hit on large buffers.
@@ -898,6 +890,22 @@ async function generateContinuationCode(params: {
   // RECOMPUTED per provider leg (remaining minus what earlier legs charged) so a
   // fallback from google→OpenRouter can never spend the same budget twice.
   budget: { remainingUsd: number; promptChars: number; hasImage: boolean };
+  // System prompt for this call (default: the strict code-gen prompt). The
+  // self-inspection round passes PARAMETRIC_SELF_INSPECTION_PROMPT.
+  systemPrompt?: string;
+  // provider_usage operation tag (default 'parametric'; self-inspection passes
+  // 'parametric-inspect').
+  operation?: string;
+  // Predicate deciding whether a provider leg's raw reply is a usable FINAL
+  // result (stop iterating legs). Default: renderable OpenSCAD. Self-inspection
+  // treats an approval OR renderable code as complete.
+  isComplete?: (rawReply: string) => boolean;
+  // Reasoning profile. 'default' keeps today's per-model code-gen behavior
+  // (Gemini medium hidden reasoning; Claude-5/Opus automatic max_tokens
+  // reasoning; others provider default). 'high' forces maximum reasoning on
+  // EVERY provider leg — used by the visual self-inspection call so a
+  // Google-direct outage can't run the critique at reduced effort.
+  reasoningEffort?: 'default' | 'high';
 }): Promise<{ rawCode: string; codeGenFailed: boolean; costUsd: number }> {
   const {
     model,
@@ -909,6 +917,12 @@ async function generateContinuationCode(params: {
     onProgress,
     budget,
   } = params;
+  const systemPrompt = params.systemPrompt ?? STRICT_CODE_PROMPT;
+  const operation = params.operation ?? 'parametric';
+  const reasoningEffort = params.reasoningEffort ?? 'default';
+  const isComplete =
+    params.isComplete ??
+    ((reply: string) => hasRenderableScadCode(stripScadCodeFences(reply)));
   let rawCode = '';
   let codeGenFailed = true;
   // Synchronous spend accumulator for the ceiling (see computeLlmCallCostUsd).
@@ -943,9 +957,15 @@ async function generateContinuationCode(params: {
           // Honor the per-leg budget-derived output cap in the google-direct
           // branch too (the OpenRouter branch clamps below).
           config: buildGoogleCodeGenConfig({
-            systemInstruction: STRICT_CODE_PROMPT,
+            systemInstruction: systemPrompt,
             baseOutputCap: outputTokenCapForModel(model),
             maxOutputTokens: legOutputCap,
+            // High-effort self-inspection gets a larger thinking budget so the
+            // google-direct leg reasons over the render, not a low-capped glance.
+            thinkingBudgetCap:
+              reasoningEffort === 'high'
+                ? INSPECT_GOOGLE_THINKING_BUDGET_CAP
+                : undefined,
           }),
         })) as GoogleGenerateContentResult;
 
@@ -962,7 +982,7 @@ async function generateContinuationCode(params: {
         EdgeRuntime.waitUntil(
           logLlmUsage({
             functionName: 'parametric-chat',
-            operation: 'parametric',
+            operation,
             provider: 'google',
             model: providerCandidate.usageModel,
             userId,
@@ -974,7 +994,7 @@ async function generateContinuationCode(params: {
         );
 
         rawCode = extractGoogleGeneratedText(result);
-        if (hasRenderableScadCode(stripScadCodeFences(rawCode))) {
+        if (isComplete(rawCode)) {
           codeGenFailed = false;
           break;
         }
@@ -992,22 +1012,30 @@ async function generateContinuationCode(params: {
     const codeModel = providerCandidate.model;
     const codeRequestBody: OpenRouterRequest = {
       model: codeModel,
-      messages: [
-        { role: 'system', content: STRICT_CODE_PROMPT },
-        ...codeMessages,
-      ],
+      messages: [{ role: 'system', content: systemPrompt }, ...codeMessages],
       stream: true,
       usage: { include: true },
     };
     // Per-model roster output cap (Fable 24000, Gemini/GPT/Opus 32000).
     let outputCap = outputTokenCapForModel(codeModel);
     if (isGeminiCodeGenerationModel(codeModel)) {
-      codeRequestBody.reasoning = { effort: 'medium', exclude: true };
+      // Gemini uses hidden effort-based reasoning; self-inspection ('high') runs
+      // it at full effort so the OpenRouter fallback leg critiques as hard as the
+      // google-direct leg would.
+      codeRequestBody.reasoning = {
+        effort: reasoningEffort === 'high' ? 'high' : 'medium',
+        exclude: true,
+      };
     } else if (usesAutomaticReasoning(codeModel)) {
+      // Claude-5 / Opus already reason at a full max_tokens budget on every leg.
       codeRequestBody.reasoning = {
         max_tokens: getReasoningTokenLimit(codeModel),
       };
       outputCap = getReasoningCompletionTokenLimit(codeModel, outputCap);
+    } else if (reasoningEffort === 'high') {
+      // Other effort-based models (e.g. GPT-5.5) carry no reasoning field for
+      // code-gen; force high hidden reasoning for the self-inspection call only.
+      codeRequestBody.reasoning = { effort: 'high', exclude: true };
     }
     // Clamp to what the remaining USD budget can afford for this leg.
     outputCap = effectiveOutputCap(outputCap, legOutputCap);
@@ -1082,7 +1110,7 @@ async function generateContinuationCode(params: {
             EdgeRuntime.waitUntil(
               logLlmUsage({
                 functionName: 'parametric-chat',
-                operation: 'parametric',
+                operation,
                 provider: 'openrouter',
                 model: servedModel,
                 userId,
@@ -1120,7 +1148,7 @@ async function generateContinuationCode(params: {
       // conservative flat fee so a usage-less provider can't run past the cap.
       if (!sawUsageThisCall) costUsd += MISSING_USAGE_FALLBACK_USD;
 
-      if (hasRenderableScadCode(stripScadCodeFences(rawCode))) {
+      if (isComplete(rawCode)) {
         codeGenFailed = false;
         break;
       }
@@ -1134,154 +1162,32 @@ async function generateContinuationCode(params: {
   return { rawCode, codeGenFailed, costUsd };
 }
 
-// Premium vision review: download the inspection sheet, ask Fable for a
-// JSON-only verdict. Any failure resolves to `good` so the loop finalizes
-// cleanly rather than bricking.
-async function runInspectionReview(params: {
-  service: ContinuationSupabaseClient;
-  reviewerModel: string;
-  imagePath: string;
-  userRequestText: string;
-  code: string;
-  conversationId: string;
-  assistantMessageId: string;
-  userId?: string | null;
-  remainingBudgetMs: () => number;
-}): Promise<{
-  verdict: ReturnType<typeof parseReviewerVerdict>;
-  costUsd: number;
-  // The validated 7-view render as a data URL, so the caller can feed the SAME
-  // pixels back to the revising code-gen call without re-downloading. null on
-  // any download/validation failure.
-  imageDataUrl: string | null;
-}> {
-  const {
-    service,
-    reviewerModel,
-    imagePath,
-    userRequestText,
-    code,
-    conversationId,
-    assistantMessageId,
-    userId,
-    remainingBudgetMs,
-  } = params;
+// Download the round's inspection sheet from the server-computed path and
+// PNG-validate it (magic bytes, size, exact 1568x800 dims) before it ever
+// reaches a vision model — a client can write to this path, so the bytes are
+// untrusted. Returns the render as a data URL, or null on any download /
+// validation failure (the caller fails open and finalizes the loop).
+async function loadInspectionImage(
+  service: ContinuationSupabaseClient,
+  imagePath: string,
+): Promise<string | null> {
   try {
     const { data: blob, error } = await service.storage
       .from('images')
       .download(imagePath);
     if (error || !blob) {
       console.error('[parametric-chat] inspection download failed', error);
-      return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
+      return null;
     }
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    // Don't feed the vision model a non-PNG or an oversized blob — a client
-    // could upload garbage to the (client-writable) inspection path.
     if (!isValidInspectionPng(bytes)) {
       console.error('[parametric-chat] inspection asset failed validation');
-      return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
+      return null;
     }
-    const dataUrl = `data:image/png;base64,${base64FromBytes(bytes)}`;
-
-    const reviewBody: OpenRouterRequest = {
-      model: reviewerModel,
-      messages: [
-        { role: 'system', content: PARAMETRIC_REVIEWER_PROMPT },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `User request:\n${userRequestText || '(no text provided)'}\n\nCurrent OpenSCAD source:\n${code}\n\nReview the attached 7-view render and reply with the required JSON only.`,
-            },
-            { type: 'image_url', image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      stream: false,
-      usage: { include: true },
-    };
-    // The reviewer must return a small JSON verdict that NEVER truncates. Fable's
-    // adaptive reasoning previously ate the 2000-token budget and cut off the
-    // JSON (which then defaulted to 'good'). Force minimal, excluded reasoning so
-    // the whole budget is available for the visible verdict.
-    const REVIEW_COMPLETION_TOKENS = 2000;
-    reviewBody.reasoning = { effort: 'minimal', exclude: true };
-    applyCompletionTokenLimit(
-      reviewBody,
-      reviewerModel,
-      REVIEW_COMPLETION_TOKENS,
-    );
-
-    const abort = new AbortController();
-    const timeout = setTimeout(
-      () => abort.abort(new Error('review timeout')),
-      remainingBudgetMs(),
-    );
-    try {
-      const response = await fetchOpenRouterChatCompletion(
-        reviewBody,
-        abort.signal,
-      );
-      if (!response.ok) {
-        await response.text().catch(() => '');
-        return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
-      }
-      const payload = (await response.json()) as {
-        model?: string;
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          cost?: number;
-        };
-      };
-      const servedModel = servedModelFrom(payload.model, reviewerModel);
-      const costUsd = computeLlmCallCostUsd(
-        servedModel,
-        payload.usage
-          ? {
-              inputTokens: payload.usage.prompt_tokens ?? 0,
-              outputTokens: payload.usage.completion_tokens ?? 0,
-              costUsdOverride:
-                typeof payload.usage.cost === 'number'
-                  ? payload.usage.cost
-                  : undefined,
-            }
-          : null,
-      );
-      if (payload.usage) {
-        EdgeRuntime.waitUntil(
-          logLlmUsage({
-            functionName: 'parametric-chat',
-            operation: 'parametric-review',
-            provider: 'openrouter',
-            model: servedModel,
-            userId,
-            conversationId,
-            referenceId: assistantMessageId,
-            inputTokens: payload.usage.prompt_tokens ?? 0,
-            outputTokens: payload.usage.completion_tokens ?? 0,
-            costUsdOverride:
-              typeof payload.usage.cost === 'number'
-                ? payload.usage.cost
-                : undefined,
-          }),
-        );
-      }
-      return {
-        verdict: parseReviewerVerdict(
-          payload.choices?.[0]?.message?.content ?? '',
-        ),
-        costUsd,
-        imageDataUrl: dataUrl,
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
+    return `data:image/png;base64,${base64FromBytes(bytes)}`;
   } catch (error) {
-    console.error('[parametric-chat] inspection review failed', error);
-    return { verdict: { verdict: 'good' }, costUsd: 0, imageDataUrl: null };
+    console.error('[parametric-chat] inspection image load failed', error);
+    return null;
   }
 }
 
@@ -1775,129 +1681,59 @@ async function handleContinuation(
               };
             }
           }
-        } else if (
-          // inspect — gate the image-bearing review call on affordability
-          // FIRST (it is the dominant continuation cost). Unaffordable →
-          // finalize 'good' with the current artifact, no vision call.
-          !canAffordReview({
-            model: reviewerModelFor(model),
-            remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
-            promptChars:
-              PARAMETRIC_REVIEWER_PROMPT.length +
-              userText.length +
-              baseCode.length,
-          })
-        ) {
-          nextStatus = 'final';
-          working = {
-            ...content,
-            loop: mirror('final', loopState.round, loopState.repairs),
-          };
         } else {
-          // inspect — server COMPUTES the trusted path, ignoring the client's.
-          emit({
-            ...content,
-            loop: mirror('reviewing', loopState.round, loopState.repairs),
-          });
+          // inspect — merged self-critique (CADAM-style): the SAME model that
+          // wrote the code is shown its own 7-view render at FULL reasoning and
+          // either rebuilds the model or approves it, in ONE call. The server
+          // COMPUTES the trusted image path (ignoring the client's). A non-vision
+          // model (none today) or a missing/invalid render fails OPEN — finalize
+          // clean, keep the current artifact.
           const computedPath = expectedInspectionPath(
             userId,
             conversationId,
             assistantMessageId,
             loopState.round,
           );
-          const review = await runInspectionReview({
-            service,
-            reviewerModel: reviewerModelFor(model),
-            imagePath: computedPath,
-            userRequestText: userText,
-            code: baseCode,
-            conversationId,
-            assistantMessageId,
-            userId,
-            remainingBudgetMs,
-          });
-          roundCostUsd += review.costUsd;
-
-          // A truncated/unparseable verdict no longer silently passes as 'good':
-          // if inspection rounds remain, treat it as a revise with generic
-          // instructions; at the round cap it finalizes (anti-brick). Transport
-          // / LLM errors already resolve to 'good' inside runInspectionReview.
-          const wantsRevision =
-            review.verdict.verdict === 'revise' ||
-            (review.verdict.verdict === 'unparseable' &&
-              loopState.round < loopState.maxRounds);
-          const revisionInstructions =
-            review.verdict.verdict === 'revise'
-              ? review.verdict.revisionInstructions
-              : GENERIC_REVISION_INSTRUCTIONS;
-          const revisionPromptChars =
-            userText.length * 2 +
+          const imageDataUrl = modelSupportsVision(model)
+            ? await loadInspectionImage(service, computedPath)
+            : null;
+          // userText appears once (the leading user turn); the instruction is
+          // static. Image input cost is added separately via hasImage below.
+          const inspectPromptChars =
+            userText.length +
             baseCode.length +
-            revisionInstructions.length +
-            STRICT_CODE_PROMPT.length;
-          // CADAM-style visual self-correction: feed the SAME validated 7-view
-          // render back to the revising code-gen so it critiques its own
-          // geometry from pixels, not just the reviewer's text. Only when the
-          // reviewer validated an image AND the selected (revising) model can
-          // read one — the reviewer may fall back to Fable for a non-vision
-          // model, but we must never send that model an image it can't accept.
-          const reviseHasImage =
-            wantsRevision &&
-            review.imageDataUrl !== null &&
-            modelSupportsVision(model);
-          const revisionBudgetCap = wantsRevision
-            ? affordableOutputCap(revisionPromptChars, reviseHasImage)
-            : 0;
-          if (!wantsRevision) {
-            // 'good', or 'unparseable' at the round cap — finalize, keep artifact.
-            nextStatus = 'final';
-            working = {
-              ...content,
-              text:
-                review.verdict.verdict === 'good'
-                  ? (review.verdict.finalMessage ?? content.text)
-                  : content.text,
-              loop: mirror('final', loopState.round, loopState.repairs),
-            };
-          } else if (revisionBudgetCap === null) {
-            // Can't afford the revision under the ceiling — finalize, keep
-            // current artifact.
+            SELF_INSPECTION_USER_INSTRUCTION.length +
+            PARAMETRIC_SELF_INSPECTION_PROMPT.length;
+          // The render is REQUIRED for self-inspection, so the call always
+          // carries the image; the budget must cover an image-bearing leg.
+          const inspectBudgetCap = imageDataUrl
+            ? affordableOutputCap(inspectPromptChars, true)
+            : null;
+          if (!imageDataUrl || inspectBudgetCap === null) {
             nextStatus = 'final';
             working = {
               ...content,
               loop: mirror('final', loopState.round, loopState.repairs),
             };
           } else {
-            // Revise (reviewer asked, or unparseable-with-rounds-remaining) —
-            // flip the status line to "improving".
             emit({
               ...content,
-              loop: mirror('generating', loopState.round, loopState.repairs),
+              loop: mirror('reviewing', loopState.round, loopState.repairs),
             });
-            const revisionText = `${userText}\n\nRevise the model to address this feedback: ${revisionInstructions}`;
-            // Fold the render + revision request into a SINGLE user turn (text +
-            // image in one content array) rather than two consecutive user turns,
-            // so correctness doesn't depend on the provider merging same-role
-            // messages. buildGoogleContents converts the image_url data-URL to
-            // Google inlineData, so this one block works for BOTH providers.
+            // ONE user turn: request text → current code → a single content array
+            // with the inspection instruction + the render image. buildGoogleContents
+            // converts the image_url data-URL to Google inlineData, so this shape
+            // works for BOTH the OpenRouter and google-direct provider legs.
             const codeMessages: OpenAIMessage[] = [
               { role: 'user', content: userText || 'Generate the model.' },
               { role: 'assistant', content: baseCode },
-              reviseHasImage && review.imageDataUrl
-                ? {
-                    role: 'user',
-                    content: [
-                      {
-                        type: 'text',
-                        text: `Here is the 7-view render of your current model. Inspect it and revise the code to fix any geometry that is missing, wrong, disconnected, or unclear.\n\n${revisionText}`,
-                      },
-                      {
-                        type: 'image_url',
-                        image_url: { url: review.imageDataUrl },
-                      },
-                    ],
-                  }
-                : { role: 'user', content: revisionText },
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: SELF_INSPECTION_USER_INSTRUCTION },
+                  { type: 'image_url', image_url: { url: imageDataUrl } },
+                ],
+              },
             ];
             const gen = await generateContinuationCode({
               model,
@@ -1906,29 +1742,58 @@ async function handleContinuation(
               conversationId,
               userId,
               remainingBudgetMs,
-              onProgress: streamProgress,
+              // Suppress progress while the partial reply could still be a
+              // LOOKS_GOOD approval (its OpenSCAD-token-bearing sentence would
+              // otherwise flash as broken code in the preview); stream a rebuild
+              // normally once the lead provably isn't the sentinel.
+              onProgress: (streamed) => {
+                if (isSelfInspectionSentinelLead(streamed)) return;
+                streamProgress(streamed);
+              },
               budget: {
                 remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
-                promptChars: revisionPromptChars,
-                hasImage: reviseHasImage,
+                promptChars: inspectPromptChars,
+                hasImage: true,
               },
+              systemPrompt: PARAMETRIC_SELF_INSPECTION_PROMPT,
+              operation: 'parametric-inspect',
+              // Full reasoning on every provider leg for the visual critique.
+              reasoningEffort: 'high',
+              // A leg is complete once the model approves OR returns renderable
+              // code; otherwise fall through to the next provider leg.
+              isComplete: (reply) =>
+                parseSelfInspectionReply(reply).kind !== 'unusable',
             });
             roundCostUsd += gen.costUsd;
-            if (gen.codeGenFailed) {
-              nextStatus = 'final';
-              working = {
-                ...content,
-                loop: mirror('final', loopState.round, loopState.repairs),
-              };
-            } else {
+            const reply = gen.codeGenFailed
+              ? ({ kind: 'unusable' } as const)
+              : parseSelfInspectionReply(gen.rawCode);
+            if (reply.kind === 'code') {
+              // The model rebuilt the geometry → new artifact version, next round.
               nextRound = loopState.round + 1;
               nextStatus = 'awaiting_client';
               working = {
                 ...content,
-                artifact: buildArtifact(
-                  stripScadCodeFences(gen.rawCode.trim()).trim(),
-                ),
+                artifact: buildArtifact(reply.code),
                 loop: mirror('awaiting_client', nextRound, nextRepairs),
+              };
+            } else if (reply.kind === 'good') {
+              // The model approved its own render → finalize with its friendly
+              // message (same wiring as the old verdict.finalMessage; fall back
+              // to the current text when empty).
+              nextStatus = 'final';
+              working = {
+                ...content,
+                text: reply.message || content.text,
+                loop: mirror('final', loopState.round, loopState.repairs),
+              };
+            } else {
+              // No usable reply from any leg / transport failure → fail open,
+              // finalize clean and keep the current artifact.
+              nextStatus = 'final';
+              working = {
+                ...content,
+                loop: mirror('final', loopState.round, loopState.repairs),
               };
             }
           }

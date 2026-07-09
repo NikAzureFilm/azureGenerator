@@ -17,8 +17,11 @@ const PAGE_SIZE = 1000;
 const MAX_ROWS = 20_000;
 
 // provider_usage.operation values that belong to a text-to-CAD generation.
+// 'parametric-inspect' is the merged self-inspection round; 'parametric-review'
+// is the retired reviewer op, kept so historical rows still sum into COGS.
 export const GENERATION_COST_OPERATIONS = [
   'parametric',
+  'parametric-inspect',
   'parametric-review',
   'text-to-cad',
 ];

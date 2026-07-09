@@ -13,6 +13,7 @@ import {
   llmInputPerMUsd,
   llmOutputPerMUsd,
 } from '../../../shared/providerPricing.ts';
+import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 
 // Shared compile-error repair cap (both tiers).
 export const MAX_REPAIRS = 2;
@@ -55,6 +56,91 @@ export const MAX_PROMPT_BASE_CODE_CHARS = 100_000;
 
 export function clampText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) : text;
+}
+
+// Strip a single leading/trailing markdown code fence off an LLM reply. Pure and
+// shared by the continuation code path and the self-inspection parser (round 0
+// keeps its own local copy inside the streaming handler).
+export function stripScadCodeFences(s: string): string {
+  let out = s;
+  out = out.replace(/^```(?:openscad)?\s*\n?/, '');
+  out = out.replace(/\n?```\s*$/, '');
+  return out;
+}
+
+// The approval sentinel the self-inspection model emits when the rendered views
+// match the request. The prompt mandates the explicit colon form "LOOKS_GOOD:",
+// so require it — a bare "LOOKS_GOOD" or a Customizer param that happens to start
+// with `looks_good = true;` must NOT be read as approval (it falls through to the
+// code/unusable branches).
+const SELF_INSPECTION_GOOD_PREFIX = /^\s*LOOKS_GOOD\s*:/i;
+
+// Match every markdown code fence in a reply (```openscad / ```scad / bare ```),
+// anywhere in the text. Group 1 is the block body.
+const SCAD_FENCE_PATTERN = /```(?:openscad|scad)?\s*\n([\s\S]*?)```/gi;
+
+export type SelfInspectionReply =
+  | { kind: 'good'; message: string }
+  | { kind: 'code'; code: string }
+  | { kind: 'unusable' };
+
+// Pick the LARGEST fenced block that is renderable OpenSCAD, so a reply like
+// "Here is the corrected script:\n```openscad\n...\n```" yields just the code
+// (prose + fences dropped), and multiple fences resolve to the real script.
+function largestFencedScadBlock(raw: string): string | null {
+  SCAD_FENCE_PATTERN.lastIndex = 0;
+  let best: string | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = SCAD_FENCE_PATTERN.exec(raw)) !== null) {
+    const block = match[1].trim();
+    if (
+      hasRenderableScadCode(block) &&
+      (best === null || block.length > best.length)
+    ) {
+      best = block;
+    }
+  }
+  return best;
+}
+
+// Parse a self-inspection reply from the code-writing model. It either approves
+// the current model (`LOOKS_GOOD:` + a friendly sentence) or returns a complete
+// corrected OpenSCAD script. Pure so it can be unit-tested without the network.
+//   - "LOOKS_GOOD:" at the very start → 'good' (message is the rest, may be empty)
+//   - a fenced OpenSCAD block anywhere → 'code' (largest renderable block only,
+//     so surrounding prose/fences are never stored as artifact.code)
+//   - no fences but the whole reply is renderable OpenSCAD → 'code'
+//   - anything else → 'unusable' (caller fails open: finalize the loop)
+export function parseSelfInspectionReply(raw: string): SelfInspectionReply {
+  if (typeof raw !== 'string' || !raw.trim()) return { kind: 'unusable' };
+  const trimmed = raw.trim();
+  const stripped = stripScadCodeFences(trimmed).trim();
+  const goodMatch = SELF_INSPECTION_GOOD_PREFIX.exec(stripped);
+  if (goodMatch) {
+    return {
+      kind: 'good',
+      message: stripped.slice(goodMatch[0].length).trim(),
+    };
+  }
+  const fenced = largestFencedScadBlock(trimmed);
+  if (fenced) return { kind: 'code', code: fenced };
+  if (hasRenderableScadCode(stripped)) return { kind: 'code', code: stripped };
+  return { kind: 'unusable' };
+}
+
+// Progress-streaming guard for the self-inspection call: hold emitting a partial
+// reply into the artifact preview while it could still be the LOOKS_GOOD approval
+// (already matching it, or a prefix that might grow into it). Without this, an
+// approval sentence like "A decorative sphere on a square base" — which contains
+// OpenSCAD tokens — would flash as broken code before the round finalizes. Once
+// the lead provably isn't the sentinel, streaming resumes for a rebuild.
+export function isSelfInspectionSentinelLead(
+  streamedStripped: string,
+): boolean {
+  const lead = streamedStripped.replace(/^\s+/, '').toLowerCase();
+  if (!lead) return true;
+  const token = 'looks_good';
+  return token.startsWith(lead) || lead.startsWith(token);
 }
 
 // Largest output-token cap the remaining USD budget can afford for `model`
@@ -109,29 +195,6 @@ export function effectiveOutputCap(
   return typeof maxOutputTokens === 'number'
     ? Math.min(baseCap, maxOutputTokens)
     : baseCap;
-}
-
-// Fixed output-token estimate for the vision reviewer call: 2000 completion
-// (max_tokens) plus a small buffer for the now-minimal excluded reasoning. Its
-// output is hard-capped, so affordability is a boolean.
-export const REVIEW_OUTPUT_TOKEN_ESTIMATE = 2500;
-
-// Whether the remaining budget can cover the inspection-review call: its
-// estimated INPUT (prompt chars + one image) plus its fixed output. The
-// reviewer's output is capped, so there's no variable cap to return — just a
-// go / no-go used to skip the review and finalize 'good' when unaffordable.
-export function canAffordReview(params: {
-  model: string;
-  remainingUsd: number;
-  promptChars: number;
-}): boolean {
-  const { model, remainingUsd, promptChars } = params;
-  const inputTokens =
-    Math.ceil(promptChars / CHARS_PER_TOKEN) + IMAGE_INPUT_TOKEN_ESTIMATE;
-  const estimatedInputUsd = (inputTokens * llmInputPerMUsd(model)) / 1_000_000;
-  const outputUsd =
-    (REVIEW_OUTPUT_TOKEN_ESTIMATE * llmOutputPerMUsd(model)) / 1_000_000;
-  return remainingUsd >= estimatedInputUsd + outputUsd;
 }
 
 // Hard cap on total PROMPT TEXT chars sent to the google-direct code-gen call.
@@ -221,19 +284,30 @@ export function buildGoogleContents(
 // google-direct branch honors the budget-derived output cap too (the OpenRouter
 // branch already clamps via applyCompletionTokenLimit). thinkingBudget is kept
 // under the output cap so a tight budget can't starve the actual output.
+// Default upper bound on the google-direct thinking budget (kept ≤ output cap/2
+// so a tight budget can't starve the visible output). The visual self-inspection
+// leg raises this so the model actually reasons over the render.
+export const DEFAULT_GOOGLE_THINKING_BUDGET_CAP = 8192;
+export const INSPECT_GOOGLE_THINKING_BUDGET_CAP = 24576;
+
 export function buildGoogleCodeGenConfig(params: {
   systemInstruction: string;
   baseOutputCap: number;
   maxOutputTokens?: number;
+  thinkingBudgetCap?: number;
 }): {
   systemInstruction: string;
   thinkingConfig: { thinkingBudget: number };
   maxOutputTokens: number;
 } {
   const cap = effectiveOutputCap(params.baseOutputCap, params.maxOutputTokens);
+  const thinkingCap =
+    params.thinkingBudgetCap ?? DEFAULT_GOOGLE_THINKING_BUDGET_CAP;
   return {
     systemInstruction: params.systemInstruction,
-    thinkingConfig: { thinkingBudget: Math.min(8192, Math.floor(cap / 2)) },
+    thinkingConfig: {
+      thinkingBudget: Math.min(thinkingCap, Math.floor(cap / 2)),
+    },
     maxOutputTokens: cap,
   };
 }
@@ -561,50 +635,4 @@ export function decideContinuation(
     };
   }
   return { action: 'inspect' };
-}
-
-export type ReviewerVerdict =
-  | { verdict: 'good'; finalMessage?: string }
-  | { verdict: 'revise'; revisionInstructions: string }
-  // The reply wasn't a usable verdict (no JSON, truncated/malformed JSON,
-  // unknown verdict, or an empty "revise"). The CALLER decides what to do:
-  // treat as a revision if rounds remain, else finalize — so a truncated JSON
-  // no longer silently passes a bad model as 'good'.
-  | { verdict: 'unparseable' };
-
-// Defensively parse the reviewer's JSON-only reply. Extracts the first {...}
-// block so leading prose or code fences don't break it. A clean 'good' / 'revise'
-// is returned as-is; anything unusable returns 'unparseable'.
-export function parseReviewerVerdict(raw: string): ReviewerVerdict {
-  const unparseable: ReviewerVerdict = { verdict: 'unparseable' };
-  if (typeof raw !== 'string' || !raw.trim()) return unparseable;
-
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return unparseable;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return unparseable;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return unparseable;
-
-  const obj = parsed as Record<string, unknown>;
-  if (obj.verdict === 'revise') {
-    const instructions =
-      typeof obj.revision_instructions === 'string'
-        ? obj.revision_instructions.trim()
-        : '';
-    // A "revise" with no actionable instructions can't drive a revision.
-    if (!instructions) return unparseable;
-    return { verdict: 'revise', revisionInstructions: instructions };
-  }
-  if (obj.verdict === 'good') {
-    return typeof obj.final_message === 'string' && obj.final_message.trim()
-      ? { verdict: 'good', finalMessage: obj.final_message.trim() }
-      : { verdict: 'good' };
-  }
-  return unparseable;
 }
