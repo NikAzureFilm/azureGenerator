@@ -54,13 +54,12 @@ assert.match(
   'Claude Fable 5 should use a bounded completion budget instead of the generic 20k/60k caps',
 );
 // Code-gen output caps now come from the shared roster (outputTokenCapForModel),
-// not an index.ts constant. Assert the roster values behaviorally: Gemini / GPT /
-// Opus 32000, Fable 24000.
+// not an index.ts constant. Removed models fall back to the default cap.
 assert.equal(outputTokenCapForModel('google/gemini-3.5-flash'), 32000);
 assert.equal(outputTokenCapForModel('google/gemini-3.1-pro-preview'), 32000);
 assert.equal(outputTokenCapForModel('openai/gpt-5.5'), 32000);
 assert.equal(outputTokenCapForModel('anthropic/claude-opus-4.8'), 32000);
-assert.equal(outputTokenCapForModel('anthropic/claude-fable-5'), 24000);
+assert.equal(outputTokenCapForModel('anthropic/claude-fable-5'), 32000);
 assert.match(
   source,
   /const codeOutputCap = outputTokenCapForModel\(codeModel\)/,

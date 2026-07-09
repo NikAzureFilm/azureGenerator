@@ -122,6 +122,11 @@ export function ModelSelector({
         )}
         aria-label="Model cost"
       >
+        {model?.name ? (
+          <span className="mr-2 font-normal text-adam-text-secondary">
+            {model.name}
+          </span>
+        ) : null}
         {model?.tokenCost ? (
           <span className="rounded bg-adam-neutral-800 px-1.5 py-0.5 text-[10px] text-adam-text-secondary">
             {formatTokenCost(model.tokenCost)}

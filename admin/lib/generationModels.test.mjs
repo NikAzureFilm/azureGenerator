@@ -31,9 +31,12 @@ assert.equal(cadTokensForModel(undefined), null);
 
 assert.equal(
   cadModelDisplayText(CAD_PREMIUM_MODEL_ID),
-  'Premium / Claude Fable 5',
+  'Legacy / Claude Fable 5',
 );
-assert.equal(cadModelDisplayText(CAD_LITE_MODEL_ID), 'Lite / Gemini 3.5 Flash');
+assert.equal(
+  cadModelDisplayText(CAD_LITE_MODEL_ID),
+  'CAD Model / Gemini 3.5 Flash',
+);
 
 assert.equal(
   extractGenerationModelId({
@@ -57,7 +60,7 @@ assert.deepEqual(
   }),
   {
     id: CAD_LITE_MODEL_ID,
-    tier: 'Lite',
+    tier: 'CAD Model',
     name: 'Gemini 3.5 Flash',
     tokens: CAD_LITE_GENERATION_TOKEN_COST,
   },

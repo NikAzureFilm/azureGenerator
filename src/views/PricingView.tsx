@@ -10,7 +10,6 @@ const FEATURE_ROWS = [
       FEATURE_COSTS.chat,
       FEATURE_COSTS.promptGeneration,
       FEATURE_COSTS.parametric,
-      FEATURE_COSTS.parametricCadReasoning,
     ],
   },
   {

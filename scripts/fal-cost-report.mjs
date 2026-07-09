@@ -45,13 +45,13 @@ const FEATURE_BREAKDOWNS = [
   },
   {
     id: 'parametric',
-    label: 'Parametric CAD generation - Lite',
-    components: [{ name: 'CAD model budget', costUsd: 0.5 }],
+    label: 'CAD generation',
+    components: [{ name: 'CAD model budget', costUsd: 0.25 }],
   },
   {
     id: 'parametricCadReasoning',
-    label: 'Parametric CAD generation - Premium',
-    components: [{ name: 'CAD reasoning budget', costUsd: 1.2 }],
+    label: 'CAD generation',
+    components: [{ name: 'CAD model budget', costUsd: 0.25 }],
   },
   {
     id: 'generatedInputImage',
@@ -80,6 +80,16 @@ const FEATURE_BREAKDOWNS = [
       {
         name: 'Lite generated image',
         costUsd: geminiImageCostUsd('gemini-3.1-flash-image-preview'),
+      },
+    ],
+  },
+  {
+    id: 'generatedInputImageNanoLite',
+    label: 'Generated input image - Light',
+    components: [
+      {
+        name: 'Light generated image',
+        costUsd: geminiImageCostUsd('gemini-3.1-flash-lite-image-preview'),
       },
     ],
   },

@@ -266,7 +266,7 @@ export const CREATIVE_MODELS: ModelConfig[] = [
 /**
  * Estimated token cost of a pending composer submission. Mirrors the charge
  * that will actually be applied so the sidebar can preview the balance drop:
- *  - parametric  → per-model CAD cost (Lite vs Premium)
+ *  - parametric  → selected CAD model cost
  *  - creative + multiview → multiview mesh cost
  *  - creative otherwise → per-model creative mesh cost
  */

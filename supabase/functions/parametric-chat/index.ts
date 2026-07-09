@@ -93,7 +93,7 @@ const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 8000;
 const FABLE_COMPLETION_TOKEN_LIMIT = 24000;
 // Per-model code-gen output caps now come from the shared roster via
-// outputTokenCapForModel() (Lite/Gemini/GPT/Opus = 32000, Fable = 24000).
+// outputTokenCapForModel().
 
 const googleGenAI = new GoogleGenAI({
   apiKey: GOOGLE_API_KEY,
@@ -1476,7 +1476,7 @@ async function handleContinuation(
   // service-role loop-state row (row.model); content.model is client-writable
   // and MUST NOT drive continuations — it's only a fallback for pre-migration
   // rows whose model column is null. loopState.maxRounds is derived from this,
-  // not the stored tier, so Gemini 3.1 Pro (4) and Fable/Opus/GPT (6) differ.
+  // not the stored tier.
   const model = normalizeParametricGenerationModel(row.model ?? content.model);
   const loopState = loopStateFromRow(row, model);
 

@@ -322,8 +322,8 @@ export function tierForModel(model: string): LoopTier {
 
 // Build the in-memory LoopState the decision functions expect from a persisted
 // state row. maxRounds is DERIVED (never stored): recomputed each continuation
-// from the AUTHORITATIVE paid model so per-model round counts (Gemini 3.1 Pro =
-// 4, Fable/GPT/Opus = 6, Lite = 0) stay a single source of truth.
+// from the AUTHORITATIVE paid model so round budgets stay a single source of
+// truth.
 //
 // SECURITY: the authoritative model is `row.model` — persisted by the edge
 // function (service-role only, RLS-locked) at round 0. The passed `model` is
@@ -456,8 +456,7 @@ export function isValidInspectionPng(
 
 // State stamped onto the assistant message once round 0 produced an artifact.
 // Every model starts `awaiting_client` so the client can drive compile repairs;
-// maxRounds comes from the model's roster inspection rounds (Lite = 0 → no
-// inspection, cheap draft).
+// maxRounds comes from the model's roster inspection rounds.
 export function initialLoopState(model: string): LoopState {
   const maxRounds = inspectionRoundsForModel(model);
   return {
@@ -616,8 +615,7 @@ export function decideContinuation(
     }
     return { action: 'repair' };
   }
-  // inspection — driven off the per-model round budget, not the tier enum, so
-  // every vision model with maxRounds > 0 inspects and Lite (0) is skipped.
+  // inspection — driven off the per-model round budget, not the tier enum.
   if (loop.maxRounds <= 0) {
     return {
       action: 'reject',

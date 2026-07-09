@@ -3,7 +3,7 @@ export const GEMINI_31_PRO_MODEL = 'google/gemini-3.1-pro-preview';
 export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
 export const GPT_55_MODEL = 'openai/gpt-5.5';
 export const OPUS_48_MODEL = 'anthropic/claude-opus-4.8';
-export const DEFAULT_CODE_GENERATION_MODEL = CLAUDE_FABLE_5_MODEL;
+export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_35_FLASH_MODEL;
 
 export type CodeGenerationProvider = 'google' | 'openrouter';
 
@@ -41,55 +41,11 @@ export const DEFAULT_OUTPUT_TOKEN_CAP = 32000;
 export const PARAMETRIC_MODEL_ROSTER: Record<string, ParametricModelEntry> = {
   [GEMINI_35_FLASH_MODEL]: {
     id: GEMINI_35_FLASH_MODEL,
-    label: 'Lite',
-    description: 'Fast CAD drafts at lower token cost',
+    label: 'CAD Model',
+    description: 'Fast text-to-CAD generation with editable parameters',
     provider: 'Google',
     priceKey: GEMINI_35_FLASH_MODEL,
-    tokenCost: 15,
-    supportsVision: true,
-    maxInspectionRounds: 6,
-    outputTokenCap: 32000,
-  },
-  [GEMINI_31_PRO_MODEL]: {
-    id: GEMINI_31_PRO_MODEL,
-    label: 'Gemini 3.1 Pro',
-    description: 'Google frontier reasoning with visual self-correction',
-    provider: 'Google',
-    priceKey: GEMINI_31_PRO_MODEL,
-    tokenCost: 30,
-    supportsVision: true,
-    maxInspectionRounds: 6,
-    outputTokenCap: 32000,
-  },
-  [CLAUDE_FABLE_5_MODEL]: {
-    id: CLAUDE_FABLE_5_MODEL,
-    label: 'Premium',
-    description: 'Best reasoning for complex CAD generation',
-    provider: 'Anthropic',
-    priceKey: CLAUDE_FABLE_5_MODEL,
-    tokenCost: 50,
-    supportsVision: true,
-    maxInspectionRounds: 6,
-    outputTokenCap: 24000,
-  },
-  [GPT_55_MODEL]: {
-    id: GPT_55_MODEL,
-    label: 'GPT-5.5',
-    description: 'OpenAI frontier model with visual self-correction',
-    provider: 'OpenAI',
-    priceKey: GPT_55_MODEL,
-    tokenCost: 60,
-    supportsVision: true,
-    maxInspectionRounds: 6,
-    outputTokenCap: 32000,
-  },
-  [OPUS_48_MODEL]: {
-    id: OPUS_48_MODEL,
-    label: 'Opus 4.8',
-    description: 'Deepest reasoning for the hardest CAD generation',
-    provider: 'Anthropic',
-    priceKey: OPUS_48_MODEL,
-    tokenCost: 90,
+    tokenCost: 25,
     supportsVision: true,
     maxInspectionRounds: 6,
     outputTokenCap: 32000,

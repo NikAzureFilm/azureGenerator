@@ -3,9 +3,9 @@ import { PARAMETRIC_MODEL_ROSTER } from './parametricRouting.ts';
 
 export const TOKEN_INTERNAL_USD_COST = 0.01;
 export const TOKEN_USD_VALUE = 0.03;
-export const CAD_LITE_GENERATION_TOKEN_COST = 15;
-export const CAD_PREMIUM_GENERATION_TOKEN_COST = 50;
-export const CAD_GENERATION_TOKEN_COST = CAD_PREMIUM_GENERATION_TOKEN_COST;
+export const CAD_LITE_GENERATION_TOKEN_COST = 25;
+export const CAD_PREMIUM_GENERATION_TOKEN_COST = 25;
+export const CAD_GENERATION_TOKEN_COST = 25;
 
 export function tokensForProviderCost(providerCostUsd: number): number {
   return Math.max(
@@ -36,15 +36,15 @@ export const FEATURE_COSTS = {
   },
   parametric: {
     id: 'parametric',
-    label: 'Parametric CAD generation - Lite',
+    label: 'CAD generation',
     tokens: CAD_LITE_GENERATION_TOKEN_COST,
     description: 'Fast text-to-CAD generation with editable parameters.',
   },
   parametricCadReasoning: {
     id: 'parametric-cad-reasoning',
-    label: 'Parametric CAD generation - Premium',
+    label: 'CAD generation',
     tokens: CAD_PREMIUM_GENERATION_TOKEN_COST,
-    description: 'Deeper reasoning for complex text-to-CAD generation.',
+    description: 'Fast text-to-CAD generation with editable parameters.',
   },
   generatedInputImage: {
     id: 'generated-input-image',

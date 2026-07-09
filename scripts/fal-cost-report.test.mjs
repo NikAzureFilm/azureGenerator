@@ -55,6 +55,7 @@ assert.equal(byId.get('generatedInputImage')?.suggestedTokens, 1);
 assert.equal(byId.get('generatedInputImageNormal')?.suggestedTokens, 14);
 assert.equal(byId.get('multiviewFrontImage')?.suggestedTokens, 1);
 assert.equal(byId.get('generatedInputImageLite')?.suggestedTokens, 7);
+assert.equal(byId.get('generatedInputImageNanoLite')?.suggestedTokens, 4);
 assert.equal(byId.get('fastMesh')?.suggestedTokens, 29);
 assert.equal(byId.get('qualityMesh')?.suggestedTokens, 33);
 assert.equal(byId.get('ultraMesh')?.suggestedTokens, 110);

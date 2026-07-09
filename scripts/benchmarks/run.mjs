@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const DEFAULT_MODEL = 'anthropic/claude-fable-5';
+const DEFAULT_MODEL = 'google/gemini-3.5-flash';
 const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_LOOP_ITERATIONS = 8;
 const PROCESS_TIMEOUT_MS = 2 * 60 * 1000;
@@ -115,7 +115,9 @@ async function readErrorBody(response) {
 async function fetchJson(url, options, label) {
   const response = await fetch(url, options);
   if (!response.ok) {
-    throw new Error(`${label} failed (${response.status}): ${await readErrorBody(response)}`);
+    throw new Error(
+      `${label} failed (${response.status}): ${await readErrorBody(response)}`,
+    );
   }
   return response.json();
 }
@@ -123,7 +125,9 @@ async function fetchJson(url, options, label) {
 async function fetchNoContent(url, options, label) {
   const response = await fetch(url, options);
   if (!response.ok) {
-    throw new Error(`${label} failed (${response.status}): ${await readErrorBody(response)}`);
+    throw new Error(
+      `${label} failed (${response.status}): ${await readErrorBody(response)}`,
+    );
   }
 }
 
@@ -158,7 +162,9 @@ async function signIn(config) {
     );
 
     if (!data.access_token || !data.user?.id) {
-      throw new Error('sign in response did not include access_token and user.id');
+      throw new Error(
+        'sign in response did not include access_token and user.id',
+      );
     }
 
     return {
@@ -179,7 +185,9 @@ async function loadPrompts(config) {
     const stem = entry.name.slice(0, -3);
     if (
       config.promptFilters.length > 0 &&
-      !config.promptFilters.some((filter) => stem.toLowerCase().includes(filter))
+      !config.promptFilters.some((filter) =>
+        stem.toLowerCase().includes(filter),
+      )
     ) {
       continue;
     }
@@ -188,10 +196,16 @@ async function loadPrompts(config) {
     const raw = await fs.readFile(filePath, 'utf8');
     const lines = raw.replace(/\r\n/g, '\n').split('\n');
     const heading = lines[0]?.trim() ?? '';
-    const body = lines.slice(1).join('\n').replace(/^\s*\n/, '').trim();
+    const body = lines
+      .slice(1)
+      .join('\n')
+      .replace(/^\s*\n/, '')
+      .trim();
 
     if (!heading.startsWith('# ') || !body) {
-      throw new Error(`${entry.name} must have a one-line "# ..." heading and a body`);
+      throw new Error(
+        `${entry.name} must have a one-line "# ..." heading and a body`,
+      );
     }
 
     prompts.push({
@@ -206,7 +220,13 @@ async function loadPrompts(config) {
   return prompts;
 }
 
-async function createConversation({ config, auth, prompt, conversationId, signal }) {
+async function createConversation({
+  config,
+  auth,
+  prompt,
+  conversationId,
+  signal,
+}) {
   await fetchNoContent(
     `${config.supabaseUrl}/rest/v1/conversations`,
     {
@@ -302,19 +322,24 @@ async function readNdjsonStream(body) {
 }
 
 async function invokeParametricChat({ config, auth, body, signal, label }) {
-  const response = await fetch(`${config.supabaseUrl}/functions/v1/parametric-chat`, {
-    method: 'POST',
-    headers: {
-      apikey: config.anonKey,
-      Authorization: `Bearer ${auth.accessToken}`,
-      'Content-Type': 'application/json',
+  const response = await fetch(
+    `${config.supabaseUrl}/functions/v1/parametric-chat`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${auth.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
     },
-    body: JSON.stringify(body),
-    signal,
-  });
+  );
 
   if (!response.ok) {
-    throw new Error(`${label} failed (${response.status}): ${await readErrorBody(response)}`);
+    throw new Error(
+      `${label} failed (${response.status}): ${await readErrorBody(response)}`,
+    );
   }
 
   const contentType = response.headers.get('Content-Type') ?? '';
@@ -365,7 +390,12 @@ function countTopLevelParameters(code) {
 
   for (const line of code.split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+    if (
+      !trimmed ||
+      trimmed.startsWith('//') ||
+      trimmed.startsWith('/*') ||
+      trimmed.startsWith('*')
+    ) {
       if (!sawAssignment) continue;
       continue;
     }
@@ -383,7 +413,9 @@ function countTopLevelParameters(code) {
 function appendProcessOutput(current, chunk) {
   if (current.length >= MAX_PROCESS_OUTPUT) return current;
   const next = current + chunk.toString();
-  return next.length > MAX_PROCESS_OUTPUT ? next.slice(0, MAX_PROCESS_OUTPUT) : next;
+  return next.length > MAX_PROCESS_OUTPUT
+    ? next.slice(0, MAX_PROCESS_OUTPUT)
+    : next;
 }
 
 function runProcess(command, args, timeoutMs = PROCESS_TIMEOUT_MS) {
@@ -492,7 +524,10 @@ async function writeSummary(resultDir, rows, startedAt) {
         row.parameterCount,
         row.codeLines,
         row.seconds,
-      ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'),
+      ]
+        .join(' | ')
+        .replace(/^/, '| ')
+        .replace(/$/, ' |'),
     );
   }
 
@@ -503,7 +538,11 @@ async function writeSummary(resultDir, rows, startedAt) {
     lines.push('', '## Notes', '', ...notes);
   }
 
-  await fs.writeFile(path.join(resultDir, 'summary.md'), `${lines.join('\n')}\n`, 'utf8');
+  await fs.writeFile(
+    path.join(resultDir, 'summary.md'),
+    `${lines.join('\n')}\n`,
+    'utf8',
+  );
 }
 
 async function driveAgenticLoop({
@@ -552,10 +591,11 @@ async function driveAgenticLoop({
 
     row.repairsUsed += 1;
     const round = Number.isInteger(loop.round) ? loop.round : iteration;
-    const errorText = (compileResult.stderr || compileResult.stdout || 'OpenSCAD failed').slice(
-      0,
-      4000,
-    );
+    const errorText = (
+      compileResult.stderr ||
+      compileResult.stdout ||
+      'OpenSCAD failed'
+    ).slice(0, 4000);
 
     finalMessage = await invokeParametricChat({
       config,
@@ -659,7 +699,13 @@ async function runPrompt({ config, auth, prompt, resultDir, index, total }) {
     } else if (config.openscadPath) {
       const compileResult =
         loopResult.lastCompile ??
-        (await compileScad(config.openscadPath, code, resultDir, prompt.stem, 'final'));
+        (await compileScad(
+          config.openscadPath,
+          code,
+          resultDir,
+          prompt.stem,
+          'final',
+        ));
       row.compileOk = compileResult.ok ? 'yes' : 'no';
       if (!compileResult.ok) {
         row.notes.push(
@@ -668,7 +714,11 @@ async function runPrompt({ config, auth, prompt, resultDir, index, total }) {
       }
 
       const pngPath = path.join(resultDir, `${prompt.stem}.png`);
-      const renderResult = await renderPng(config.openscadPath, scadPath, pngPath);
+      const renderResult = await renderPng(
+        config.openscadPath,
+        scadPath,
+        pngPath,
+      );
       if (!renderResult.ok) {
         row.notes.push(
           `render failed: ${truncate(renderResult.stderr || renderResult.stdout || 'OpenSCAD render failed')}`,
@@ -743,10 +793,14 @@ async function main() {
       const row = createSummaryRow(prompt);
       row.notes.push(`setup failed: ${safeErrorMessage(error)}`);
       rows.push(row);
-      await fs.writeFile(path.join(resultDir, `${prompt.stem}.scad`), '', 'utf8').catch(() => {});
+      await fs
+        .writeFile(path.join(resultDir, `${prompt.stem}.scad`), '', 'utf8')
+        .catch(() => {});
     }
     await writeSummary(resultDir, rows, startedAt);
-    console.error(`Setup failed before benchmark prompts ran. Summary: ${resultDir}`);
+    console.error(
+      `Setup failed before benchmark prompts ran. Summary: ${resultDir}`,
+    );
     return;
   }
 
@@ -767,9 +821,14 @@ async function main() {
   console.log(`Summary: ${resultDir}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch((error) => {
-    console.error(`Benchmark runner failed before completion: ${safeErrorMessage(error)}`);
+    console.error(
+      `Benchmark runner failed before completion: ${safeErrorMessage(error)}`,
+    );
     process.exitCode = 1;
   });
 }

@@ -14,35 +14,33 @@ import {
   outputTokenCapForModel,
 } from './parametricRouting.ts';
 
-assert.equal(DEFAULT_CODE_GENERATION_MODEL, 'anthropic/claude-fable-5');
 assert.equal(GEMINI_35_FLASH_MODEL, 'google/gemini-3.5-flash');
 assert.equal(GEMINI_31_PRO_MODEL, 'google/gemini-3.1-pro-preview');
 assert.equal(CLAUDE_FABLE_5_MODEL, 'anthropic/claude-fable-5');
 assert.equal(GPT_55_MODEL, 'openai/gpt-5.5');
 assert.equal(OPUS_48_MODEL, 'anthropic/claude-opus-4.8');
 
-// Every roster model normalizes to itself (acceptance: all 5 pass server-side).
-const ALL_MODELS = [
-  GEMINI_35_FLASH_MODEL,
-  GEMINI_31_PRO_MODEL,
-  CLAUDE_FABLE_5_MODEL,
-  GPT_55_MODEL,
-  OPUS_48_MODEL,
-];
-assert.deepEqual(Object.keys(PARAMETRIC_MODEL_ROSTER).sort(), [...ALL_MODELS].sort());
+assert.equal(DEFAULT_CODE_GENERATION_MODEL, GEMINI_35_FLASH_MODEL);
+
+// Only the current CAD model remains selectable / accepted server-side.
+const ALL_MODELS = [GEMINI_35_FLASH_MODEL];
+assert.deepEqual(
+  Object.keys(PARAMETRIC_MODEL_ROSTER).sort(),
+  [...ALL_MODELS].sort(),
+);
 for (const model of ALL_MODELS) {
   assert.equal(normalizeParametricGenerationModel(model), model);
 }
 
 // Per-model roster-derived helpers.
 assert.equal(inspectionRoundsForModel(GEMINI_35_FLASH_MODEL), 6);
-assert.equal(inspectionRoundsForModel(GEMINI_31_PRO_MODEL), 6);
-assert.equal(inspectionRoundsForModel(CLAUDE_FABLE_5_MODEL), 6);
-assert.equal(inspectionRoundsForModel(GPT_55_MODEL), 6);
-assert.equal(inspectionRoundsForModel(OPUS_48_MODEL), 6);
+assert.equal(inspectionRoundsForModel(GEMINI_31_PRO_MODEL), 0);
+assert.equal(inspectionRoundsForModel(CLAUDE_FABLE_5_MODEL), 0);
+assert.equal(inspectionRoundsForModel(GPT_55_MODEL), 0);
+assert.equal(inspectionRoundsForModel(OPUS_48_MODEL), 0);
 assert.equal(inspectionRoundsForModel('some/unknown'), 0);
 
-assert.equal(outputTokenCapForModel(CLAUDE_FABLE_5_MODEL), 24000);
+assert.equal(outputTokenCapForModel(CLAUDE_FABLE_5_MODEL), 32000);
 assert.equal(outputTokenCapForModel(GEMINI_35_FLASH_MODEL), 32000);
 assert.equal(outputTokenCapForModel(GPT_55_MODEL), 32000);
 assert.equal(outputTokenCapForModel(OPUS_48_MODEL), 32000);
@@ -52,32 +50,48 @@ for (const model of ALL_MODELS) {
   assert.equal(modelSupportsVision(model), true);
 }
 
-// Google-provider models take the google-direct + OpenRouter-fallback pair.
-for (const model of [GEMINI_35_FLASH_MODEL, GEMINI_31_PRO_MODEL]) {
+// The current Google-provider model takes the google-direct + OpenRouter fallback pair.
+assert.deepEqual(getCodeGenerationProviderCandidates(GEMINI_35_FLASH_MODEL), [
+  {
+    provider: 'google',
+    model: GEMINI_35_FLASH_MODEL.slice('google/'.length),
+    usageModel: GEMINI_35_FLASH_MODEL,
+  },
+  {
+    provider: 'openrouter',
+    model: GEMINI_35_FLASH_MODEL,
+    usageModel: GEMINI_35_FLASH_MODEL,
+  },
+]);
+
+// Removed non-google models normalize to the configured CAD model.
+for (const model of [CLAUDE_FABLE_5_MODEL, GPT_55_MODEL, OPUS_48_MODEL]) {
   assert.deepEqual(getCodeGenerationProviderCandidates(model), [
     {
       provider: 'google',
-      model: model.slice('google/'.length),
-      usageModel: model,
+      model: DEFAULT_CODE_GENERATION_MODEL.slice('google/'.length),
+      usageModel: DEFAULT_CODE_GENERATION_MODEL,
     },
-    { provider: 'openrouter', model, usageModel: model },
+    {
+      provider: 'openrouter',
+      model: DEFAULT_CODE_GENERATION_MODEL,
+      usageModel: DEFAULT_CODE_GENERATION_MODEL,
+    },
   ]);
 }
 
-// Non-google models take a single OpenRouter candidate.
-for (const model of [CLAUDE_FABLE_5_MODEL, GPT_55_MODEL, OPUS_48_MODEL]) {
-  assert.deepEqual(getCodeGenerationProviderCandidates(model), [
-    { provider: 'openrouter', model, usageModel: model },
-  ]);
-}
-
-// Unknown / non-roster ids fall back to the default (single OpenRouter Fable).
+// Unknown / non-roster ids fall back to the default CAD model.
 for (const model of ['quality', '', 'deepseek/deepseek-v4-pro']) {
   assert.equal(
     normalizeParametricGenerationModel(model),
     DEFAULT_CODE_GENERATION_MODEL,
   );
   assert.deepEqual(getCodeGenerationProviderCandidates(model), [
+    {
+      provider: 'google',
+      model: DEFAULT_CODE_GENERATION_MODEL.slice('google/'.length),
+      usageModel: DEFAULT_CODE_GENERATION_MODEL,
+    },
     {
       provider: 'openrouter',
       model: DEFAULT_CODE_GENERATION_MODEL,

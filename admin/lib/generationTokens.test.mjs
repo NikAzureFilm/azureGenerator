@@ -15,7 +15,7 @@ assert.equal(
     tokens_used: null,
     prompt: { model: 'google/gemini-3.5-flash' },
   }),
-  15,
+  25,
 );
 assert.equal(
   displayGenerationTokens({
@@ -23,7 +23,7 @@ assert.equal(
     tokens_used: null,
     prompt: { model: 'anthropic/claude-fable-5' },
   }),
-  50,
+  25,
 );
 assert.equal(
   displayGenerationTokens({
@@ -31,7 +31,7 @@ assert.equal(
     tokens_used: null,
     provider_model: 'anthropic/claude-fable-5',
   }),
-  50,
+  25,
 );
 assert.equal(
   displayGenerationTokens({
@@ -39,7 +39,7 @@ assert.equal(
     tokens_used: null,
     prompt: { model: 'legacy-model' },
   }),
-  15,
+  25,
 );
 assert.equal(
   displayGenerationTokens({ kind: 'parametric', tokens_used: null }),

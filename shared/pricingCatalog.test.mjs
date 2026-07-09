@@ -80,8 +80,8 @@ assert.deepEqual(
   {
     chat: 10,
     promptGeneration: 10,
-    parametric: 15,
-    parametricCadReasoning: 50,
+    parametric: 25,
+    parametricCadReasoning: 25,
     generatedInputImage: 22,
     generatedInputImageNormal: 14,
     generatedInputImageLite: 7,
@@ -105,35 +105,33 @@ assert.ok(
   'Max quality mesh should cost more than draft mesh',
 );
 
-// Per-model roster token costs (shared/parametricRouting.ts is the source):
-// flash 15, gemini-pro 30, fable 50, gpt-5.5 60, opus-4.8 90; unknown → 15.
-assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 15);
-assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 30);
-assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 50);
-assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 60);
-assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.8'), 90);
-// Off-roster ids (incl. a different Opus point release) fall back to Lite cost.
-assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 15);
-assert.equal(getParametricModelTokenCost('legacy-model'), 15);
-assert.equal(getParametricBuildTokenCost('google/gemini-3.5-flash'), 15);
-assert.equal(getParametricBuildTokenCost('google/gemini-3.1-pro-preview'), 30);
-assert.equal(getParametricBuildTokenCost('anthropic/claude-fable-5'), 50);
-assert.equal(getParametricBuildTokenCost('openai/gpt-5.5'), 60);
-assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.8'), 90);
-assert.equal(getParametricBuildTokenCost('legacy-model', 25), 15);
-assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 15);
+// The current CAD model and all stale/off-roster ids charge the app-wide CAD cost.
+assert.equal(getParametricModelTokenCost('google/gemini-3.5-flash'), 25);
+assert.equal(getParametricModelTokenCost('google/gemini-3.1-pro-preview'), 25);
+assert.equal(getParametricModelTokenCost('anthropic/claude-fable-5'), 25);
+assert.equal(getParametricModelTokenCost('openai/gpt-5.5'), 25);
+assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.8'), 25);
+assert.equal(getParametricModelTokenCost('anthropic/claude-opus-4.7'), 25);
+assert.equal(getParametricModelTokenCost('legacy-model'), 25);
+assert.equal(getParametricBuildTokenCost('google/gemini-3.5-flash'), 25);
+assert.equal(getParametricBuildTokenCost('google/gemini-3.1-pro-preview'), 25);
+assert.equal(getParametricBuildTokenCost('anthropic/claude-fable-5'), 25);
+assert.equal(getParametricBuildTokenCost('openai/gpt-5.5'), 25);
+assert.equal(getParametricBuildTokenCost('anthropic/claude-opus-4.8'), 25);
+assert.equal(getParametricBuildTokenCost('legacy-model', 25), 25);
+assert.equal(getCadBackendTokenCost('openscad', 'google/gemini-3.5-flash'), 25);
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'google/gemini-3.5-flash'),
-  15,
+  25,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-opus-4.7'),
-  15,
+  25,
 );
 assert.equal(
   getCadBackendTokenCost('text-to-cad', 'anthropic/claude-fable-5'),
-  50,
+  25,
 );
 
-assert.equal(pricingViewSource.includes('parametricCadReasoning'), true);
+assert.equal(pricingViewSource.includes('parametricCadReasoning'), false);
 assert.equal(pricingViewSource.includes('FEATURE_COSTS.upscaleMesh'), false);

@@ -1,10 +1,10 @@
 export const CAD_PREMIUM_MODEL_ID = 'anthropic/claude-fable-5';
 export const CAD_LITE_MODEL_ID = 'google/gemini-3.5-flash';
 
-// Fallback token cost for an unrecognized CAD model id (the Lite tier cost).
+// Fallback token cost for an unrecognized CAD model id.
 // Mirrors CAD_LITE_GENERATION_TOKEN_COST in shared/tokenCosts.ts — the admin app
 // can't import across the deploy boundary, so it's hardcoded here.
-const CAD_UNKNOWN_MODEL_TOKENS = 15;
+const CAD_UNKNOWN_MODEL_TOKENS = 25;
 
 export type CadModelDisplay = {
   id: string;
@@ -14,38 +14,39 @@ export type CadModelDisplay = {
 };
 
 // Hardcoded mirror of shared/parametricRouting.ts PARAMETRIC_MODEL_ROSTER
-// (label/tokenCost) — the admin app can't import shared/, so keep the tier
-// labels and token counts in sync with the roster (that is the source of truth).
+// (label/tokenCost) plus legacy IDs for old generation records. The admin app
+// can't import shared/, so keep current labels and token counts in sync with the
+// shared roster (that is the source of truth).
 const CAD_MODEL_DISPLAYS: Record<string, CadModelDisplay> = {
   [CAD_LITE_MODEL_ID]: {
     id: CAD_LITE_MODEL_ID,
-    tier: 'Lite',
+    tier: 'CAD Model',
     name: 'Gemini 3.5 Flash',
-    tokens: 15,
+    tokens: 25,
   },
   'google/gemini-3.1-pro-preview': {
     id: 'google/gemini-3.1-pro-preview',
-    tier: 'Gemini 3.1 Pro',
+    tier: 'Legacy',
     name: 'Gemini 3.1 Pro',
-    tokens: 30,
+    tokens: 25,
   },
   [CAD_PREMIUM_MODEL_ID]: {
     id: CAD_PREMIUM_MODEL_ID,
-    tier: 'Premium',
+    tier: 'Legacy',
     name: 'Claude Fable 5',
-    tokens: 50,
+    tokens: 25,
   },
   'openai/gpt-5.5': {
     id: 'openai/gpt-5.5',
-    tier: 'GPT-5.5',
+    tier: 'Legacy',
     name: 'GPT-5.5',
-    tokens: 60,
+    tokens: 25,
   },
   'anthropic/claude-opus-4.8': {
     id: 'anthropic/claude-opus-4.8',
-    tier: 'Opus 4.8',
+    tier: 'Legacy',
     name: 'Claude Opus 4.8',
-    tokens: 90,
+    tokens: 25,
   },
 };
 

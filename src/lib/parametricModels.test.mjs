@@ -28,57 +28,23 @@ const modelSelectorSource = readFileSync(
   'utf8',
 );
 
-const premiumModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'anthropic/claude-fable-5',
-);
-const liteModel = PARAMETRIC_MODELS.find(
+const cadModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.5-flash',
 );
 
-assert.equal(DEFAULT_PARAMETRIC_MODEL, 'anthropic/claude-fable-5');
-// The picker now lists the full canonical roster (derived from shared/).
+assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
+// The picker lists only the current CAD model from the canonical roster.
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  [
-    'google/gemini-3.5-flash',
-    'google/gemini-3.1-pro-preview',
-    'anthropic/claude-fable-5',
-    'openai/gpt-5.5',
-    'anthropic/claude-opus-4.8',
-  ],
+  ['google/gemini-3.5-flash'],
 );
-assert.ok(premiumModel);
-assert.equal(premiumModel.name, 'Premium');
-assert.equal(premiumModel.description.includes('Claude'), false);
-assert.equal(premiumModel.description.includes('Fable'), false);
-assert.equal(premiumModel.tokenCost, 50);
-assert.notEqual(premiumModel.disabled, true);
-assert.ok(liteModel);
-assert.equal(liteModel.name, 'Lite');
-assert.equal(liteModel.description.includes('Gemini'), false);
-assert.equal(liteModel.description.includes('Flash'), false);
-assert.equal(liteModel.tokenCost, 15);
-assert.notEqual(liteModel.disabled, true);
-// The 3 added picker models carry their roster labels, token costs, and vision.
-const geminiProModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'google/gemini-3.1-pro-preview',
-);
-const gptModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'openai/gpt-5.5',
-);
-const opusModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'anthropic/claude-opus-4.8',
-);
-assert.ok(geminiProModel);
-assert.equal(geminiProModel.name, 'Gemini 3.1 Pro');
-assert.equal(geminiProModel.tokenCost, 30);
-assert.equal(geminiProModel.supportsVision, true);
-assert.ok(gptModel);
-assert.equal(gptModel.name, 'GPT-5.5');
-assert.equal(gptModel.tokenCost, 60);
-assert.ok(opusModel);
-assert.equal(opusModel.name, 'Opus 4.8');
-assert.equal(opusModel.tokenCost, 90);
+assert.ok(cadModel);
+assert.equal(cadModel.name, 'CAD Model');
+assert.equal(cadModel.description.includes('Gemini'), false);
+assert.equal(cadModel.description.includes('Flash'), false);
+assert.equal(cadModel.tokenCost, 25);
+assert.equal(cadModel.supportsVision, true);
+assert.notEqual(cadModel.disabled, true);
 // Every roster model is a valid picker choice (normalizes to itself).
 for (const model of PARAMETRIC_MODELS) {
   assert.equal(normalizeParametricChatModel(model.id), model.id);
@@ -106,3 +72,4 @@ assert.equal(
   ),
   false,
 );
+assert.equal(modelSelectorSource.includes('{model.name}'), true);
