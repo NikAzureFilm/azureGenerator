@@ -18,6 +18,7 @@ import {
   Box,
   Ruler,
   Sparkles,
+  Check,
 } from 'lucide-react';
 import {
   cn,
@@ -114,6 +115,7 @@ import {
   formatUploadSize,
   getUploadSizeLimitBytes,
 } from '@/utils/uploadLimits';
+import { buildCadSubmitText } from '@/utils/cadPrompt';
 
 interface TextAreaChatProps {
   type: 'parametric' | 'creative';
@@ -179,6 +181,8 @@ function TextAreaChat({
   const [isGeneratingInputImage, setIsGeneratingInputImage] = useState(false);
   const [isImageCreatorOpen, setIsImageCreatorOpen] = useState(false);
   const [imageCreatorPrompt, setImageCreatorPrompt] = useState('');
+  const [includePrintableCadInstruction, setIncludePrintableCadInstruction] =
+    useState(true);
   const [imageCreatorModel, setImageCreatorModel] =
     useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
   const [imageCreatorRef, setImageCreatorRef] = useState<{
@@ -602,8 +606,12 @@ function TextAreaChat({
     ) {
       return;
     }
+    const submitText =
+      type === 'parametric'
+        ? buildCadSubmitText(trimmedInput, includePrintableCadInstruction)
+        : trimmedInput;
     let content: Content = {
-      ...(trimmedInput !== '' && { text: trimmedInput }),
+      ...(submitText !== '' && { text: submitText }),
       ...(images.length > 0 && { images: images.map((img) => img.id) }),
       model: model,
       ...(type === 'creative' && {
@@ -1828,6 +1836,38 @@ function TextAreaChat({
                   </TooltipContent>
                 </Tooltip>
               </div>
+            )}
+
+            {type === 'parametric' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={includePrintableCadInstruction}
+                    className={cn(
+                      'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2 text-xs transition-colors',
+                      includePrintableCadInstruction
+                        ? 'bg-adam-blue/15 text-adam-blue'
+                        : 'bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIncludePrintableCadInstruction((value) => !value);
+                    }}
+                  >
+                    <span className="flex h-4 w-4 items-center justify-center rounded border border-current">
+                      {includePrintableCadInstruction && (
+                        <Check className="h-3 w-3" />
+                      )}
+                    </span>
+                    <span className="hidden sm:inline">3D print</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Add "make it 3d printable" to CAD prompts
+                </TooltipContent>
+              </Tooltip>
             )}
 
             {/* Quads vs Polys toggle button - show for standard and ultra models */}

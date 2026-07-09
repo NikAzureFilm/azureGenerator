@@ -33,7 +33,7 @@ for (const model of ALL_MODELS) {
 }
 
 // Per-model roster-derived helpers.
-assert.equal(inspectionRoundsForModel(GEMINI_35_FLASH_MODEL), 6);
+assert.equal(inspectionRoundsForModel(GEMINI_35_FLASH_MODEL), 1);
 assert.equal(inspectionRoundsForModel(GEMINI_31_PRO_MODEL), 0);
 assert.equal(inspectionRoundsForModel(CLAUDE_FABLE_5_MODEL), 0);
 assert.equal(inspectionRoundsForModel(GPT_55_MODEL), 0);

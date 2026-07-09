@@ -47,7 +47,7 @@ export const PARAMETRIC_MODEL_ROSTER: Record<string, ParametricModelEntry> = {
     priceKey: GEMINI_35_FLASH_MODEL,
     tokenCost: 25,
     supportsVision: true,
-    maxInspectionRounds: 6,
+    maxInspectionRounds: 1,
     outputTokenCap: 32000,
   },
 };
@@ -69,7 +69,7 @@ export function normalizeParametricGenerationModel(model: unknown): string {
 }
 
 // Agentic 7-view inspection rounds for a model (0 = inspection disabled). Drives
-// the loop's maxRounds. All roster models currently run the full 6 rounds.
+// the loop's maxRounds.
 export function inspectionRoundsForModel(model: unknown): number {
   return rosterEntry(model)?.maxInspectionRounds ?? 0;
 }

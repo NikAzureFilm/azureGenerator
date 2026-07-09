@@ -23,7 +23,7 @@ function makeMessage(
 
 const premiumLoop: LoopState = {
   round: 0,
-  maxRounds: 6,
+  maxRounds: 1,
   repairs: 0,
   status: 'awaiting_client',
   tier: 'premium',
@@ -99,7 +99,7 @@ describe('nextLoopAction', () => {
 
   it('stops inspecting once maxRounds is reached', () => {
     expect(
-      nextLoopAction(makeMessage({ ...premiumLoop, round: 6 }), {
+      nextLoopAction(makeMessage({ ...premiumLoop, round: 1 }), {
         compileOk: true,
         isPremium: true,
       }),

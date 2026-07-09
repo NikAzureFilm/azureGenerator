@@ -29,8 +29,8 @@ import {
   truncateError,
 } from './loop.ts';
 
-// Roster model ids (see shared/parametricRouting.ts). All roster models run
-// the full 6-round inspection loop; off-roster ids get 0.
+// Roster model ids (see shared/parametricRouting.ts). The current selectable
+// CAD model runs one inspection loop; off-roster ids get 0 on fresh jobs.
 const FLASH = 'google/gemini-3.5-flash';
 const GEMINI_PRO = 'google/gemini-3.1-pro-preview';
 const FABLE = 'anthropic/claude-fable-5';
@@ -38,18 +38,16 @@ const GPT = 'openai/gpt-5.5';
 const OPUS = 'anthropic/claude-opus-4.8';
 
 test('tierForModel maps roster models to premium, off-roster to lite', () => {
-  // Every roster model now runs the inspection loop, so all map to premium; only
-  // off-roster/unknown ids (0 rounds) are lite.
-  assert.equal(tierForModel(FABLE), 'premium');
-  assert.equal(tierForModel(GEMINI_PRO), 'premium');
-  assert.equal(tierForModel(GPT), 'premium');
-  assert.equal(tierForModel(OPUS), 'premium');
   assert.equal(tierForModel(FLASH), 'premium');
+  assert.equal(tierForModel(FABLE), 'lite');
+  assert.equal(tierForModel(GEMINI_PRO), 'lite');
+  assert.equal(tierForModel(GPT), 'lite');
+  assert.equal(tierForModel(OPUS), 'lite');
   assert.equal(tierForModel('whatever'), 'lite');
 });
 
 test('initialLoopState sets awaiting_client with per-model maxRounds', () => {
-  const premium = initialLoopState(FABLE);
+  const premium = initialLoopState(FLASH);
   assert.deepEqual(premium, {
     round: 0,
     maxRounds: PREMIUM_MAX_ROUNDS,
@@ -57,20 +55,18 @@ test('initialLoopState sets awaiting_client with per-model maxRounds', () => {
     status: 'awaiting_client',
     tier: 'premium',
   });
-  // Flash (Lite token tier) now also runs the full inspection loop.
-  const flash = initialLoopState(FLASH);
-  assert.equal(flash.maxRounds, PREMIUM_MAX_ROUNDS);
-  assert.equal(flash.tier, 'premium');
-  assert.equal(flash.status, 'awaiting_client');
+  const offRoster = initialLoopState(FABLE);
+  assert.equal(offRoster.maxRounds, 0);
+  assert.equal(offRoster.tier, 'lite');
+  assert.equal(offRoster.status, 'awaiting_client');
 });
 
 test('initialLoopState derives inspection rounds from the roster', () => {
-  // All roster models run the full 6-round inspection loop.
-  assert.equal(initialLoopState(FLASH).maxRounds, 6);
-  assert.equal(initialLoopState(GEMINI_PRO).maxRounds, 6);
-  assert.equal(initialLoopState(FABLE).maxRounds, 6);
-  assert.equal(initialLoopState(GPT).maxRounds, 6);
-  assert.equal(initialLoopState(OPUS).maxRounds, 6);
+  assert.equal(initialLoopState(FLASH).maxRounds, 1);
+  assert.equal(initialLoopState(GEMINI_PRO).maxRounds, 0);
+  assert.equal(initialLoopState(FABLE).maxRounds, 0);
+  assert.equal(initialLoopState(GPT).maxRounds, 0);
+  assert.equal(initialLoopState(OPUS).maxRounds, 0);
   // Unknown/off-roster ids get no inspection (lite tier).
   assert.equal(initialLoopState('some/unknown-model').maxRounds, 0);
   assert.equal(initialLoopState('some/unknown-model').tier, 'lite');
@@ -78,7 +74,10 @@ test('initialLoopState derives inspection rounds from the roster', () => {
 
 test('finalizeLoop produces a terminal status', () => {
   assert.equal(finalizeLoop(initialLoopState(FABLE)).status, 'final');
-  assert.equal(finalizeLoop(initialLoopState(FLASH), 'failed').status, 'failed');
+  assert.equal(
+    finalizeLoop(initialLoopState(FLASH), 'failed').status,
+    'failed',
+  );
 });
 
 test('COST_CEILING_USD is $0.60', () => {
@@ -110,42 +109,37 @@ test('decideContinuation rejects inspection when rounds are disabled (off-roster
   assert.equal(d.httpStatus, 200);
 });
 
-test('decideContinuation inspects for every vision model under maxRounds', () => {
-  for (const model of [FLASH, GEMINI_PRO, FABLE, GPT, OPUS]) {
-    const d = decideContinuation(
-      initialLoopState(model),
-      { type: 'inspection', imagePath: 'p' },
-      0,
-    );
-    assert.deepEqual(d, { action: 'inspect' }, `model ${model} should inspect`);
-  }
+test('decideContinuation inspects the roster model under maxRounds', () => {
+  const d = decideContinuation(
+    initialLoopState(FLASH),
+    { type: 'inspection', imagePath: 'p' },
+    0,
+  );
+  assert.deepEqual(d, { action: 'inspect' });
 });
 
-test('decideContinuation finalizes each model once its maxRounds is reached', () => {
-  const rounds = 6;
-  for (const model of [FLASH, GEMINI_PRO, FABLE, GPT, OPUS]) {
-    const loop = { ...initialLoopState(model), round: rounds };
-    const d = decideContinuation(
-      loop,
-      { type: 'inspection', imagePath: 'p' },
-      rounds,
-    );
-    assert.equal(d.action, 'reject', `model ${model}`);
-    assert.equal(d.reason, 'rounds_exhausted', `model ${model}`);
-    assert.equal(d.finalize, true, `model ${model}`);
-  }
+test('decideContinuation finalizes the roster model once maxRounds is reached', () => {
+  const rounds = PREMIUM_MAX_ROUNDS;
+  const loop = { ...initialLoopState(FLASH), round: rounds };
+  const d = decideContinuation(
+    loop,
+    { type: 'inspection', imagePath: 'p' },
+    rounds,
+  );
+  assert.equal(d.action, 'reject');
+  assert.equal(d.reason, 'rounds_exhausted');
+  assert.equal(d.finalize, true);
 });
 
-test('decideContinuation inspects up to the final (6th) round only', () => {
-  // Round 5 (< 6) still inspects; round 6 (== maxRounds) finalizes.
-  const under = { ...initialLoopState(GEMINI_PRO), round: 5 };
+test('decideContinuation inspects round 0 and finalizes at round 1', () => {
+  const under = { ...initialLoopState(FLASH), round: 0 };
   assert.deepEqual(
-    decideContinuation(under, { type: 'inspection', imagePath: 'p' }, 5),
+    decideContinuation(under, { type: 'inspection', imagePath: 'p' }, 0),
     { action: 'inspect' },
   );
-  const at = { ...initialLoopState(GEMINI_PRO), round: 6 };
+  const at = { ...initialLoopState(FLASH), round: 1 };
   assert.equal(
-    decideContinuation(at, { type: 'inspection', imagePath: 'p' }, 6).reason,
+    decideContinuation(at, { type: 'inspection', imagePath: 'p' }, 1).reason,
     'rounds_exhausted',
   );
 });
@@ -272,7 +266,10 @@ test('parseSelfInspectionReply: a looks_good Customizer param is code, not appro
     'looks_good = true; // [false,true]\ncube([10, 10, 2]);',
   );
   assert.equal(r.kind, 'code');
-  assert.equal(r.code, 'looks_good = true; // [false,true]\ncube([10, 10, 2]);');
+  assert.equal(
+    r.code,
+    'looks_good = true; // [false,true]\ncube([10, 10, 2]);',
+  );
 });
 
 test('parseSelfInspectionReply: LOOKS_GOOD inside a mid-file comment is code', () => {
@@ -347,8 +344,14 @@ test('isSelfInspectionSentinelLead holds a possible LOOKS_GOOD lead, streams a r
   );
   // A rebuild that provably isn't the sentinel streams normally.
   assert.equal(isSelfInspectionSentinelLead('width = 10;'), false);
-  assert.equal(isSelfInspectionSentinelLead('linear_extrude(2) square(5);'), false);
-  assert.equal(isSelfInspectionSentinelLead('// corrected model\ncube(10);'), false);
+  assert.equal(
+    isSelfInspectionSentinelLead('linear_extrude(2) square(5);'),
+    false,
+  );
+  assert.equal(
+    isSelfInspectionSentinelLead('// corrected model\ncube(10);'),
+    false,
+  );
 });
 
 // --- Authoritative-state helpers (fix round) ----------------------------
@@ -378,21 +381,18 @@ test('loopStateFromRow derives maxRounds from tier', () => {
 
 test('loopStateFromRow ignores a forged passed model when row.model is set', () => {
   // SECURITY: continuations derive per-model behavior from the persisted,
-  // service-role row.model, never the client-writable content.model. All roster
-  // models now run 6 rounds, so rounds can't be escalated by a forged
-  // content.model at all; and in the handler the reviewer/code-gen model is
-  // routed off this same authoritative model. Here: with row.model set, the
-  // passed (client-derived) model does not change the derived maxRounds.
+  // service-role row.model, never the client-writable content.model. Here: with
+  // row.model set, the passed (client-derived) model does not change maxRounds.
   const row = {
     round: 0,
     repairs: 0,
     status: 'awaiting_client',
     tier: 'premium',
-    model: FABLE,
+    model: FLASH,
   };
-  assert.equal(loopStateFromRow(row, OPUS).maxRounds, 6);
-  assert.equal(loopStateFromRow(row, FLASH).maxRounds, 6);
-  assert.equal(loopStateFromRow(row, 'forged/garbage').maxRounds, 6);
+  assert.equal(loopStateFromRow(row, OPUS).maxRounds, 1);
+  assert.equal(loopStateFromRow(row, FLASH).maxRounds, 1);
+  assert.equal(loopStateFromRow(row, 'forged/garbage').maxRounds, 1);
 });
 
 test('loopStateFromRow falls back to the passed model when row.model is null', () => {
@@ -405,29 +405,31 @@ test('loopStateFromRow falls back to the passed model when row.model is null', (
     tier: 'premium',
     model: null,
   };
-  assert.equal(loopStateFromRow(row, GEMINI_PRO).maxRounds, 6);
-  assert.equal(loopStateFromRow(row, FABLE).maxRounds, 6);
+  assert.equal(loopStateFromRow(row, GEMINI_PRO).maxRounds, 1);
+  assert.equal(loopStateFromRow(row, FABLE).maxRounds, 1);
   // No model at all (null column + no passed model) → stored-tier fallback.
-  assert.equal(loopStateFromRow(row).maxRounds, 6);
-  assert.equal(
-    loopStateFromRow({ ...row, tier: 'lite' }).maxRounds,
-    0,
-  );
+  assert.equal(loopStateFromRow(row).maxRounds, 1);
+  assert.equal(loopStateFromRow({ ...row, tier: 'lite' }).maxRounds, 0);
 });
 
 test('loopStateFromRow derives maxRounds from the model, tier only as no-model fallback', () => {
-  // The per-model roster count is used whenever a model is present (all roster
-  // models = 6), overriding the stored tier. The tier is consulted only when no
-  // model is available at all (legacy/pre-migration rows).
-  const liteTierRow = { round: 1, repairs: 0, status: 'awaiting_client', tier: 'lite' };
-  // A present model overrides the stored 'lite' tier → 6.
-  assert.equal(loopStateFromRow(liteTierRow, FABLE).maxRounds, 6);
-  assert.equal(loopStateFromRow(liteTierRow, OPUS).maxRounds, 6);
+  // The normalized per-model roster count is used whenever a model is present,
+  // overriding the stored tier. The tier is consulted only when no model is
+  // available at all (legacy/pre-migration rows).
+  const liteTierRow = {
+    round: 1,
+    repairs: 0,
+    status: 'awaiting_client',
+    tier: 'lite',
+  };
+  // A present model overrides the stored 'lite' tier to the current roster max.
+  assert.equal(loopStateFromRow(liteTierRow, FABLE).maxRounds, 1);
+  assert.equal(loopStateFromRow(liteTierRow, OPUS).maxRounds, 1);
   // No model at all → the stored tier decides.
   assert.equal(loopStateFromRow(liteTierRow).maxRounds, 0);
   assert.equal(
     loopStateFromRow({ ...liteTierRow, tier: 'premium' }).maxRounds,
-    6,
+    1,
   );
 });
 

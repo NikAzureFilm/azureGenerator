@@ -17,8 +17,8 @@ import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 
 // Shared compile-error repair cap (both tiers).
 export const MAX_REPAIRS = 2;
-// Inspection rounds available to premium only.
-export const PREMIUM_MAX_ROUNDS = 6;
+// Legacy fallback inspection rounds available to premium rows without a model.
+export const PREMIUM_MAX_ROUNDS = 1;
 // Hard true-cost ceiling per generation, enforced from the authoritative
 // parametric_loop_state.spent_usd row (with the provider_usage sum kept as a
 // secondary check). Crossing it finalizes the loop with the current artifact.
