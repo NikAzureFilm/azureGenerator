@@ -12,6 +12,7 @@ const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 assert.equal(isGeminiCodeGenerationModel('google/gemini-3.5-flash'), true);
 assert.equal(isGeminiCodeGenerationModel('anthropic/claude-fable-5'), false);
 assert.equal(isGeminiCodeGenerationModel('openai/gpt-5.5'), false);
+assert.equal(isGeminiCodeGenerationModel('openai/gpt-5.6-sol'), false);
 
 assert.match(
   source,
@@ -58,6 +59,7 @@ assert.match(
 assert.equal(outputTokenCapForModel('google/gemini-3.5-flash'), 32000);
 assert.equal(outputTokenCapForModel('google/gemini-3.1-pro-preview'), 32000);
 assert.equal(outputTokenCapForModel('openai/gpt-5.5'), 32000);
+assert.equal(outputTokenCapForModel('openai/gpt-5.6-sol'), 32000);
 assert.equal(outputTokenCapForModel('anthropic/claude-opus-4.8'), 32000);
 assert.equal(outputTokenCapForModel('anthropic/claude-fable-5'), 32000);
 assert.match(

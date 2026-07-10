@@ -34,14 +34,14 @@ import {
 const FLASH = 'google/gemini-3.5-flash';
 const GEMINI_PRO = 'google/gemini-3.1-pro-preview';
 const FABLE = 'anthropic/claude-fable-5';
-const GPT = 'openai/gpt-5.5';
+const GPT = 'openai/gpt-5.6-sol';
 const OPUS = 'anthropic/claude-opus-4.8';
 
 test('tierForModel maps roster models to premium, off-roster to lite', () => {
   assert.equal(tierForModel(FLASH), 'premium');
   assert.equal(tierForModel(FABLE), 'lite');
   assert.equal(tierForModel(GEMINI_PRO), 'lite');
-  assert.equal(tierForModel(GPT), 'lite');
+  assert.equal(tierForModel(GPT), 'premium');
   assert.equal(tierForModel(OPUS), 'lite');
   assert.equal(tierForModel('whatever'), 'lite');
 });
@@ -65,7 +65,7 @@ test('initialLoopState derives inspection rounds from the roster', () => {
   assert.equal(initialLoopState(FLASH).maxRounds, 1);
   assert.equal(initialLoopState(GEMINI_PRO).maxRounds, 0);
   assert.equal(initialLoopState(FABLE).maxRounds, 0);
-  assert.equal(initialLoopState(GPT).maxRounds, 0);
+  assert.equal(initialLoopState(GPT).maxRounds, 1);
   assert.equal(initialLoopState(OPUS).maxRounds, 0);
   // Unknown/off-roster ids get no inspection (lite tier).
   assert.equal(initialLoopState('some/unknown-model').maxRounds, 0);
@@ -521,6 +521,8 @@ test('maxAffordableOutputTokens scales output cap with remaining budget', () => 
     maxAffordableOutputTokens('google/gemini-3.5-flash', 0.6),
     53333,
   );
+  // GPT-5.6 Sol: $30/M out -> floor(0.60/30 * 1e6 * 0.8) = 16000.
+  assert.equal(maxAffordableOutputTokens(GPT, 0.6), 16000);
 });
 
 test('maxAffordableOutputTokens returns 0 when nothing is left', () => {

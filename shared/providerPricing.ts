@@ -52,6 +52,12 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   'anthropic/claude-opus-4.8': { inputPerM: 5, outputPerM: 25 },
   // prompt-generator + code-gen fallback — verified $5 / $30.
   'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
+  // CAD Premium via OpenRouter, aligned with the CADAM reference catalog.
+  'openai/gpt-5.6-sol': {
+    inputPerM: 5,
+    outputPerM: 30,
+    cachedInputPerM: 0.5,
+  },
   // prompt-generator fallback (Haiku-class; estimate).
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
 };

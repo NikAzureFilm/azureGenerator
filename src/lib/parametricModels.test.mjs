@@ -31,12 +31,15 @@ const modelSelectorSource = readFileSync(
 const cadModel = PARAMETRIC_MODELS.find(
   (model) => model.id === 'google/gemini-3.5-flash',
 );
+const cadPremium = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'openai/gpt-5.6-sol',
+);
 
 assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
-// The picker lists only the current CAD model from the canonical roster.
+// The picker lists both current CAD tiers from the canonical roster.
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.5-flash'],
+  ['google/gemini-3.5-flash', 'openai/gpt-5.6-sol'],
 );
 assert.ok(cadModel);
 assert.equal(cadModel.name, 'CAD Model');
@@ -45,6 +48,12 @@ assert.equal(cadModel.description.includes('Flash'), false);
 assert.equal(cadModel.tokenCost, 25);
 assert.equal(cadModel.supportsVision, true);
 assert.notEqual(cadModel.disabled, true);
+assert.ok(cadPremium);
+assert.equal(cadPremium.name, 'CAD Premium');
+assert.equal(cadPremium.provider, 'OpenAI');
+assert.equal(cadPremium.tokenCost, 25);
+assert.equal(cadPremium.supportsVision, true);
+assert.notEqual(cadPremium.disabled, true);
 // Every roster model is a valid picker choice (normalizes to itself).
 for (const model of PARAMETRIC_MODELS) {
   assert.equal(normalizeParametricChatModel(model.id), model.id);

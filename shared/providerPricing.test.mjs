@@ -29,6 +29,12 @@ assert.equal(
   llmCostUsd('google/gemini-3.1-pro-preview', 1_000_000, 1_000_000),
   11.25,
 );
+assert.deepEqual(LLM_PRICES['openai/gpt-5.6-sol'], {
+  inputPerM: 5,
+  outputPerM: 30,
+  cachedInputPerM: 0.5,
+});
+assert.equal(llmCostUsd('openai/gpt-5.6-sol', 1_000_000, 1_000_000), 35);
 
 assert.deepEqual(OPENAI_IMAGE_PRICES, {
   low: 0.006,

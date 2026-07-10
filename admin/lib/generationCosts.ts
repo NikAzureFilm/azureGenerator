@@ -115,6 +115,7 @@ export function classifyGenerationTier(
     id.includes('fable') ||
     id.includes('gemini-3.1-pro') ||
     id.includes('gpt-5.5') ||
+    id.includes('gpt-5.6-sol') ||
     id.includes('opus-4.8')
   )
     return 'premium';

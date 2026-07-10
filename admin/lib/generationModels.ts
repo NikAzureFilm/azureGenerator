@@ -1,4 +1,4 @@
-export const CAD_PREMIUM_MODEL_ID = 'anthropic/claude-fable-5';
+export const CAD_PREMIUM_MODEL_ID = 'openai/gpt-5.6-sol';
 export const CAD_LITE_MODEL_ID = 'google/gemini-3.5-flash';
 
 // Fallback token cost for an unrecognized CAD model id.
@@ -32,6 +32,12 @@ const CAD_MODEL_DISPLAYS: Record<string, CadModelDisplay> = {
   },
   [CAD_PREMIUM_MODEL_ID]: {
     id: CAD_PREMIUM_MODEL_ID,
+    tier: 'CAD Premium',
+    name: 'GPT-5.6 Sol',
+    tokens: 25,
+  },
+  'anthropic/claude-fable-5': {
+    id: 'anthropic/claude-fable-5',
     tier: 'Legacy',
     name: 'Claude Fable 5',
     tokens: 25,

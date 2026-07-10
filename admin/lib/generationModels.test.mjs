@@ -10,13 +10,14 @@ import {
 import {
   CLAUDE_FABLE_5_MODEL,
   GEMINI_35_FLASH_MODEL,
+  GPT_56_SOL_MODEL,
 } from '../../shared/parametricRouting.ts';
 import {
   CAD_LITE_GENERATION_TOKEN_COST,
   CAD_PREMIUM_GENERATION_TOKEN_COST,
 } from '../../shared/tokenCosts.ts';
 
-assert.equal(CAD_PREMIUM_MODEL_ID, CLAUDE_FABLE_5_MODEL);
+assert.equal(CAD_PREMIUM_MODEL_ID, GPT_56_SOL_MODEL);
 assert.equal(CAD_LITE_MODEL_ID, GEMINI_35_FLASH_MODEL);
 assert.equal(
   cadTokensForModel(CAD_PREMIUM_MODEL_ID),
@@ -31,6 +32,10 @@ assert.equal(cadTokensForModel(undefined), null);
 
 assert.equal(
   cadModelDisplayText(CAD_PREMIUM_MODEL_ID),
+  'CAD Premium / GPT-5.6 Sol',
+);
+assert.equal(
+  cadModelDisplayText(CLAUDE_FABLE_5_MODEL),
   'Legacy / Claude Fable 5',
 );
 assert.equal(

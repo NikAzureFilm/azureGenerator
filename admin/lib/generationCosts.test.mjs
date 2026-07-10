@@ -6,10 +6,7 @@ import {
   percentile,
   summarizeGenerationCosts,
 } from './generationCosts.ts';
-import {
-  CAD_LITE_MODEL_ID,
-  CAD_PREMIUM_MODEL_ID,
-} from './generationModels.ts';
+import { CAD_LITE_MODEL_ID, CAD_PREMIUM_MODEL_ID } from './generationModels.ts';
 
 // --- chunk ------------------------------------------------------------------
 assert.deepEqual(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
@@ -17,7 +14,13 @@ assert.deepEqual(chunk([], 100), []);
 assert.deepEqual(chunk([1, 2, 3], 100), [[1, 2, 3]]);
 assert.deepEqual(chunk([1, 2, 3], 0), [[1, 2, 3]]);
 // A page of 250 ids batches into three .in() queries of <=100.
-assert.equal(chunk(Array.from({ length: 250 }, (_, i) => i), 100).length, 3);
+assert.equal(
+  chunk(
+    Array.from({ length: 250 }, (_, i) => i),
+    100,
+  ).length,
+  3,
+);
 
 // --- formatGenerationMargin -------------------------------------------------
 assert.deepEqual(formatGenerationMargin(0.23, 50), {
@@ -50,6 +53,7 @@ assert.equal(
   'premium',
 );
 assert.equal(classifyGenerationTier('openai/gpt-5.5'), 'premium');
+assert.equal(classifyGenerationTier('openai/gpt-5.6-sol'), 'premium');
 assert.equal(classifyGenerationTier('anthropic/claude-opus-4.8'), 'premium');
 assert.equal(classifyGenerationTier('some-other-model'), 'other');
 assert.equal(classifyGenerationTier(null), 'other');

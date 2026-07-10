@@ -23,6 +23,11 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
   'anthropic/claude-fable-5': { inputPerM: 10, outputPerM: 50 },
   'anthropic/claude-opus-4.8': { inputPerM: 5, outputPerM: 25 },
   'openai/gpt-5.5': { inputPerM: 5, outputPerM: 30 },
+  'openai/gpt-5.6-sol': {
+    inputPerM: 5,
+    outputPerM: 30,
+    cachedInputPerM: 0.5,
+  },
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
 };
 

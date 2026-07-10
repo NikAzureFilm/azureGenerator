@@ -452,7 +452,7 @@ function openRouterHeaders(): Record<string, string> {
 }
 
 function getOpenRouterFallbackModel(model: string): string | null {
-  // NOTE: gpt-5.5 deliberately has NO fallback. It's now a user-SELECTED premium
+  // NOTE: GPT-5.6 Sol deliberately has NO fallback. It's a user-selected premium
   // CAD model, so silently downgrading it to a weaker model (it used to fall back
   // to Haiku) would defeat the selection and mis-attribute the result/cost. A
   // transient OpenRouter failure surfaces instead; the agentic loop tolerates a
