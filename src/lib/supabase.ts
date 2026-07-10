@@ -1,10 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { Database } from '@shared/database';
+import { normalizeViteEnv } from './viteEnv';
 
-// Trim to guard against copy-pasted env vars with a trailing newline,
-// which otherwise leaks into Realtime URLs as %0A and breaks the WS handshake.
-const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const rawSupabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+// Normalize both real and escaped trailing newlines. A literal `\n` in the URL
+// becomes `/n` in the browser and sends Auth requests to the wrong endpoint.
+const rawSupabaseUrl = normalizeViteEnv(import.meta.env.VITE_SUPABASE_URL);
+const rawSupabaseKey = normalizeViteEnv(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 // Flag used by the UI to show a helpful message instead of crashing
 export const isSupabaseConfigMissing = !rawSupabaseUrl || !rawSupabaseKey;

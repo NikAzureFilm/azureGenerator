@@ -5,6 +5,7 @@ import { StrictMode, startTransition } from 'react';
 import { hydrateRoot } from 'react-dom/client';
 
 import { getRouter } from './router';
+import { normalizeViteEnv } from './lib/viteEnv';
 
 function getSentryTracesSampleRate() {
   const configuredRate = import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE;
@@ -24,7 +25,8 @@ let hydrationPromise: Promise<typeof router> | undefined;
 
 Sentry.init({
   dsn: import.meta.env.VITE_SENTRY_DSN ?? '',
-  environment: import.meta.env.VITE_SENTRY_ENVIRONMENT ?? 'local',
+  environment:
+    normalizeViteEnv(import.meta.env.VITE_SENTRY_ENVIRONMENT) ?? 'local',
   integrations: [Sentry.tanstackRouterBrowserTracingIntegration(router)],
   tracesSampleRate: getSentryTracesSampleRate(),
 });
