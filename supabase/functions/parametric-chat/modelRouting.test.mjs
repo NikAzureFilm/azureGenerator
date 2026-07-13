@@ -84,7 +84,7 @@ assert.match(
 );
 assert.match(
   source,
-  /reasoningEffort === 'high' \|\| usesHighEffortReasoning\(codeModel\)/,
+  /reasoningEffort === 'high' \|\|\s+usesHighEffortReasoning\(codeModel\)/,
   'GPT-5.6 Sol continuation code generation should always run at high hidden reasoning',
 );
 assert.match(
