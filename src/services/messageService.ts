@@ -623,6 +623,7 @@ export function useSendContentMutation({
     'id' | 'user_id' | 'settings' | 'current_message_leaf_id' | 'type'
   >;
 }) {
+  const queryClient = useQueryClient();
   const { mutateAsync: insertMessageAsync } = useInsertMessageMutation();
   const { mutateAsync: sendToCreativeChat } = useCreativeChatMutation({
     conversationId: conversation.id,
@@ -730,6 +731,9 @@ export function useSendContentMutation({
           conversationId: conversation.id,
         });
       }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['billing', 'status'] });
     },
   });
 }
