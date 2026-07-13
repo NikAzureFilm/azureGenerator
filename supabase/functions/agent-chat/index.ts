@@ -26,11 +26,20 @@ import {
 import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
 
-// Design-agent chat model: GPT-5.6 Terra via OpenRouter at medium reasoning
-// effort — balanced capability/cost for the conversational ideation loop.
+// Design-agent chat model: GPT-5.6 Terra via OpenRouter. Reasoning effort
+// defaults to 'low': measured 2026-07-13, 'medium' on this model was served
+// at ~40-60s to first visible token (58s total for a 71-token turn) vs ~3.5s
+// total at 'low', with identical tool behavior. Flip back via the
+// AGENT_CHAT_REASONING_EFFORT secret if the provider speeds up.
 const AGENT_MODEL = 'openai/gpt-5.6-terra';
-const AGENT_REASONING_EFFORT = 'medium';
+const AGENT_REASONING_EFFORT =
+  Deno.env.get('AGENT_CHAT_REASONING_EFFORT')?.trim() || 'low';
 const AGENT_MAX_TOKENS = 16000;
+
+// Hard ceiling per Terra round (fetch + stream). Without it a stalled
+// provider stream leaves the message empty and the client spinner infinite
+// until the isolate is reaped.
+const ROUND_DEADLINE_MS = 120_000;
 
 // web_search sub-calls run on a cheap fast model with OpenRouter's
 // model-agnostic web plugin (Exa) — no extra API keys needed.
@@ -961,23 +970,6 @@ Deno.serve(async (req) => {
               hasKey: !!OPENROUTER_API_KEY,
             });
 
-            const response = await fetch(OPENROUTER_API_URL, {
-              method: 'POST',
-              headers: openRouterHeaders(),
-              body: JSON.stringify(requestBody),
-              signal: abortSignal,
-            });
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              console.error(
-                `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
-              );
-              throw new Error(
-                `OpenRouter API error: ${response.statusText} (${response.status})`,
-              );
-            }
-
             const pendingToolCalls = new Map<
               number,
               { id: string; name: string; arguments: string }
@@ -987,153 +979,186 @@ Deno.serve(async (req) => {
             let roundText = '';
             let addedRoundSeparator = false;
 
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
+            // Deadline for this round's fetch + stream read: a stalled
+            // provider stream must surface as an error instead of an
+            // infinite client spinner.
+            const roundAbort = new AbortController();
+            const roundTimer = setTimeout(
+              () => roundAbort.abort(new Error('agent round timeout')),
+              ROUND_DEADLINE_MS,
+            );
+            const onOuterAbort = () => roundAbort.abort();
+            abortSignal.addEventListener('abort', onOuterAbort);
 
-            if (!reader) {
-              throw new Error('No response body');
-            }
+            try {
+              const response = await fetch(OPENROUTER_API_URL, {
+                method: 'POST',
+                headers: openRouterHeaders(),
+                body: JSON.stringify(requestBody),
+                signal: roundAbort.signal,
+              });
 
-            while (true) {
-              if (abortSignal.aborted) {
-                throw new Error('Request cancelled by user');
+              if (!response.ok) {
+                const errorText = await response.text();
+                console.error(
+                  `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
+                );
+                throw new Error(
+                  `OpenRouter API error: ${response.statusText} (${response.status})`,
+                );
               }
 
-              const { done, value } = await reader.read();
-              if (done) break;
+              const reader = response.body?.getReader();
+              const decoder = new TextDecoder();
+              let buffer = '';
 
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
+              if (!reader) {
+                throw new Error('No response body');
+              }
 
-              for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                const data = line.slice(6);
-                if (data === '[DONE]') continue;
+              while (true) {
+                if (abortSignal.aborted) {
+                  throw new Error('Request cancelled by user');
+                }
 
-                let chunk: {
-                  error?: { message?: string };
-                  model?: string;
-                  usage?: {
-                    prompt_tokens?: number;
-                    completion_tokens?: number;
-                    cost?: number;
-                  };
-                  choices?: Array<{
-                    delta?: {
-                      content?: string;
-                      reasoning?: string;
-                      tool_calls?: Array<{
-                        index?: number;
-                        id?: string;
-                        function?: { name?: string; arguments?: string };
-                      }>;
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                  if (!line.startsWith('data: ')) continue;
+                  const data = line.slice(6);
+                  if (data === '[DONE]') continue;
+
+                  let chunk: {
+                    error?: { message?: string };
+                    model?: string;
+                    usage?: {
+                      prompt_tokens?: number;
+                      completion_tokens?: number;
+                      cost?: number;
                     };
-                    finish_reason?: string;
-                  }>;
-                };
-                try {
-                  chunk = JSON.parse(data);
-                } catch (e) {
-                  // Malformed chunk — log and skip, don't abort the stream.
-                  console.error('Error parsing SSE chunk:', e);
-                  continue;
-                }
-
-                if (chunk.error) {
-                  console.error('OpenRouter stream error:', chunk.error);
-                  throw new Error(
-                    chunk.error.message ||
-                      `OpenRouter error: ${JSON.stringify(chunk.error)}`,
-                  );
-                }
-
-                if (typeof chunk.model === 'string' && chunk.model) {
-                  servedModel = chunk.model;
-                }
-
-                if (chunk.usage) {
-                  EdgeRuntime.waitUntil(
-                    logLlmUsage({
-                      functionName: 'agent-chat',
-                      operation: 'chat',
-                      provider: 'openrouter',
-                      model: servedModel,
-                      userId: userData.user?.id,
-                      conversationId,
-                      referenceId: newMessageId,
-                      inputTokens: chunk.usage.prompt_tokens ?? 0,
-                      outputTokens: chunk.usage.completion_tokens ?? 0,
-                      costUsdOverride:
-                        typeof chunk.usage.cost === 'number'
-                          ? chunk.usage.cost
-                          : undefined,
-                    }),
-                  );
-                }
-
-                const delta = chunk.choices?.[0]?.delta;
-                if (!delta) continue;
-
-                if (delta.content) {
-                  // Separate the text of a post-web-search round from the
-                  // text streamed before the search.
-                  if (
-                    !addedRoundSeparator &&
-                    round > 0 &&
-                    content.text &&
-                    !content.text.endsWith('\n\n')
-                  ) {
-                    content = { ...content, text: content.text + '\n\n' };
-                  }
-                  addedRoundSeparator = true;
-                  roundText += delta.content;
-                  content = {
-                    ...content,
-                    text: (content.text || '') + delta.content,
-                  };
-                  streamMessage(controller, { ...newMessageData, content });
-                }
-
-                // delta.reasoning is consumed silently; internal reasoning
-                // tokens are never surfaced in the message.
-
-                if (delta.tool_calls) {
-                  for (const toolCall of delta.tool_calls) {
-                    const index = toolCall.index ?? lastToolCallIndex;
-                    if (toolCall.id) {
-                      lastToolCallIndex = index;
-                      pendingToolCalls.set(index, {
-                        id: toolCall.id,
-                        name: toolCall.function?.name || '',
-                        arguments: toolCall.function?.arguments ?? '',
-                      });
-                      content = {
-                        ...content,
-                        toolCalls: [
-                          ...(content.toolCalls || []),
-                          {
-                            name: toolCall.function?.name || '',
-                            id: toolCall.id,
-                            status: 'pending',
-                          },
-                        ],
+                    choices?: Array<{
+                      delta?: {
+                        content?: string;
+                        reasoning?: string;
+                        tool_calls?: Array<{
+                          index?: number;
+                          id?: string;
+                          function?: { name?: string; arguments?: string };
+                        }>;
                       };
-                      streamMessage(controller, {
-                        ...newMessageData,
-                        content,
-                      });
-                      await persistContent(content);
-                    } else if (toolCall.function?.arguments) {
-                      const pending = pendingToolCalls.get(index);
-                      if (pending) {
-                        pending.arguments += toolCall.function.arguments;
+                      finish_reason?: string;
+                    }>;
+                  };
+                  try {
+                    chunk = JSON.parse(data);
+                  } catch (e) {
+                    // Malformed chunk — log and skip, don't abort the stream.
+                    console.error('Error parsing SSE chunk:', e);
+                    continue;
+                  }
+
+                  if (chunk.error) {
+                    console.error('OpenRouter stream error:', chunk.error);
+                    throw new Error(
+                      chunk.error.message ||
+                        `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                    );
+                  }
+
+                  if (typeof chunk.model === 'string' && chunk.model) {
+                    servedModel = chunk.model;
+                  }
+
+                  if (chunk.usage) {
+                    EdgeRuntime.waitUntil(
+                      logLlmUsage({
+                        functionName: 'agent-chat',
+                        operation: 'chat',
+                        provider: 'openrouter',
+                        model: servedModel,
+                        userId: userData.user?.id,
+                        conversationId,
+                        referenceId: newMessageId,
+                        inputTokens: chunk.usage.prompt_tokens ?? 0,
+                        outputTokens: chunk.usage.completion_tokens ?? 0,
+                        costUsdOverride:
+                          typeof chunk.usage.cost === 'number'
+                            ? chunk.usage.cost
+                            : undefined,
+                      }),
+                    );
+                  }
+
+                  const delta = chunk.choices?.[0]?.delta;
+                  if (!delta) continue;
+
+                  if (delta.content) {
+                    // Separate the text of a post-web-search round from the
+                    // text streamed before the search.
+                    if (
+                      !addedRoundSeparator &&
+                      round > 0 &&
+                      content.text &&
+                      !content.text.endsWith('\n\n')
+                    ) {
+                      content = { ...content, text: content.text + '\n\n' };
+                    }
+                    addedRoundSeparator = true;
+                    roundText += delta.content;
+                    content = {
+                      ...content,
+                      text: (content.text || '') + delta.content,
+                    };
+                    streamMessage(controller, { ...newMessageData, content });
+                  }
+
+                  // delta.reasoning is consumed silently; internal reasoning
+                  // tokens are never surfaced in the message.
+
+                  if (delta.tool_calls) {
+                    for (const toolCall of delta.tool_calls) {
+                      const index = toolCall.index ?? lastToolCallIndex;
+                      if (toolCall.id) {
+                        lastToolCallIndex = index;
+                        pendingToolCalls.set(index, {
+                          id: toolCall.id,
+                          name: toolCall.function?.name || '',
+                          arguments: toolCall.function?.arguments ?? '',
+                        });
+                        content = {
+                          ...content,
+                          toolCalls: [
+                            ...(content.toolCalls || []),
+                            {
+                              name: toolCall.function?.name || '',
+                              id: toolCall.id,
+                              status: 'pending',
+                            },
+                          ],
+                        };
+                        streamMessage(controller, {
+                          ...newMessageData,
+                          content,
+                        });
+                        await persistContent(content);
+                      } else if (toolCall.function?.arguments) {
+                        const pending = pendingToolCalls.get(index);
+                        if (pending) {
+                          pending.arguments += toolCall.function.arguments;
+                        }
                       }
                     }
                   }
                 }
               }
+            } finally {
+              clearTimeout(roundTimer);
+              abortSignal.removeEventListener('abort', onOuterAbort);
             }
 
             if (pendingToolCalls.size === 0) {

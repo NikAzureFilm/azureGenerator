@@ -164,12 +164,15 @@ export function AssistantMessage({
     [message.content.text],
   );
   const visibleToolCalls = message.content.toolCalls ?? [];
+  const isAgentConversation = conversation.settings?.mode === 'agent';
   const showRestoredCreativeLoading =
     conversation.type === 'creative' &&
     isAssistantGenerationInFlight(message) &&
     !message.content.text &&
     !message.content.mesh &&
     !message.content.artifact &&
+    !message.content.question &&
+    !message.content.recommendation &&
     (!message.content.images || message.content.images.length === 0) &&
     visibleToolCalls.length === 0;
 
@@ -235,8 +238,16 @@ export function AssistantMessage({
               {showRestoredCreativeLoading && (
                 <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
                   <div className="flex h-full items-center justify-center gap-2">
-                    <Box className="h-4 w-4 text-white" />
-                    <span>Generating mesh...</span>
+                    {isAgentConversation ? (
+                      <Sparkles className="h-4 w-4 text-white" />
+                    ) : (
+                      <Box className="h-4 w-4 text-white" />
+                    )}
+                    <span>
+                      {isAgentConversation
+                        ? 'Thinking...'
+                        : 'Generating mesh...'}
+                    </span>
                   </div>
                   <Loader2 className="h-4 w-4 animate-spin text-white" />
                 </div>
