@@ -275,6 +275,14 @@ export function AgentEditorView() {
 
   const showRecommendationPanel = !!recommendation && !isLoading;
 
+  // Tap-able answer options for the agent's latest clarifying question. Only
+  // the leaf assistant message's question is answerable — answering moves the
+  // leaf, which hides the buttons.
+  const activeQuestion =
+    !isLoading && lastMessage?.role === 'assistant'
+      ? lastMessage.content.question
+      : undefined;
+
   return (
     <div className="flex h-full w-full flex-col items-center overflow-hidden bg-adam-bg-secondary-dark">
       <div className="flex w-full items-center justify-between bg-transparent p-3 pl-12">
@@ -325,6 +333,25 @@ export function AgentEditorView() {
         </div>
       </ScrollArea>
       <div className="w-full min-w-52 max-w-2xl bg-transparent px-4 pb-6">
+        {activeQuestion && !limitReached && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {activeQuestion.options.map((option) => (
+              <Button
+                key={option}
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => sendMessage({ text: option })}
+                className="h-8 rounded-full border-adam-neutral-700 bg-adam-neutral-800 px-3 text-xs text-adam-text-primary hover:bg-adam-neutral-700 hover:text-white"
+              >
+                {option}
+              </Button>
+            ))}
+            <span className="self-center text-[11px] text-adam-text-tertiary">
+              or type your own answer below
+            </span>
+          </div>
+        )}
         {showRecommendationPanel && (
           <div className="mb-3 rounded-xl border border-adam-blue/30 bg-adam-neutral-800 p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-adam-text-primary">

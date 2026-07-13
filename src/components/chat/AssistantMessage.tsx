@@ -10,6 +10,8 @@ import {
   Download,
   Loader2,
   ImageIcon,
+  MessageCircleQuestion,
+  Globe,
   Sparkles,
 } from 'lucide-react';
 import { Streamdown } from 'streamdown';
@@ -275,8 +277,12 @@ export function AssistantMessage({
                         className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3 hover:bg-adam-neutral-900"
                       >
                         <div className="flex h-full items-center justify-center gap-2">
-                          {toolCall.name === 'create_image' && (
+                          {(toolCall.name === 'create_image' ||
+                            toolCall.name === 'generate_concept_image') && (
                             <ImageIcon className="h-4 w-4 text-white" />
+                          )}
+                          {toolCall.name === 'web_search' && (
+                            <Globe className="h-4 w-4 text-white" />
                           )}
                           {toolCall.name === 'create_mesh' && (
                             <Box className="h-4 w-4 text-white" />
@@ -289,28 +295,36 @@ export function AssistantMessage({
                             <span>
                               {toolCall.name === 'create_image'
                                 ? 'Queuing image...'
-                                : toolCall.name === 'create_mesh'
-                                  ? 'Queuing mesh...'
-                                  : toolCall.name ===
-                                        'build_parametric_model' ||
-                                      toolCall.name ===
-                                        'apply_parameter_changes'
-                                    ? 'Generating model...'
-                                    : `${toolCall.name}...`}
+                                : toolCall.name === 'generate_concept_image'
+                                  ? 'Creating concept image...'
+                                  : toolCall.name === 'web_search'
+                                    ? 'Searching the web...'
+                                    : toolCall.name === 'create_mesh'
+                                      ? 'Queuing mesh...'
+                                      : toolCall.name ===
+                                            'build_parametric_model' ||
+                                          toolCall.name ===
+                                            'apply_parameter_changes'
+                                        ? 'Generating model...'
+                                        : `${toolCall.name}...`}
                             </span>
                           )}
                           {toolCall.status === 'error' && (
                             <span>
                               {toolCall.name === 'create_image'
                                 ? 'Failed to start image generation'
-                                : toolCall.name === 'create_mesh'
-                                  ? 'Failed to start mesh generation'
-                                  : toolCall.name ===
-                                        'build_parametric_model' ||
-                                      toolCall.name ===
-                                        'apply_parameter_changes'
-                                    ? 'Failed to generate model'
-                                    : `${toolCall.name}...`}
+                                : toolCall.name === 'generate_concept_image'
+                                  ? 'Failed to generate concept image'
+                                  : toolCall.name === 'web_search'
+                                    ? 'Web search failed'
+                                    : toolCall.name === 'create_mesh'
+                                      ? 'Failed to start mesh generation'
+                                      : toolCall.name ===
+                                            'build_parametric_model' ||
+                                          toolCall.name ===
+                                            'apply_parameter_changes'
+                                        ? 'Failed to generate model'
+                                        : `${toolCall.name}...`}
                             </span>
                           )}
                         </div>
@@ -323,6 +337,12 @@ export function AssistantMessage({
                 </div>
               )}
               <AssistantMessageImagesViewer message={message} />
+              {message.content.question && (
+                <div className="flex items-start gap-2 rounded-md bg-adam-neutral-950 px-3 py-2">
+                  <MessageCircleQuestion className="mt-0.5 h-4 w-4 shrink-0 text-adam-blue" />
+                  <span>{message.content.question.text}</span>
+                </div>
+              )}
               {message.content.mesh && (
                 <div
                   onClick={() => {

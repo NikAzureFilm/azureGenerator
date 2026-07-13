@@ -71,6 +71,15 @@ export type AgentRecommendation = {
   generationPrompt?: string;
 };
 
+// Written by the agent-chat ask_user tool. The client renders the options as
+// tap-able buttons on the latest assistant message; a tap sends the option
+// text as a regular user message, and the composer stays available for a
+// custom ("other") answer.
+export type AgentQuestion = {
+  text: string;
+  options: string[];
+};
+
 export type CadJobArtifact = {
   stepPath?: string;
   glbPath?: string;
@@ -140,6 +149,8 @@ export type Content = {
   loop?: LoopState;
   // Design-agent pipeline recommendation (agent mode only).
   recommendation?: AgentRecommendation;
+  // Design-agent clarifying question with tap-able options (agent mode only).
+  question?: AgentQuestion;
 };
 
 // Tier that drives which loop rounds are available: premium (Fable) gets the

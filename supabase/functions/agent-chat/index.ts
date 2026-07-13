@@ -32,6 +32,20 @@ const AGENT_MODEL = 'openai/gpt-5.6-terra';
 const AGENT_REASONING_EFFORT = 'medium';
 const AGENT_MAX_TOKENS = 16000;
 
+// web_search sub-calls run on a cheap fast model with OpenRouter's
+// model-agnostic web plugin (Exa) — no extra API keys needed.
+const WEB_SEARCH_MODEL = 'google/gemini-3.5-flash';
+const WEB_SEARCH_MAX_TOKENS = 2000;
+const WEB_SEARCH_RESULT_CHAR_CAP = 6000;
+
+// In-turn agent loop bounds. Each round is one Terra call; the loop only
+// continues after web_search results (user-facing tools end the turn), so a
+// turn costs at most MAX_AGENT_ROUNDS model calls + MAX_WEB_SEARCHES_PER_TURN
+// search sub-calls.
+const MAX_AGENT_ROUNDS = 4;
+const MAX_WEB_SEARCHES_PER_TURN = 3;
+const MAX_IMAGES_PER_TURN = 2;
+
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
 
@@ -215,6 +229,14 @@ async function formatAgentAssistantMessage(
     });
   }
 
+  if (message.content.question) {
+    const { text, options } = message.content.question;
+    messages.push({
+      role: 'assistant',
+      content: `[I asked the user: "${text}" — with tap-able options: ${options.join(' | ')}. Their next message is the answer (an option or a custom reply).]`,
+    });
+  }
+
   if (message.content.recommendation) {
     const { pipeline, reason } = message.content.recommendation;
     messages.push({
@@ -229,10 +251,11 @@ async function formatAgentAssistantMessage(
 const systemPrompt = `You are the AzureFilm Generator design agent. Your job is to have a short back-and-forth conversation with the user to figure out exactly what 3D object they want, visualize it with concept images, and decide which generation pipeline fits best. You do NOT generate the 3D model yourself — the user clicks a Generate button once a recommendation exists.
 
 Workflow:
-1. If the request is ambiguous, ask at most 1-2 short clarifying questions first (size, style, purpose, must-have features). If it's already clear, skip straight to an image.
-2. Use generate_concept_image to show the user what you understood. Pass a detailed, self-contained visual description of a SINGLE centered object. When refining an earlier concept, pass its image id as baseImageId so the identity is preserved and only the requested changes are applied.
-3. After each image, briefly ask what they'd like to change. Iterate until they're happy.
-4. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
+1. If the request is ambiguous, clarify first — but ALWAYS via the ask_user tool, never as plain text: pass the question plus 2-4 short likely answers as options (the user can also type their own). Ask at most 1-2 questions before showing something (size, style, purpose, must-have features). If the request is already clear, skip straight to an image.
+2. When the object must match real-world hardware, standards, or products (phone models, camera mounts, screw threads, brand items, dimensions you don't know), use web_search FIRST to get the facts right. Never invent dimensions of real products.
+3. Use generate_concept_image to show the user what you understood. Pass a detailed, self-contained visual description of a SINGLE centered object. When refining an earlier concept, pass its image id as baseImageId so the identity is preserved and only the requested changes are applied.
+4. After each image, briefly ask what they'd like to change. Iterate until they're happy.
+5. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
 
 Choosing the pipeline:
 - "cad": parametric CAD engineering. Best for dimensioned, functional, or mechanical parts — brackets, enclosures, gears, mounts, adapters, anything with measurements, flat faces, holes, tolerances, or hardware fit. Produces clean editable geometry, but not organic detail.
@@ -263,6 +286,48 @@ const tools = [
           },
         },
         required: ['prompt'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'web_search',
+      description:
+        'Searches the web and returns a concise, cited summary. Use it for facts you must not invent: dimensions of real products or hardware, standards (screw threads, rail profiles, hole spacings), what a named product or style actually looks like. The results come back to you in this same turn.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'A focused search query, e.g. "GoPro mount fingers dimensions mm".',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'ask_user',
+      description:
+        'Asks the user a clarifying question with 2-4 tap-able answer options. Always use this instead of asking questions in plain text. The user can tap an option or type a custom answer; their reply arrives as the next message. Keep options short (a few words each) and mutually exclusive.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: 'The question to ask.',
+          },
+          options: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '2-4 short answer options.',
+          },
+        },
+        required: ['question', 'options'],
       },
     },
   },
@@ -314,6 +379,15 @@ function closeStream(controller: ReadableStreamDefaultController) {
   } catch (error) {
     console.warn('Unable to close agent-chat stream:', error);
   }
+}
+
+function sanitizeQuestionOptions(options: unknown): string[] {
+  if (!Array.isArray(options)) return [];
+  return options
+    .filter((option): option is string => typeof option === 'string')
+    .map((option) => option.trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 Deno.serve(async (req) => {
@@ -561,6 +635,98 @@ Deno.serve(async (req) => {
     return data;
   };
 
+  // Non-streaming web search sub-call via OpenRouter's model-agnostic web
+  // plugin. Returns a cited summary for the agent, or a failure note (the
+  // agent should keep going without the facts rather than crash the turn).
+  const runWebSearch = async (query: string): Promise<string> => {
+    const searchAbort = new AbortController();
+    const timeout = setTimeout(() => searchAbort.abort(), 30_000);
+    const onOuterAbort = () => searchAbort.abort();
+    abortSignal.addEventListener('abort', onOuterAbort);
+    try {
+      const response = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: openRouterHeaders(),
+        body: JSON.stringify({
+          model: WEB_SEARCH_MODEL,
+          plugins: [{ id: 'web', max_results: 5 }],
+          messages: [
+            {
+              role: 'user',
+              content: `Search the web and answer concisely for 3D product design research. Include concrete numbers/dimensions when available and end with the source URLs. Query: ${query.slice(0, 256)}`,
+            },
+          ],
+          usage: { include: true },
+          max_tokens: WEB_SEARCH_MAX_TOKENS,
+        }),
+        signal: searchAbort.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `Agent-chat web_search error: ${response.status} - ${errorText.slice(0, 300)}`,
+        );
+        return 'Web search failed — proceed with clearly-labeled assumptions and tell the user.';
+      }
+
+      const data = await response.json();
+
+      if (data?.usage) {
+        EdgeRuntime.waitUntil(
+          logLlmUsage({
+            functionName: 'agent-chat',
+            operation: 'chat',
+            provider: 'openrouter',
+            model:
+              typeof data.model === 'string' && data.model
+                ? data.model
+                : WEB_SEARCH_MODEL,
+            userId: userData.user?.id,
+            conversationId,
+            referenceId: newMessageId,
+            inputTokens: data.usage.prompt_tokens ?? 0,
+            outputTokens: data.usage.completion_tokens ?? 0,
+            costUsdOverride:
+              typeof data.usage.cost === 'number' ? data.usage.cost : undefined,
+          }),
+        );
+      }
+
+      const message = data?.choices?.[0]?.message;
+      let text =
+        typeof message?.content === 'string' ? message.content.trim() : '';
+
+      // Append plugin citations not already present in the answer text.
+      const annotations = Array.isArray(message?.annotations)
+        ? message.annotations
+        : [];
+      const citationUrls = annotations
+        .map(
+          (annotation: { url_citation?: { url?: string } }) =>
+            annotation?.url_citation?.url,
+        )
+        .filter(
+          (url: unknown): url is string =>
+            typeof url === 'string' && !!url && !text.includes(url),
+        )
+        .slice(0, 5);
+      if (citationUrls.length > 0) {
+        text += `\n\nSources: ${citationUrls.join(' ')}`;
+      }
+
+      return text
+        ? text.slice(0, WEB_SEARCH_RESULT_CHAR_CAP)
+        : 'Web search returned no results — proceed with clearly-labeled assumptions and tell the user.';
+    } catch (error) {
+      console.error('Agent-chat web_search exception:', error);
+      return 'Web search failed — proceed with clearly-labeled assumptions and tell the user.';
+    } finally {
+      clearTimeout(timeout);
+      abortSignal.removeEventListener('abort', onOuterAbort);
+    }
+  };
+
   try {
     const messageTree = new Tree<Message>(messages);
 
@@ -598,304 +764,420 @@ Deno.serve(async (req) => {
       )
     ).flat();
 
-    const requestBody = {
-      model: AGENT_MODEL,
-      messages: [
-        { role: 'system' as const, content: systemPrompt },
-        ...historyMessages,
-      ],
-      tools,
-      stream: true,
-      usage: { include: true },
-      max_tokens: AGENT_MAX_TOKENS,
-      reasoning: { effort: AGENT_REASONING_EFFORT },
-    };
+    const responseStream = new ReadableStream({
+      async start(controller) {
+        // Running conversation for the in-turn loop: rounds append their
+        // assistant tool_calls + tool results here so the next Terra call
+        // sees them.
+        const convo: AgentChatMessage[] = [...historyMessages];
+        let webSearchesUsed = 0;
+        let imagesThisTurn = 0;
 
-    trace('before_openrouter_stream', {
-      model: AGENT_MODEL,
-      messagesCount: requestBody.messages.length,
-      hasKey: !!OPENROUTER_API_KEY,
-    });
+        // Executes one accumulated tool call, mutating `content`. Returns the
+        // tool-result text fed back to the model when the loop continues.
+        const handleToolCall = async (toolCall: {
+          id: string;
+          name: string;
+          arguments: string;
+        }): Promise<{ resultText: string; isWebSearch: boolean }> => {
+          let toolInput: {
+            prompt?: string;
+            baseImageId?: string;
+            pipeline?: string;
+            reason?: string;
+            generationPrompt?: string;
+            query?: string;
+            question?: string;
+            options?: unknown;
+          } = {};
+          let toolInputValid = true;
+          try {
+            toolInput = toolCall.arguments
+              ? JSON.parse(toolCall.arguments)
+              : {};
+          } catch (error) {
+            console.error('Error parsing tool input JSON:', error);
+            toolInputValid = false;
+          }
 
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: openRouterHeaders(),
-      body: JSON.stringify(requestBody),
-      signal: abortSignal,
-    });
+          const markToolError = () => {
+            content = {
+              ...content,
+              toolCalls: content.toolCalls?.map((call) =>
+                call.id === toolCall.id ? { ...call, status: 'error' } : call,
+              ),
+            };
+          };
+          const clearToolCall = () => {
+            content = {
+              ...content,
+              toolCalls:
+                content.toolCalls?.filter((call) => call.id !== toolCall.id) ||
+                [],
+            };
+          };
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
-      );
-      throw new Error(
-        `OpenRouter API error: ${response.statusText} (${response.status})`,
-      );
-    }
+          let resultText = 'Tool call failed.';
+          let isWebSearch = false;
 
-    // Executes a fully-accumulated tool call, mutating `content`.
-    const handleToolCall = async (
-      controller: ReadableStreamDefaultController,
-      toolCall: { id: string; name: string; arguments: string },
-    ) => {
-      let toolInput: {
-        prompt?: string;
-        baseImageId?: string;
-        pipeline?: string;
-        reason?: string;
-        generationPrompt?: string;
-      } = {};
-      let toolInputValid = true;
-      try {
-        toolInput = toolCall.arguments ? JSON.parse(toolCall.arguments) : {};
-      } catch (error) {
-        console.error('Error parsing tool input JSON:', error);
-        toolInputValid = false;
-      }
+          if (!toolInputValid) {
+            markToolError();
+          } else if (toolCall.name === 'web_search') {
+            isWebSearch = true;
+            if (webSearchesUsed >= MAX_WEB_SEARCHES_PER_TURN) {
+              clearToolCall();
+              resultText =
+                'Web search limit reached for this turn — continue with what you have.';
+            } else {
+              webSearchesUsed += 1;
+              resultText = await runWebSearch(toolInput.query ?? '');
+              clearToolCall();
+            }
+          } else if (toolCall.name === 'generate_concept_image') {
+            if (imagesThisTurn >= MAX_IMAGES_PER_TURN) {
+              clearToolCall();
+              resultText =
+                'Image limit reached for this turn — ask the user before generating more.';
+            } else {
+              const result = await fetch(
+                `${supabaseHost}/functions/v1/generate-view`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: req.headers.get('Authorization') ?? '',
+                  },
+                  body: JSON.stringify({
+                    conversationId,
+                    view: 'front',
+                    prompt: toolInput.prompt ?? '',
+                    provider: getImageGenerationProvider(imageGenerationModel),
+                    imageGenerationModel,
+                    mode: 'input',
+                    ...(toolInput.baseImageId
+                      ? { refImageId: toolInput.baseImageId }
+                      : {}),
+                  }),
+                  signal: abortSignal,
+                },
+              );
 
-      const markToolError = () => {
-        content = {
-          ...content,
-          toolCalls: content.toolCalls?.map((call) =>
-            call.id === toolCall.id ? { ...call, status: 'error' } : call,
-          ),
-        };
-      };
+              const data = await result.json().catch(() => ({}));
 
-      if (!toolInputValid) {
-        markToolError();
-      } else if (toolCall.name === 'generate_concept_image') {
-        const result = await fetch(
-          `${supabaseHost}/functions/v1/generate-view`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: req.headers.get('Authorization') ?? '',
-            },
-            body: JSON.stringify({
-              conversationId,
-              view: 'front',
-              prompt: toolInput.prompt ?? '',
-              provider: getImageGenerationProvider(imageGenerationModel),
-              imageGenerationModel,
-              mode: 'input',
-              ...(toolInput.baseImageId
-                ? { refImageId: toolInput.baseImageId }
-                : {}),
-            }),
-            signal: abortSignal,
-          },
-        );
+              if (!result.ok) {
+                console.error('Agent-chat: generate-view failed', {
+                  status: result.status,
+                  error: data?.error,
+                  conversationId,
+                });
 
-        const data = await result.json().catch(() => ({}));
-
-        if (!result.ok) {
-          console.error('Agent-chat: generate-view failed', {
-            status: result.status,
-            error: data?.error,
-            conversationId,
-          });
-
-          if (result.status === 402) {
-            content = { error: 'insufficient_tokens' };
+                if (result.status === 402) {
+                  content = { error: 'insufficient_tokens' };
+                  resultText =
+                    'Image generation failed: the user is out of tokens.';
+                } else {
+                  markToolError();
+                  resultText = 'Image generation failed.';
+                }
+              } else if (typeof data?.id === 'string') {
+                imagesThisTurn += 1;
+                clearToolCall();
+                content = {
+                  ...content,
+                  images: [...(content.images ?? []), data.id],
+                };
+                resultText = `Concept image generated with id ${data.id} and shown to the user.`;
+              } else {
+                markToolError();
+                resultText = 'Image generation failed.';
+              }
+            }
+          } else if (toolCall.name === 'ask_user') {
+            const questionText = (toolInput.question ?? '')
+              .trim()
+              .slice(0, 300);
+            const options = sanitizeQuestionOptions(toolInput.options);
+            if (questionText && options.length >= 2) {
+              clearToolCall();
+              content = {
+                ...content,
+                question: { text: questionText, options },
+              };
+              resultText = 'Question with options shown to the user.';
+            } else {
+              markToolError();
+              resultText =
+                'ask_user failed: provide a question and 2-4 options.';
+            }
+          } else if (toolCall.name === 'recommend_pipeline') {
+            const pipeline = normalizeAgentPipeline(toolInput.pipeline);
+            if (pipeline) {
+              clearToolCall();
+              content = {
+                ...content,
+                recommendation: {
+                  pipeline,
+                  ...(toolInput.reason ? { reason: toolInput.reason } : {}),
+                  ...(toolInput.generationPrompt
+                    ? { generationPrompt: toolInput.generationPrompt }
+                    : {}),
+                },
+              };
+              resultText =
+                'Recommendation recorded; the Generate button is shown to the user.';
+            } else {
+              markToolError();
+              resultText = 'recommend_pipeline failed: invalid pipeline.';
+            }
           } else {
             markToolError();
           }
-        } else if (typeof data?.id === 'string') {
-          content = {
-            ...content,
-            toolCalls:
-              content.toolCalls?.filter((call) => call.id !== toolCall.id) ||
-              [],
-            images: [...(content.images ?? []), data.id],
-          };
-        } else {
-          markToolError();
-        }
-      } else if (toolCall.name === 'recommend_pipeline') {
-        const pipeline = normalizeAgentPipeline(toolInput.pipeline);
-        if (pipeline) {
-          content = {
-            ...content,
-            toolCalls:
-              content.toolCalls?.filter((call) => call.id !== toolCall.id) ||
-              [],
-            recommendation: {
-              pipeline,
-              ...(toolInput.reason ? { reason: toolInput.reason } : {}),
-              ...(toolInput.generationPrompt
-                ? { generationPrompt: toolInput.generationPrompt }
-                : {}),
-            },
-          };
-        } else {
-          markToolError();
-        }
-      } else {
-        markToolError();
-      }
 
-      streamMessage(controller, { ...newMessageData, content });
-      await persistContent(content);
-    };
+          streamMessage(controller, { ...newMessageData, content });
+          await persistContent(content);
 
-    const responseStream = new ReadableStream({
-      async start(controller) {
-        // Tool calls accumulate across deltas keyed by choice index; they are
-        // executed after the model's turn finishes streaming so pending
-        // statuses stay visible while images generate.
-        const pendingToolCalls = new Map<
-          number,
-          { id: string; name: string; arguments: string }
-        >();
-        let lastToolCallIndex = 0;
-        let servedModel = AGENT_MODEL;
+          return { resultText, isWebSearch };
+        };
 
         try {
-          const reader = response.body?.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
+          for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+            const requestBody = {
+              model: AGENT_MODEL,
+              messages: [
+                { role: 'system' as const, content: systemPrompt },
+                ...convo,
+              ],
+              tools,
+              stream: true,
+              usage: { include: true },
+              max_tokens: AGENT_MAX_TOKENS,
+              reasoning: { effort: AGENT_REASONING_EFFORT },
+            };
 
-          if (!reader) {
-            throw new Error('No response body');
-          }
+            trace('before_openrouter_stream', {
+              model: AGENT_MODEL,
+              round,
+              messagesCount: requestBody.messages.length,
+              hasKey: !!OPENROUTER_API_KEY,
+            });
 
-          while (true) {
-            if (abortSignal.aborted) {
-              throw new Error('Request cancelled by user');
+            const response = await fetch(OPENROUTER_API_URL, {
+              method: 'POST',
+              headers: openRouterHeaders(),
+              body: JSON.stringify(requestBody),
+              signal: abortSignal,
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.error(
+                `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
+              );
+              throw new Error(
+                `OpenRouter API error: ${response.statusText} (${response.status})`,
+              );
             }
 
-            const { done, value } = await reader.read();
-            if (done) break;
+            const pendingToolCalls = new Map<
+              number,
+              { id: string; name: string; arguments: string }
+            >();
+            let lastToolCallIndex = 0;
+            let servedModel = AGENT_MODEL;
+            let roundText = '';
+            let addedRoundSeparator = false;
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-              const data = line.slice(6);
-              if (data === '[DONE]') continue;
+            if (!reader) {
+              throw new Error('No response body');
+            }
 
-              let chunk: {
-                error?: { message?: string };
-                model?: string;
-                usage?: {
-                  prompt_tokens?: number;
-                  completion_tokens?: number;
-                  cost?: number;
-                };
-                choices?: Array<{
-                  delta?: {
-                    content?: string;
-                    reasoning?: string;
-                    tool_calls?: Array<{
-                      index?: number;
-                      id?: string;
-                      function?: { name?: string; arguments?: string };
-                    }>;
+            while (true) {
+              if (abortSignal.aborted) {
+                throw new Error('Request cancelled by user');
+              }
+
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6);
+                if (data === '[DONE]') continue;
+
+                let chunk: {
+                  error?: { message?: string };
+                  model?: string;
+                  usage?: {
+                    prompt_tokens?: number;
+                    completion_tokens?: number;
+                    cost?: number;
                   };
-                  finish_reason?: string;
-                }>;
-              };
-              try {
-                chunk = JSON.parse(data);
-              } catch (e) {
-                // Malformed chunk — log and skip, don't abort the stream.
-                console.error('Error parsing SSE chunk:', e);
-                continue;
-              }
-
-              if (chunk.error) {
-                console.error('OpenRouter stream error:', chunk.error);
-                throw new Error(
-                  chunk.error.message ||
-                    `OpenRouter error: ${JSON.stringify(chunk.error)}`,
-                );
-              }
-
-              if (typeof chunk.model === 'string' && chunk.model) {
-                servedModel = chunk.model;
-              }
-
-              if (chunk.usage) {
-                EdgeRuntime.waitUntil(
-                  logLlmUsage({
-                    functionName: 'agent-chat',
-                    operation: 'chat',
-                    provider: 'openrouter',
-                    model: servedModel,
-                    userId: userData.user?.id,
-                    conversationId,
-                    referenceId: newMessageId,
-                    inputTokens: chunk.usage.prompt_tokens ?? 0,
-                    outputTokens: chunk.usage.completion_tokens ?? 0,
-                    costUsdOverride:
-                      typeof chunk.usage.cost === 'number'
-                        ? chunk.usage.cost
-                        : undefined,
-                  }),
-                );
-              }
-
-              const delta = chunk.choices?.[0]?.delta;
-              if (!delta) continue;
-
-              if (delta.content) {
-                content = {
-                  ...content,
-                  text: (content.text || '') + delta.content,
-                };
-                streamMessage(controller, { ...newMessageData, content });
-              }
-
-              // delta.reasoning is consumed silently; internal reasoning
-              // tokens are never surfaced in the message.
-
-              if (delta.tool_calls) {
-                for (const toolCall of delta.tool_calls) {
-                  const index = toolCall.index ?? lastToolCallIndex;
-                  if (toolCall.id) {
-                    lastToolCallIndex = index;
-                    pendingToolCalls.set(index, {
-                      id: toolCall.id,
-                      name: toolCall.function?.name || '',
-                      arguments: toolCall.function?.arguments ?? '',
-                    });
-                    content = {
-                      ...content,
-                      toolCalls: [
-                        ...(content.toolCalls || []),
-                        {
-                          name: toolCall.function?.name || '',
-                          id: toolCall.id,
-                          status: 'pending',
-                        },
-                      ],
+                  choices?: Array<{
+                    delta?: {
+                      content?: string;
+                      reasoning?: string;
+                      tool_calls?: Array<{
+                        index?: number;
+                        id?: string;
+                        function?: { name?: string; arguments?: string };
+                      }>;
                     };
-                    streamMessage(controller, { ...newMessageData, content });
-                    await persistContent(content);
-                  } else if (toolCall.function?.arguments) {
-                    const pending = pendingToolCalls.get(index);
-                    if (pending) {
-                      pending.arguments += toolCall.function.arguments;
+                    finish_reason?: string;
+                  }>;
+                };
+                try {
+                  chunk = JSON.parse(data);
+                } catch (e) {
+                  // Malformed chunk — log and skip, don't abort the stream.
+                  console.error('Error parsing SSE chunk:', e);
+                  continue;
+                }
+
+                if (chunk.error) {
+                  console.error('OpenRouter stream error:', chunk.error);
+                  throw new Error(
+                    chunk.error.message ||
+                      `OpenRouter error: ${JSON.stringify(chunk.error)}`,
+                  );
+                }
+
+                if (typeof chunk.model === 'string' && chunk.model) {
+                  servedModel = chunk.model;
+                }
+
+                if (chunk.usage) {
+                  EdgeRuntime.waitUntil(
+                    logLlmUsage({
+                      functionName: 'agent-chat',
+                      operation: 'chat',
+                      provider: 'openrouter',
+                      model: servedModel,
+                      userId: userData.user?.id,
+                      conversationId,
+                      referenceId: newMessageId,
+                      inputTokens: chunk.usage.prompt_tokens ?? 0,
+                      outputTokens: chunk.usage.completion_tokens ?? 0,
+                      costUsdOverride:
+                        typeof chunk.usage.cost === 'number'
+                          ? chunk.usage.cost
+                          : undefined,
+                    }),
+                  );
+                }
+
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
+
+                if (delta.content) {
+                  // Separate the text of a post-web-search round from the
+                  // text streamed before the search.
+                  if (
+                    !addedRoundSeparator &&
+                    round > 0 &&
+                    content.text &&
+                    !content.text.endsWith('\n\n')
+                  ) {
+                    content = { ...content, text: content.text + '\n\n' };
+                  }
+                  addedRoundSeparator = true;
+                  roundText += delta.content;
+                  content = {
+                    ...content,
+                    text: (content.text || '') + delta.content,
+                  };
+                  streamMessage(controller, { ...newMessageData, content });
+                }
+
+                // delta.reasoning is consumed silently; internal reasoning
+                // tokens are never surfaced in the message.
+
+                if (delta.tool_calls) {
+                  for (const toolCall of delta.tool_calls) {
+                    const index = toolCall.index ?? lastToolCallIndex;
+                    if (toolCall.id) {
+                      lastToolCallIndex = index;
+                      pendingToolCalls.set(index, {
+                        id: toolCall.id,
+                        name: toolCall.function?.name || '',
+                        arguments: toolCall.function?.arguments ?? '',
+                      });
+                      content = {
+                        ...content,
+                        toolCalls: [
+                          ...(content.toolCalls || []),
+                          {
+                            name: toolCall.function?.name || '',
+                            id: toolCall.id,
+                            status: 'pending',
+                          },
+                        ],
+                      };
+                      streamMessage(controller, {
+                        ...newMessageData,
+                        content,
+                      });
+                      await persistContent(content);
+                    } else if (toolCall.function?.arguments) {
+                      const pending = pendingToolCalls.get(index);
+                      if (pending) {
+                        pending.arguments += toolCall.function.arguments;
+                      }
                     }
                   }
                 }
               }
             }
-          }
 
-          // The model's turn is fully streamed — execute the accumulated tool
-          // calls in order.
-          const orderedToolCalls = [...pendingToolCalls.entries()]
-            .sort(([a], [b]) => a - b)
-            .map(([, call]) => call);
-          for (const toolCall of orderedToolCalls) {
-            if (abortSignal.aborted) break;
-            await handleToolCall(controller, toolCall);
+            if (pendingToolCalls.size === 0) {
+              // Plain reply — the turn is done.
+              break;
+            }
+
+            const orderedToolCalls = [...pendingToolCalls.entries()]
+              .sort(([a], [b]) => a - b)
+              .map(([, call]) => call);
+
+            const toolResults: Array<{ id: string; text: string }> = [];
+            let roundHadWebSearch = false;
+            for (const toolCall of orderedToolCalls) {
+              if (abortSignal.aborted) break;
+              const { resultText, isWebSearch } =
+                await handleToolCall(toolCall);
+              toolResults.push({ id: toolCall.id, text: resultText });
+              roundHadWebSearch = roundHadWebSearch || isWebSearch;
+            }
+
+            // Only web_search continues the in-turn loop; user-facing tools
+            // (image, question, recommendation) end the turn and wait for the
+            // user's reaction.
+            if (!roundHadWebSearch || abortSignal.aborted) {
+              break;
+            }
+
+            convo.push({
+              role: 'assistant',
+              content: roundText,
+              tool_calls: orderedToolCalls.map((call) => ({
+                id: call.id,
+                type: 'function' as const,
+                function: { name: call.name, arguments: call.arguments },
+              })),
+            });
+            for (const result of toolResults) {
+              convo.push({
+                role: 'tool',
+                tool_call_id: result.id,
+                content: result.text,
+              });
+            }
           }
         } catch (error) {
           console.error(
@@ -921,6 +1203,7 @@ Deno.serve(async (req) => {
             !!content &&
             ((content.text && content.text.length > 0) ||
               (content.images && content.images.length > 0) ||
+              !!content.question ||
               !!content.recommendation);
 
           if (!hasNonDefaultContent) {
@@ -983,6 +1266,7 @@ Deno.serve(async (req) => {
       !!content &&
       ((content.text && content.text.length > 0) ||
         (content.images && content.images.length > 0) ||
+        !!content.question ||
         !!content.recommendation);
 
     if (!hasNonDefaultContent) {
