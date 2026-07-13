@@ -47,11 +47,13 @@ const WEB_SEARCH_MODEL = 'google/gemini-3.5-flash';
 const WEB_SEARCH_MAX_TOKENS = 2000;
 const WEB_SEARCH_RESULT_CHAR_CAP = 6000;
 
-// In-turn agent loop bounds. Each round is one Terra call; the loop only
-// continues after web_search results (user-facing tools end the turn), so a
+// In-turn agent loop bounds. Each round is one Terra call; the loop continues
+// after web_search results AND after generate_concept_image (the render is fed
+// back so the agent reviews it and may redo a flawed concept once — image cap
+// still MAX_IMAGES_PER_TURN). ask_user / recommend_pipeline end the turn. A
 // turn costs at most MAX_AGENT_ROUNDS model calls + MAX_WEB_SEARCHES_PER_TURN
-// search sub-calls.
-const MAX_AGENT_ROUNDS = 4;
+// search sub-calls + MAX_IMAGES_PER_TURN image generations.
+const MAX_AGENT_ROUNDS = 5;
 const MAX_WEB_SEARCHES_PER_TURN = 3;
 const MAX_IMAGES_PER_TURN = 2;
 
@@ -263,8 +265,14 @@ Workflow:
 1. If the request is ambiguous, clarify first — but ALWAYS via the ask_user tool, never as plain text: pass the question plus 2-4 short likely answers as options (the user can also type their own). Ask at most 1-2 questions before showing something (size, style, purpose, must-have features). If the request is already clear, skip straight to an image.
 2. When the object must match real-world hardware, standards, or products (phone models, camera mounts, screw threads, brand items, dimensions you don't know), use web_search FIRST to get the facts right. Never invent dimensions of real products.
 3. Use generate_concept_image to show the user what you understood. Pass a detailed, self-contained visual description of a SINGLE centered object. When refining an earlier concept, pass its image id as baseImageId so the identity is preserved and only the requested changes are applied.
-4. After each image, briefly ask what they'd like to change. Iterate until they're happy.
-5. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
+4. Right after each generated image, you are shown the result in this same turn. Review it critically BEFORE speaking to the user: (a) does it match what the user asked for, (b) is it ONE connected physical piece with no floating or detached elements, (c) is it free of paper-thin or unsupported features that would fail 3D printing, (d) is it a clean render of a single object? If it clearly fails a check, immediately call generate_concept_image again — pass baseImageId to fix small flaws while keeping the design, or start fresh when the concept itself is wrong. You get at most one automatic redo per turn; if the redo is still flawed, tell the user honestly what you would change and ask them.
+5. After an image you are happy with, briefly ask what they'd like to change. Iterate until they're happy.
+6. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
+
+Everything you design MUST be 3D printable:
+- One contiguous physical piece: every element attached to or touching the main body — no floating, hovering, or detached parts, no loose accessories, no assemblies of separate objects.
+- No impossibly thin walls, hair-fine spokes, or large unsupported overhangs; favor solid, self-supporting geometry that prints cleanly.
+- Apply this to every concept image description AND to every generationPrompt you pass to recommend_pipeline (state it explicitly there, with dimensions for cad).
 
 Choosing the pipeline:
 - "cad": parametric CAD engineering. Best for dimensioned, functional, or mechanical parts — brackets, enclosures, gears, mounts, adapters, anything with measurements, flat faces, holes, tolerances, or hardware fit. Produces clean editable geometry, but not organic detail.
@@ -279,7 +287,7 @@ const tools = [
     function: {
       name: 'generate_concept_image',
       description:
-        'Generates a concept image of the object being designed and shows it to the user. Pass a detailed visual description of a single centered object. To refine a previously generated concept, pass its image id as baseImageId — the new image preserves the identity of the base and applies only the described changes.',
+        'Generates a concept image of the object being designed and shows it to the user. Pass a detailed visual description of a single centered 3D-printable object. To refine a previously generated concept, pass its image id as baseImageId — the new image preserves the identity of the base and applies only the described changes. The generated image is shown back to you in this same turn so you can review it and redo a flawed result.',
       parameters: {
         type: 'object',
         properties: {
@@ -783,12 +791,19 @@ Deno.serve(async (req) => {
         let imagesThisTurn = 0;
 
         // Executes one accumulated tool call, mutating `content`. Returns the
-        // tool-result text fed back to the model when the loop continues.
+        // tool-result text fed back to the model when the loop continues,
+        // plus the fresh concept image id (for the self-review round) or
+        // whether an image request was refused by the per-turn cap.
         const handleToolCall = async (toolCall: {
           id: string;
           name: string;
           arguments: string;
-        }): Promise<{ resultText: string; isWebSearch: boolean }> => {
+        }): Promise<{
+          resultText: string;
+          isWebSearch: boolean;
+          generatedImageId: string | null;
+          imageRefused: boolean;
+        }> => {
           let toolInput: {
             prompt?: string;
             baseImageId?: string;
@@ -828,6 +843,13 @@ Deno.serve(async (req) => {
 
           let resultText = 'Tool call failed.';
           let isWebSearch = false;
+          // Set when this call produced a fresh concept image — the round loop
+          // feeds it back so the agent reviews its own render.
+          let generatedImageId: string | null = null;
+          // Set when an image request was refused by the per-turn cap — the
+          // loop continues once so the agent can close with honest text
+          // instead of ending the turn on its pre-tool-call sentence.
+          let imageRefused = false;
 
           if (!toolInputValid) {
             markToolError();
@@ -845,8 +867,9 @@ Deno.serve(async (req) => {
           } else if (toolCall.name === 'generate_concept_image') {
             if (imagesThisTurn >= MAX_IMAGES_PER_TURN) {
               clearToolCall();
+              imageRefused = true;
               resultText =
-                'Image limit reached for this turn — ask the user before generating more.';
+                'Image limit reached for this turn — reply to the user with the current image and what you would still change; do not promise another render this turn.';
             } else {
               const result = await fetch(
                 `${supabaseHost}/functions/v1/generate-view`,
@@ -895,7 +918,8 @@ Deno.serve(async (req) => {
                   ...content,
                   images: [...(content.images ?? []), data.id],
                 };
-                resultText = `Concept image generated with id ${data.id} and shown to the user.`;
+                generatedImageId = data.id;
+                resultText = `Concept image generated with id ${data.id} and shown to the user. It follows below for your review.`;
               } else {
                 markToolError();
                 resultText = 'Image generation failed.';
@@ -945,7 +969,7 @@ Deno.serve(async (req) => {
           streamMessage(controller, { ...newMessageData, content });
           await persistContent(content);
 
-          return { resultText, isWebSearch };
+          return { resultText, isWebSearch, generatedImageId, imageRefused };
         };
 
         try {
@@ -1172,18 +1196,55 @@ Deno.serve(async (req) => {
 
             const toolResults: Array<{ id: string; text: string }> = [];
             let roundHadWebSearch = false;
+            let roundImageRefused = false;
+            const roundImageIds: string[] = [];
             for (const toolCall of orderedToolCalls) {
               if (abortSignal.aborted) break;
-              const { resultText, isWebSearch } =
-                await handleToolCall(toolCall);
+              const {
+                resultText,
+                isWebSearch,
+                generatedImageId,
+                imageRefused,
+              } = await handleToolCall(toolCall);
               toolResults.push({ id: toolCall.id, text: resultText });
               roundHadWebSearch = roundHadWebSearch || isWebSearch;
+              roundImageRefused = roundImageRefused || imageRefused;
+              if (generatedImageId) roundImageIds.push(generatedImageId);
             }
 
-            // Only web_search continues the in-turn loop; user-facing tools
-            // (image, question, recommendation) end the turn and wait for the
-            // user's reaction.
-            if (!roundHadWebSearch || abortSignal.aborted) {
+            // Load this round's fresh render(s) so the agent can review its
+            // own work (same base64 data-URL pattern as history replay —
+            // multimodal tool-role results are unreliable across providers,
+            // so the pixels go in a follow-up user message instead).
+            let reviewImageParts: AgentContentPart[] = [];
+            if (roundImageIds.length > 0 && !abortSignal.aborted) {
+              const base64Images = await getBase64Images(
+                supabaseClient,
+                'images',
+                roundImageIds.map(
+                  (imageId) =>
+                    `${userData.user.id}/${conversationId}/${imageId}`,
+                ),
+              );
+              reviewImageParts = base64Images.map((image) => ({
+                type: 'image_url' as const,
+                image_url: { url: image.data },
+              }));
+            }
+
+            // web_search continues the in-turn loop, and so does a generated
+            // concept image (the agent reviews the render and may redo it) or
+            // a cap-refused image request (one closing text round). ask_user
+            // and recommend_pipeline end the turn and wait for the user; an
+            // image whose bytes could not be loaded ends the turn as before.
+            const shouldContinue =
+              !abortSignal.aborted &&
+              !content.question &&
+              !content.recommendation &&
+              (roundHadWebSearch ||
+                roundImageRefused ||
+                reviewImageParts.length > 0);
+            if (!shouldContinue) {
               break;
             }
 
@@ -1201,6 +1262,18 @@ Deno.serve(async (req) => {
                 role: 'tool',
                 tool_call_id: result.id,
                 content: result.text,
+              });
+            }
+            if (reviewImageParts.length > 0) {
+              convo.push({
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request and the 3D-printability rules (one connected piece, nothing floating or detached, no unprintably thin features, clean single-object render). If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes, reply briefly to the user.',
+                  },
+                  ...reviewImageParts,
+                ],
               });
             }
           }
