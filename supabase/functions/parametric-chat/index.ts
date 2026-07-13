@@ -182,10 +182,16 @@ function isClaudeFable5(model: string): boolean {
   return bareAnthropicModelId(model) === 'claude-fable-5';
 }
 
-// GPT-5.6 Sol is the sole CAD code-gen model and always runs at high hidden
-// reasoning — round-0 code-gen, continuation repairs, and the self-inspection
-// review alike (never the provider's default medium effort).
-function usesHighEffortReasoning(model: string): boolean {
+// GPT-5.6 Sol is the sole CAD code-gen model and runs at a PINNED medium
+// hidden-reasoning effort for code generation — round-0, continuation repairs,
+// and the self-inspection review alike. Measured 2026-07-13 (OpenRouter, real
+// code-gen prompt): 'high' spent 188-218s reasoning before the FIRST visible
+// token (211-242s total) — longer than a Supabase edge request survives, so
+// every generation died silently mid-stream and the client spinner never
+// resolved. 'medium' measured ~89s to first token / ~104s total, which fits
+// the request budget with margin.
+const SOL_CODE_GEN_REASONING_EFFORT = 'medium';
+function usesPinnedEffortReasoning(model: string): boolean {
   return model === GPT_56_SOL_MODEL;
 }
 
@@ -1044,12 +1050,16 @@ async function generateContinuationCode(params: {
         max_tokens: getReasoningTokenLimit(codeModel),
       };
       outputCap = getReasoningCompletionTokenLimit(codeModel, outputCap);
-    } else if (
-      reasoningEffort === 'high' ||
-      usesHighEffortReasoning(codeModel)
-    ) {
-      // GPT-5.6 Sol always runs at high hidden reasoning; other effort-based
-      // models get it forced for the self-inspection call only.
+    } else if (usesPinnedEffortReasoning(codeModel)) {
+      // GPT-5.6 Sol stays pinned to medium even for the self-inspection call —
+      // 'high' cannot finish inside an edge request (see the constant's note).
+      codeRequestBody.reasoning = {
+        effort: SOL_CODE_GEN_REASONING_EFFORT,
+        exclude: true,
+      };
+    } else if (reasoningEffort === 'high') {
+      // Other effort-based models get high forced for the self-inspection
+      // call only.
       codeRequestBody.reasoning = { effort: 'high', exclude: true };
     }
     // Clamp to what the remaining USD budget can afford for this leg.
@@ -2171,7 +2181,15 @@ Deno.serve(async (req) => {
 
     // Add reasoning/thinking parameter if requested and supported
     // OpenRouter uses a unified 'reasoning' parameter
-    if (reasoningEnabled) {
+    if (usesPinnedEffortReasoning(model)) {
+      // This call only chats briefly and dispatches a tool call — the heavy
+      // reasoning happens in the code-gen call. Left unconfigured, Sol
+      // defaulted to deep hidden reasoning here and streamed nothing for
+      // minutes, which (stacked on high-effort code-gen) blew past the edge
+      // request lifetime and left generations stuck. Low keeps dispatch at
+      // seconds-to-first-token with identical tool behavior (measured).
+      requestBody.reasoning = { effort: 'low', exclude: true };
+    } else if (reasoningEnabled) {
       requestBody.reasoning = {
         max_tokens: getReasoningTokenLimit(model),
       };
@@ -2765,11 +2783,11 @@ Deno.serve(async (req) => {
                     effort: 'medium',
                     exclude: true,
                   };
-                } else if (usesHighEffortReasoning(codeModel)) {
-                  // GPT-5.6 Sol CAD code-gen always runs at high hidden
+                } else if (usesPinnedEffortReasoning(codeModel)) {
+                  // GPT-5.6 Sol CAD code-gen runs at pinned medium hidden
                   // reasoning, regardless of the client's thinking flag.
                   codeRequestBody.reasoning = {
-                    effort: 'high',
+                    effort: SOL_CODE_GEN_REASONING_EFFORT,
                     exclude: true,
                   };
                 } else if (codeReasoningEnabled) {

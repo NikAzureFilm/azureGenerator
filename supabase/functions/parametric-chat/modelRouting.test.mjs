@@ -74,18 +74,28 @@ assert.match(
 );
 assert.match(
   source,
-  /function usesHighEffortReasoning/,
-  'parametric chat should centralize the always-high-reasoning model gate',
+  /function usesPinnedEffortReasoning/,
+  'parametric chat should centralize the pinned-effort model gate',
 );
 assert.match(
   source,
-  /\} else if \(usesHighEffortReasoning\(codeModel\)\) \{[\s\S]{0,300}?effort: 'high',\s+exclude: true/,
-  'GPT-5.6 Sol round-0 code generation should always run at high hidden reasoning',
+  /const SOL_CODE_GEN_REASONING_EFFORT = 'medium'/,
+  "GPT-5.6 Sol code generation must stay at medium effort — 'high' was measured at 188-218s to first token, beyond the edge request lifetime, and left generations silently stuck",
 );
 assert.match(
   source,
-  /reasoningEffort === 'high' \|\|\s+usesHighEffortReasoning\(codeModel\)/,
-  'GPT-5.6 Sol continuation code generation should always run at high hidden reasoning',
+  /\} else if \(usesPinnedEffortReasoning\(codeModel\)\) \{[\s\S]{0,400}?effort: SOL_CODE_GEN_REASONING_EFFORT,\s+exclude: true/,
+  'GPT-5.6 Sol round-0 code generation should run at the pinned hidden-reasoning effort',
+);
+assert.match(
+  source,
+  /usesPinnedEffortReasoning\(codeModel\)[\s\S]{0,500}?reasoningEffort === 'high'/,
+  'continuation code generation must check the Sol pin BEFORE the inspection high-effort override so inspection cannot escalate Sol past the edge request lifetime',
+);
+assert.match(
+  source,
+  /if \(usesPinnedEffortReasoning\(model\)\) \{[\s\S]{0,600}?effort: 'low', exclude: true/,
+  'the round-0 dispatch call must run Sol at low effort — unconfigured, it reasoned for minutes before its first token and generations stalled',
 );
 assert.match(
   source,
