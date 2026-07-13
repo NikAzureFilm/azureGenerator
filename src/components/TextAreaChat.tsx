@@ -607,7 +607,7 @@ function TextAreaChat({
       return;
     }
     const submitText =
-      type === 'parametric'
+      type === 'parametric' || (type === 'creative' && trimmedInput !== '')
         ? buildCadSubmitText(trimmedInput, includePrintableCadInstruction)
         : trimmedInput;
     let content: Content = {
@@ -1838,7 +1838,8 @@ function TextAreaChat({
               </div>
             )}
 
-            {type === 'parametric' && (
+            {(type === 'parametric' ||
+              (type === 'creative' && !isMultiview)) && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -1865,7 +1866,9 @@ function TextAreaChat({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Add "make it 3d printable" to CAD prompts
+                  {type === 'parametric'
+                    ? 'Add "make it 3d printable" to CAD prompts'
+                    : 'Add "make it 3d printable" to mesh prompts'}
                 </TooltipContent>
               </Tooltip>
             )}
