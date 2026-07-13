@@ -28,26 +28,16 @@ const modelSelectorSource = readFileSync(
   'utf8',
 );
 
-const cadModel = PARAMETRIC_MODELS.find(
-  (model) => model.id === 'google/gemini-3.5-flash',
-);
 const cadPremium = PARAMETRIC_MODELS.find(
   (model) => model.id === 'openai/gpt-5.6-sol',
 );
 
-assert.equal(DEFAULT_PARAMETRIC_MODEL, 'google/gemini-3.5-flash');
-// The picker lists both current CAD tiers from the canonical roster.
+assert.equal(DEFAULT_PARAMETRIC_MODEL, 'openai/gpt-5.6-sol');
+// The picker lists only GPT-5.6 Sol from the canonical roster (Gemini removed).
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['google/gemini-3.5-flash', 'openai/gpt-5.6-sol'],
+  ['openai/gpt-5.6-sol'],
 );
-assert.ok(cadModel);
-assert.equal(cadModel.name, 'CAD Model');
-assert.equal(cadModel.description.includes('Gemini'), false);
-assert.equal(cadModel.description.includes('Flash'), false);
-assert.equal(cadModel.tokenCost, 25);
-assert.equal(cadModel.supportsVision, true);
-assert.notEqual(cadModel.disabled, true);
 assert.ok(cadPremium);
 assert.equal(cadPremium.name, 'CAD Premium');
 assert.equal(cadPremium.provider, 'OpenAI');
@@ -60,6 +50,11 @@ for (const model of PARAMETRIC_MODELS) {
 }
 assert.equal(normalizeParametricChatModel(undefined), DEFAULT_PARAMETRIC_MODEL);
 assert.equal(normalizeParametricChatModel('quality'), DEFAULT_PARAMETRIC_MODEL);
+// Stale clients still sending the retired Gemini id get the sole model.
+assert.equal(
+  normalizeParametricChatModel('google/gemini-3.5-flash'),
+  DEFAULT_PARAMETRIC_MODEL,
+);
 for (const source of [
   promptViewSource,
   chatSectionSource,

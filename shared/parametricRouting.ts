@@ -4,7 +4,7 @@ export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
 export const GPT_55_MODEL = 'openai/gpt-5.5';
 export const GPT_56_SOL_MODEL = 'openai/gpt-5.6-sol';
 export const OPUS_48_MODEL = 'anthropic/claude-opus-4.8';
-export const DEFAULT_CODE_GENERATION_MODEL = GEMINI_35_FLASH_MODEL;
+export const DEFAULT_CODE_GENERATION_MODEL = GPT_56_SOL_MODEL;
 
 export type CodeGenerationProvider = 'google' | 'openrouter';
 
@@ -40,17 +40,6 @@ export type ParametricModelEntry = {
 export const DEFAULT_OUTPUT_TOKEN_CAP = 32000;
 
 export const PARAMETRIC_MODEL_ROSTER: Record<string, ParametricModelEntry> = {
-  [GEMINI_35_FLASH_MODEL]: {
-    id: GEMINI_35_FLASH_MODEL,
-    label: 'CAD Model',
-    description: 'Fast text-to-CAD generation with editable parameters',
-    provider: 'Google',
-    priceKey: GEMINI_35_FLASH_MODEL,
-    tokenCost: 25,
-    supportsVision: true,
-    maxInspectionRounds: 1,
-    outputTokenCap: 32000,
-  },
   [GPT_56_SOL_MODEL]: {
     id: GPT_56_SOL_MODEL,
     label: 'CAD Premium',

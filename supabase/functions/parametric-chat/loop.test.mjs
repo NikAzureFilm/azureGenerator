@@ -38,16 +38,16 @@ const GPT = 'openai/gpt-5.6-sol';
 const OPUS = 'anthropic/claude-opus-4.8';
 
 test('tierForModel maps roster models to premium, off-roster to lite', () => {
-  assert.equal(tierForModel(FLASH), 'premium');
+  assert.equal(tierForModel(GPT), 'premium');
+  assert.equal(tierForModel(FLASH), 'lite');
   assert.equal(tierForModel(FABLE), 'lite');
   assert.equal(tierForModel(GEMINI_PRO), 'lite');
-  assert.equal(tierForModel(GPT), 'premium');
   assert.equal(tierForModel(OPUS), 'lite');
   assert.equal(tierForModel('whatever'), 'lite');
 });
 
 test('initialLoopState sets awaiting_client with per-model maxRounds', () => {
-  const premium = initialLoopState(FLASH);
+  const premium = initialLoopState(GPT);
   assert.deepEqual(premium, {
     round: 0,
     maxRounds: PREMIUM_MAX_ROUNDS,
@@ -62,10 +62,11 @@ test('initialLoopState sets awaiting_client with per-model maxRounds', () => {
 });
 
 test('initialLoopState derives inspection rounds from the roster', () => {
-  assert.equal(initialLoopState(FLASH).maxRounds, 1);
+  // Exactly ONE review (inspection) round for the sole roster model.
+  assert.equal(initialLoopState(GPT).maxRounds, 1);
+  assert.equal(initialLoopState(FLASH).maxRounds, 0);
   assert.equal(initialLoopState(GEMINI_PRO).maxRounds, 0);
   assert.equal(initialLoopState(FABLE).maxRounds, 0);
-  assert.equal(initialLoopState(GPT).maxRounds, 1);
   assert.equal(initialLoopState(OPUS).maxRounds, 0);
   // Unknown/off-roster ids get no inspection (lite tier).
   assert.equal(initialLoopState('some/unknown-model').maxRounds, 0);
@@ -75,7 +76,7 @@ test('initialLoopState derives inspection rounds from the roster', () => {
 test('finalizeLoop produces a terminal status', () => {
   assert.equal(finalizeLoop(initialLoopState(FABLE)).status, 'final');
   assert.equal(
-    finalizeLoop(initialLoopState(FLASH), 'failed').status,
+    finalizeLoop(initialLoopState(GPT), 'failed').status,
     'failed',
   );
 });
@@ -85,13 +86,13 @@ test('COST_CEILING_USD is $0.60', () => {
 });
 
 test('decideContinuation runs a repair while under the cap', () => {
-  const loop = { ...initialLoopState(FLASH), repairs: 1 };
+  const loop = { ...initialLoopState(GPT), repairs: 1 };
   const d = decideContinuation(loop, { type: 'compile_error', error: 'x' }, 0);
   assert.deepEqual(d, { action: 'repair' });
 });
 
 test('decideContinuation finalizes when repairs are exhausted', () => {
-  const loop = { ...initialLoopState(FLASH), repairs: MAX_REPAIRS };
+  const loop = { ...initialLoopState(GPT), repairs: MAX_REPAIRS };
   const d = decideContinuation(loop, { type: 'compile_error', error: 'x' }, 0);
   assert.equal(d.action, 'reject');
   assert.equal(d.finalize, true);
@@ -111,7 +112,7 @@ test('decideContinuation rejects inspection when rounds are disabled (off-roster
 
 test('decideContinuation inspects the roster model under maxRounds', () => {
   const d = decideContinuation(
-    initialLoopState(FLASH),
+    initialLoopState(GPT),
     { type: 'inspection', imagePath: 'p' },
     0,
   );
@@ -120,7 +121,7 @@ test('decideContinuation inspects the roster model under maxRounds', () => {
 
 test('decideContinuation finalizes the roster model once maxRounds is reached', () => {
   const rounds = PREMIUM_MAX_ROUNDS;
-  const loop = { ...initialLoopState(FLASH), round: rounds };
+  const loop = { ...initialLoopState(GPT), round: rounds };
   const d = decideContinuation(
     loop,
     { type: 'inspection', imagePath: 'p' },
@@ -132,12 +133,12 @@ test('decideContinuation finalizes the roster model once maxRounds is reached', 
 });
 
 test('decideContinuation inspects round 0 and finalizes at round 1', () => {
-  const under = { ...initialLoopState(FLASH), round: 0 };
+  const under = { ...initialLoopState(GPT), round: 0 };
   assert.deepEqual(
     decideContinuation(under, { type: 'inspection', imagePath: 'p' }, 0),
     { action: 'inspect' },
   );
-  const at = { ...initialLoopState(FLASH), round: 1 };
+  const at = { ...initialLoopState(GPT), round: 1 };
   assert.equal(
     decideContinuation(at, { type: 'inspection', imagePath: 'p' }, 1).reason,
     'rounds_exhausted',
@@ -804,7 +805,7 @@ test('decideContinuation closes cleanly on compile_ok', () => {
   // The client only sends compile_ok when it decides to stop; the server closes
   // authoritatively regardless of tier / rounds remaining.
   for (const state of [
-    initialLoopState(FLASH),
+    initialLoopState(GPT),
     { ...initialLoopState(FABLE), round: PREMIUM_MAX_ROUNDS },
     initialLoopState(FABLE),
   ]) {

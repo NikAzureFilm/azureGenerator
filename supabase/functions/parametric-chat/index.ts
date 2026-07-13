@@ -32,6 +32,7 @@ import {
 } from '../../../shared/tokenCosts.ts';
 import {
   DEFAULT_CODE_GENERATION_MODEL,
+  GPT_56_SOL_MODEL,
   getCodeGenerationProviderCandidates,
   isGeminiCodeGenerationModel,
   modelSupportsVision,
@@ -179,6 +180,13 @@ function usesAutomaticReasoning(model: string): boolean {
 
 function isClaudeFable5(model: string): boolean {
   return bareAnthropicModelId(model) === 'claude-fable-5';
+}
+
+// GPT-5.6 Sol is the sole CAD code-gen model and always runs at high hidden
+// reasoning — round-0 code-gen, continuation repairs, and the self-inspection
+// review alike (never the provider's default medium effort).
+function usesHighEffortReasoning(model: string): boolean {
+  return model === GPT_56_SOL_MODEL;
 }
 
 // Attribute usage/cost to the model OpenRouter actually served (its responses
@@ -554,7 +562,11 @@ async function generateTitleFromMessages(
       headers: openRouterHeaders(),
       body: JSON.stringify({
         model: DEFAULT_CODE_GENERATION_MODEL,
-        max_tokens: 30,
+        // The default model is a reasoning model now: hidden reasoning tokens
+        // count against max_tokens, so a 30-token cap would return an empty
+        // title. Run at minimal effort with headroom for the short answer.
+        reasoning: { effort: 'minimal', exclude: true },
+        max_tokens: 1000,
         messages: [
           { role: 'system', content: titleSystemPrompt },
           ...messagesToSend,
@@ -1032,9 +1044,12 @@ async function generateContinuationCode(params: {
         max_tokens: getReasoningTokenLimit(codeModel),
       };
       outputCap = getReasoningCompletionTokenLimit(codeModel, outputCap);
-    } else if (reasoningEffort === 'high') {
-      // Other effort-based models (e.g. GPT-5.5) carry no reasoning field for
-      // code-gen; force high hidden reasoning for the self-inspection call only.
+    } else if (
+      reasoningEffort === 'high' ||
+      usesHighEffortReasoning(codeModel)
+    ) {
+      // GPT-5.6 Sol always runs at high hidden reasoning; other effort-based
+      // models get it forced for the self-inspection call only.
       codeRequestBody.reasoning = { effort: 'high', exclude: true };
     }
     // Clamp to what the remaining USD budget can afford for this leg.
@@ -2748,6 +2763,13 @@ Deno.serve(async (req) => {
                 if (isGeminiCodeGenerationModel(codeModel)) {
                   codeRequestBody.reasoning = {
                     effort: 'medium',
+                    exclude: true,
+                  };
+                } else if (usesHighEffortReasoning(codeModel)) {
+                  // GPT-5.6 Sol CAD code-gen always runs at high hidden
+                  // reasoning, regardless of the client's thinking flag.
+                  codeRequestBody.reasoning = {
+                    effort: 'high',
                     exclude: true,
                   };
                 } else if (codeReasoningEnabled) {

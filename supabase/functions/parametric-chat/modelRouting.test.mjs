@@ -74,13 +74,33 @@ assert.match(
 );
 assert.match(
   source,
+  /function usesHighEffortReasoning/,
+  'parametric chat should centralize the always-high-reasoning model gate',
+);
+assert.match(
+  source,
+  /\} else if \(usesHighEffortReasoning\(codeModel\)\) \{[\s\S]{0,300}?effort: 'high',\s+exclude: true/,
+  'GPT-5.6 Sol round-0 code generation should always run at high hidden reasoning',
+);
+assert.match(
+  source,
+  /reasoningEffort === 'high' \|\| usesHighEffortReasoning\(codeModel\)/,
+  'GPT-5.6 Sol continuation code generation should always run at high hidden reasoning',
+);
+assert.match(
+  source,
   /const model = normalizeParametricGenerationModel\(requestedModel\)/,
-  'parametric chat should normalize stale client model ids to the configured Gemini CAD model',
+  'parametric chat should normalize stale client model ids to the configured CAD model',
 );
 assert.match(
   source,
   /model: DEFAULT_CODE_GENERATION_MODEL/,
-  'parametric title generation should use the configured Gemini CAD model',
+  'parametric title generation should use the configured CAD model',
+);
+assert.match(
+  source,
+  /reasoning: \{ effort: 'minimal', exclude: true \},\s+max_tokens: 1000/,
+  'title generation must leave headroom for hidden reasoning tokens (a 30-token cap returns an empty title on a reasoning model)',
 );
 assert.match(
   source,
