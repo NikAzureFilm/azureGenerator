@@ -25,7 +25,9 @@ import * as Sentry from '@sentry/react';
 import { useSendContentMutation } from '@/services/messageService';
 import { useProfile } from '@/services/profileService';
 import { BrandLogo } from '@/components/BrandLogo';
+import { AgentComposer } from '@/components/AgentComposer';
 import { CreationModeCards } from '@/components/CreationModeCards';
+import type { CreationModeType } from '@/utils/creationModeOptions';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   type ImageGenerationModel,
@@ -60,13 +62,16 @@ export function PromptView() {
     return source.trim().split(/\s+/)[0] || '';
   }, [profile?.full_name, user, isProfileLoading]);
 
-  const [type, setType] = useState<'parametric' | 'creative'>('parametric');
+  const [type, setType] = useState<CreationModeType>('parametric');
+  // Agent conversations live in the DB as 'creative' rows flagged with
+  // settings.mode = 'agent' (no conversation-type enum migration needed).
+  const conversationType = type === 'agent' ? 'creative' : type;
 
   const [model, setModel] = useState<Model>(DEFAULT_PARAMETRIC_MODEL);
   const [imageGenerationModel, setImageGenerationModel] =
     useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
 
-  const handleTypeChange = (newType: 'parametric' | 'creative') => {
+  const handleTypeChange = (newType: CreationModeType) => {
     setType(newType);
     // Reset model to the default for the new type
     if (newType === 'creative') {
@@ -99,8 +104,12 @@ export function PromptView() {
     conversation: {
       id: newConversationId,
       user_id: user?.id ?? '',
-      type: type,
-      settings: { model: model, imageGenerationModel },
+      type: conversationType,
+      settings: {
+        model: model,
+        imageGenerationModel,
+        ...(type === 'agent' ? { mode: 'agent' as const } : {}),
+      },
       current_message_leaf_id: null,
     },
   });
@@ -120,18 +129,26 @@ export function PromptView() {
         id: newConversationId,
         user_id: user.id,
         title: 'New Conversation',
-        type,
+        type: conversationType,
         settings: {
           model,
           imageGenerationModel,
           ...(multiviewImages?.front ? { multiviewImages } : {}),
+          ...(type === 'agent' ? { mode: 'agent' } : {}),
         },
       },
       { onConflict: 'id' },
     );
 
     if (error) throw error;
-  }, [imageGenerationModel, model, newConversationId, type, user?.id]);
+  }, [
+    conversationType,
+    imageGenerationModel,
+    model,
+    newConversationId,
+    type,
+    user?.id,
+  ]);
 
   const persistMultiviewDraft = useCallback(
     async (images: MultiviewImages) => {
@@ -307,31 +324,45 @@ export function PromptView() {
               <SelectedItemsContext.Provider
                 value={{ images, setImages, mesh, setMesh }}
               >
-                <TextAreaChat
-                  onSubmit={handleGenerate}
-                  conversation={{
-                    id: newConversationId,
-                    user_id: user?.id ?? '',
-                  }}
-                  onFocus={() => {
-                    if (!user) {
-                      navigate({ to: '/signin' });
-                      return;
-                    }
-                  }}
-                  placeholder="Start building with AzureFilm Generator..."
-                  type={type}
-                  disabled={limitReached}
-                  model={model}
-                  setModel={setModel}
-                  imageGenerationModel={imageGenerationModel}
-                  setImageGenerationModel={setImageGenerationModel}
-                  showPromptGenerator={true}
-                  showFullLabels={true}
-                  onTypeChange={handleTypeChange}
-                  ensureConversation={ensureConversation}
-                  persistMultiviewDraft={persistMultiviewDraft}
-                />
+                {type === 'agent' ? (
+                  <AgentComposer
+                    onSubmit={handleGenerate}
+                    disabled={limitReached}
+                    onFocus={() => {
+                      if (!user) {
+                        navigate({ to: '/signin' });
+                        return;
+                      }
+                    }}
+                    placeholder="Describe what you want to build — the agent will sketch it with you..."
+                  />
+                ) : (
+                  <TextAreaChat
+                    onSubmit={handleGenerate}
+                    conversation={{
+                      id: newConversationId,
+                      user_id: user?.id ?? '',
+                    }}
+                    onFocus={() => {
+                      if (!user) {
+                        navigate({ to: '/signin' });
+                        return;
+                      }
+                    }}
+                    placeholder="Start building with AzureFilm Generator..."
+                    type={type}
+                    disabled={limitReached}
+                    model={model}
+                    setModel={setModel}
+                    imageGenerationModel={imageGenerationModel}
+                    setImageGenerationModel={setImageGenerationModel}
+                    showPromptGenerator={true}
+                    showFullLabels={true}
+                    onTypeChange={handleTypeChange}
+                    ensureConversation={ensureConversation}
+                    persistMultiviewDraft={persistMultiviewDraft}
+                  />
+                )}
               </SelectedItemsContext.Provider>
               <div className="relative">
                 {isLoading && (

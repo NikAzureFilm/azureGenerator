@@ -1,4 +1,5 @@
-import { Box, Ruler } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Box, Ruler, Sparkles } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -18,10 +19,15 @@ export function CreationModeCards({
   className,
 }: CreationModeCardsProps) {
   return (
-    <div className={cn('grid w-full gap-4 md:grid-cols-2', className)}>
+    <div className={cn('grid w-full gap-4 md:grid-cols-3', className)}>
       {CREATION_MODE_OPTIONS.map((option) => {
         const isSelected = option.type === selectedType;
-        const Icon = option.type === 'parametric' ? Ruler : Box;
+        const Icon =
+          option.type === 'parametric'
+            ? Ruler
+            : option.type === 'agent'
+              ? Sparkles
+              : Box;
 
         return (
           <button
@@ -73,6 +79,7 @@ export function CreationModeCards({
                 src={option.imageSrc}
                 webpSrc={option.imageWebpSrc}
                 selected={isSelected}
+                icon={<Icon className="h-8 w-8" />}
               />
             </div>
           </button>
@@ -87,11 +94,13 @@ function CreationModePreview({
   selected,
   src,
   webpSrc,
+  icon,
 }: {
   alt: string;
   selected: boolean;
-  src: string;
-  webpSrc: string;
+  src?: string;
+  webpSrc?: string;
+  icon?: ReactNode;
 }) {
   return (
     <div
@@ -100,20 +109,31 @@ function CreationModePreview({
         selected ? 'border-adam-blue/40' : 'border-white/10',
       )}
     >
-      <picture className="block h-full w-full">
-        <source srcSet={webpSrc} type="image/webp" />
-        <img
-          src={src}
-          alt={alt}
-          width={1086}
-          height={362}
-          loading="eager"
-          decoding="async"
-          fetchPriority="high"
-          className="h-full w-full object-contain object-center"
-          draggable={false}
-        />
-      </picture>
+      {src ? (
+        <picture className="block h-full w-full">
+          <source srcSet={webpSrc} type="image/webp" />
+          <img
+            src={src}
+            alt={alt}
+            width={1086}
+            height={362}
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
+            className="h-full w-full object-contain object-center"
+            draggable={false}
+          />
+        </picture>
+      ) : (
+        <div
+          className={cn(
+            'flex h-full w-full items-center justify-center',
+            selected ? 'text-adam-blue' : 'text-adam-text-tertiary',
+          )}
+        >
+          {icon}
+        </div>
+      )}
     </div>
   );
 }

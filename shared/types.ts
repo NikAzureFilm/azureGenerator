@@ -51,6 +51,26 @@ export type Mesh = {
 
 export type CadBackend = 'openscad' | 'text-to-cad';
 
+// Generation pipelines the design agent can hand a conversation off to.
+export type AgentPipeline = 'cad' | 'mesh' | 'multiview';
+
+export const AGENT_PIPELINES: AgentPipeline[] = ['cad', 'mesh', 'multiview'];
+
+export function normalizeAgentPipeline(value: unknown): AgentPipeline | null {
+  return AGENT_PIPELINES.includes(value as AgentPipeline)
+    ? (value as AgentPipeline)
+    : null;
+}
+
+// Written by the agent-chat recommend_pipeline tool onto assistant messages.
+// The client shows a Generate panel for the latest recommendation and uses
+// generationPrompt (plus the last concept image) to seed the handoff.
+export type AgentRecommendation = {
+  pipeline: AgentPipeline;
+  reason?: string;
+  generationPrompt?: string;
+};
+
 export type CadJobArtifact = {
   stepPath?: string;
   glbPath?: string;
@@ -118,6 +138,8 @@ export type Content = {
   // messages produced by the auto-repair / visual-inspection loop. Absent on
   // all historical messages, which are therefore treated as final.
   loop?: LoopState;
+  // Design-agent pipeline recommendation (agent mode only).
+  recommendation?: AgentRecommendation;
 };
 
 // Tier that drives which loop rounds are available: premium (Fable) gets the
@@ -197,6 +219,11 @@ export type ConversationSettings = {
   // Draft multiview slot→image mapping, persisted as views are generated or
   // uploaded so a reload before submit rehydrates them.
   multiviewImages?: MultiviewImages;
+  // 'agent' while the conversation is in the design-agent ideation phase.
+  // Removed when the user clicks Generate and the conversation graduates to
+  // a normal creative/parametric conversation. The conversations.type column
+  // stays 'creative' during the agent phase (no enum migration needed).
+  mode?: 'agent';
 } | null;
 
 export type Profile = Database['public']['Tables']['profiles']['Row'];

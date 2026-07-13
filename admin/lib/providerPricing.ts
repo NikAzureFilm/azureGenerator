@@ -28,6 +28,11 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
     outputPerM: 30,
     cachedInputPerM: 0.5,
   },
+  'openai/gpt-5.6-terra': {
+    inputPerM: 2.5,
+    outputPerM: 15,
+    cachedInputPerM: 0.25,
+  },
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
 };
 

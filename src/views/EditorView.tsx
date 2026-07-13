@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 import { CreativeEditorView } from './CreativeEditorView';
 import { ParametricEditorView } from './ParametricEditorView';
+import { AgentEditorView } from './AgentEditorView';
 import { ConversationContext } from '@/contexts/ConversationContext';
 import { Conversation, Message } from '@shared/types';
 import { MessageItem } from '../types/misc.ts';
@@ -130,7 +131,9 @@ export default function EditorView() {
         <SelectedItemsContext.Provider
           value={{ images, setImages, mesh, setMesh }}
         >
-          {conversation.type === 'creative' ? (
+          {conversation.settings?.mode === 'agent' ? (
+            <AgentEditorView />
+          ) : conversation.type === 'creative' ? (
             <CreativeEditorView />
           ) : (
             <ParametricEditorView />

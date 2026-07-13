@@ -1,11 +1,13 @@
-export type CreationModeType = 'parametric' | 'creative';
+export type CreationModeType = 'parametric' | 'creative' | 'agent';
 
 export type CreationModeOption = {
   type: CreationModeType;
   title: string;
   description: string;
-  imageSrc: string;
-  imageWebpSrc: string;
+  // Agent mode has no preview asset yet; the card renders an icon placeholder
+  // when these are absent.
+  imageSrc?: string;
+  imageWebpSrc?: string;
   printability: string[];
 };
 
@@ -25,5 +27,11 @@ export const CREATION_MODE_OPTIONS: CreationModeOption[] = [
     imageSrc: '/creation-mode-mesh.png',
     imageWebpSrc: '/creation-mode-mesh.webp',
     printability: ['wide base', 'thick features', 'no floating parts'],
+  },
+  {
+    type: 'agent',
+    title: 'Design Agent',
+    description: 'Chat, preview concept images, then generate',
+    printability: [],
   },
 ];

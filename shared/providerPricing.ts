@@ -58,6 +58,13 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
     outputPerM: 30,
     cachedInputPerM: 0.5,
   },
+  // Design-agent chat model via OpenRouter — published $2.50 / $15, 90%
+  // cached-input discount.
+  'openai/gpt-5.6-terra': {
+    inputPerM: 2.5,
+    outputPerM: 15,
+    cachedInputPerM: 0.25,
+  },
   // prompt-generator fallback (Haiku-class; estimate).
   'anthropic/claude-haiku-4.5': { inputPerM: 1, outputPerM: 5 },
 };

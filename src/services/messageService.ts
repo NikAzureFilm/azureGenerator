@@ -354,6 +354,128 @@ export function useCreativeChatMutation({
     },
   });
 }
+export function useAgentChatMutation({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
+  const queryClient = useQueryClient();
+  const { mutateAsync: insertMessageAsync } = useInsertMessageMutation();
+
+  return useMutation({
+    mutationKey: ['agent-chat', conversationId],
+    mutationFn: async ({
+      messageId,
+      conversationId,
+    }: {
+      messageId: string;
+      conversationId: string;
+    }) => {
+      const newMessageId = crypto.randomUUID();
+      let initialized = false;
+
+      // Start streaming request
+      const response = await fetch(getSupabaseFunctionUrl('agent-chat'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${
+            (await supabase.auth.getSession()).data.session?.access_token
+          }`,
+        },
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          newMessageId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Network response was not ok: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      if (response.headers.get('Content-Type')?.includes('application/json')) {
+        const data = await response.json();
+        if (data.message) {
+          return data.message;
+        } else {
+          throw new Error('No message received');
+        }
+      }
+
+      async function initialize() {
+        await queryClient.cancelQueries({
+          queryKey: ['conversation', conversationId],
+        });
+        queryClient.setQueryData(
+          ['conversation', conversationId],
+          (oldConversation: Conversation) => ({
+            ...oldConversation,
+            current_message_leaf_id: newMessageId,
+          }),
+        );
+      }
+
+      const finalMessage = await consumeMessageStream({
+        response,
+        queryClient,
+        conversationId,
+        onFirstMessage: async () => {
+          if (!initialized) {
+            await initialize();
+            initialized = true;
+          }
+        },
+      });
+
+      if (!finalMessage) {
+        throw new Error('No final message received');
+      }
+
+      return finalMessage;
+    },
+    onSuccess: (newMessage) => {
+      messageInsertedConversationUpdate(
+        queryClient,
+        newMessage,
+        conversationId,
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['userExtraData'] });
+    },
+    onError: async (error, { messageId }) => {
+      Sentry.captureException(error, {
+        extra: {
+          hook: 'useAgentChatMutation',
+          messageId,
+          conversationId,
+        },
+      });
+      try {
+        await insertMessageAsync({
+          role: 'assistant',
+          content: {
+            text: 'An error occurred while processing your request.',
+          },
+          parent_message_id: messageId,
+          conversation_id: conversationId,
+        });
+      } catch (error) {
+        Sentry.captureException(error, {
+          extra: {
+            hook: 'useAgentChatMutation insertMessageAsync',
+            messageId,
+            conversationId,
+          },
+        });
+      }
+    },
+  });
+}
+
 export function useParametricChatMutation({
   conversationId,
 }: {
@@ -510,6 +632,10 @@ export function useSendContentMutation({
     conversationId: conversation.id,
   });
 
+  const { mutateAsync: sendToAgentChat } = useAgentChatMutation({
+    conversationId: conversation.id,
+  });
+
   return useMutation({
     mutationKey: ['send-content', conversation.id],
     mutationFn: async (content: Content) => {
@@ -582,7 +708,12 @@ export function useSendContentMutation({
         conversation_id: conversation.id,
       });
 
-      if (conversation.type === 'creative') {
+      if (conversation.settings?.mode === 'agent') {
+        await sendToAgentChat({
+          messageId: userMessage.id,
+          conversationId: conversation.id,
+        });
+      } else if (conversation.type === 'creative') {
         await sendToCreativeChat({
           model: normalizeCreativeModel(
             content.model ?? conversation.settings?.model,

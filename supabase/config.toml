@@ -71,6 +71,12 @@ verify_jwt = true
 import_map = "./functions/creative-chat/deno.json"
 entrypoint = "./functions/creative-chat/index.ts"
 
+[functions.agent-chat]
+enabled = true
+verify_jwt = true
+import_map = "./functions/agent-chat/deno.json"
+entrypoint = "./functions/agent-chat/index.ts"
+
 [functions.cad-chat]
 enabled = true
 verify_jwt = true
