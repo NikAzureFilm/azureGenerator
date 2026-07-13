@@ -165,9 +165,7 @@ export function AssistantMessage({
   );
   const visibleToolCalls = message.content.toolCalls ?? [];
   const isAgentConversation = conversation.settings?.mode === 'agent';
-  const showRestoredCreativeLoading =
-    conversation.type === 'creative' &&
-    isAssistantGenerationInFlight(message) &&
+  const isEmptyGenerationMessage =
     !message.content.text &&
     !message.content.mesh &&
     !message.content.artifact &&
@@ -175,6 +173,19 @@ export function AssistantMessage({
     !message.content.recommendation &&
     (!message.content.images || message.content.images.length === 0) &&
     visibleToolCalls.length === 0;
+  const isGenerationInFlight = isAssistantGenerationInFlight(message);
+  const showParametricLoading =
+    conversation.type === 'parametric' &&
+    isGenerationInFlight &&
+    isEmptyGenerationMessage;
+  const showInterruptedParametricGeneration =
+    conversation.type === 'parametric' &&
+    !isGenerationInFlight &&
+    isEmptyGenerationMessage;
+  const showRestoredCreativeLoading =
+    conversation.type === 'creative' &&
+    isGenerationInFlight &&
+    isEmptyGenerationMessage;
 
   return (
     <div className="flex justify-start">
@@ -219,22 +230,26 @@ export function AssistantMessage({
             </>
           ) : (
             <>
-              {conversation.type === 'parametric' &&
-                !message.content.text &&
-                (!message.content.toolCalls ||
-                  message.content.toolCalls.length === 0) &&
-                !message.content.artifact &&
-                !message.content.mesh &&
-                (!message.content.images ||
-                  message.content.images.length === 0) && (
-                  <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
-                    <div className="flex h-full items-center justify-center gap-2">
-                      <Box className="h-4 w-4 text-white" />
-                      <span>Generating model...</span>
-                    </div>
-                    <Loader2 className="h-4 w-4 animate-spin text-white" />
+              {showParametricLoading && (
+                <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
+                  <div className="flex h-full items-center justify-center gap-2">
+                    <Box className="h-4 w-4 text-white" />
+                    <span>Generating model...</span>
                   </div>
-                )}
+                  <Loader2 className="h-4 w-4 animate-spin text-white" />
+                </div>
+              )}
+              {showInterruptedParametricGeneration && (
+                <GenerationErrorNotice
+                  error="This generation was interrupted before a model was saved."
+                  onRetry={
+                    onRetry && message.parent_message_id && model
+                      ? () => onRetry({ model, id: message.parent_message_id! })
+                      : undefined
+                  }
+                  disabled={isLoading || limitReached}
+                />
+              )}
               {showRestoredCreativeLoading && (
                 <div className="flex h-10 w-full items-center justify-between overflow-hidden rounded-md bg-adam-neutral-950 px-3">
                   <div className="flex h-full items-center justify-center gap-2">
@@ -474,32 +489,34 @@ export function AssistantMessage({
                 </Tooltip>
               )}
 
-              {message.parent_message_id && onRetry && (
-                <div className="flex items-center">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="icon"
-                        variant="outline"
-                        aria-label="Retry generation"
-                        onClick={() => {
-                          onRetry({ model, id: message.parent_message_id! });
-                        }}
-                        disabled={isLoading || limitReached}
-                        className={cn(
-                          'h-6 w-6 rounded-lg p-0',
-                          limitReached && 'cursor-not-allowed opacity-50',
-                        )}
-                      >
-                        <RefreshCw className="h-3 w-3 p-0 text-adam-neutral-100" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <span>Retry</span>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-              )}
+              {message.parent_message_id &&
+                onRetry &&
+                !showInterruptedParametricGeneration && (
+                  <div className="flex items-center">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          aria-label="Retry generation"
+                          onClick={() => {
+                            onRetry({ model, id: message.parent_message_id! });
+                          }}
+                          disabled={isLoading || limitReached}
+                          className={cn(
+                            'h-6 w-6 rounded-lg p-0',
+                            limitReached && 'cursor-not-allowed opacity-50',
+                          )}
+                        >
+                          <RefreshCw className="h-3 w-3 p-0 text-adam-neutral-100" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <span>Retry</span>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                )}
               {canUpscale && (
                 <Tooltip>
                   <TooltipTrigger asChild>

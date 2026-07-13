@@ -40,6 +40,16 @@ assert.match(
 );
 assert.match(
   source,
+  /If the user asks for a single, one-piece, contiguous, or connected object, that choice is MANDATORY/i,
+  'OpenSCAD code-generation prompt should make an explicit single-piece request mandatory',
+);
+assert.match(
+  source,
+  /preserve that requirement exactly: rebuild it as one continuous solid/i,
+  'self-inspection should preserve explicit single-piece requirements',
+);
+assert.match(
+  source,
   /lowest point is at z = 0/i,
   'OpenSCAD code-generation prompt should require separate parts to rest flat on the build plate',
 );

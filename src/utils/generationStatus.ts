@@ -1,6 +1,6 @@
 import type { Content, Message } from '@shared/types';
 
-const RESTORED_GENERATION_WINDOW_MS = 2 * 60 * 60 * 1000;
+const RESTORED_GENERATION_WINDOW_MS = 10 * 60 * 1000;
 
 type GenerationMessage = Pick<Message, 'role' | 'content' | 'created_at'>;
 
@@ -52,8 +52,12 @@ export function isAssistantGenerationInFlight(
 
   const { content } = message;
 
-  if (hasPendingToolCall(content) || content.cadJob?.status === 'pending') {
+  if (content.cadJob?.status === 'pending') {
     return true;
+  }
+
+  if (hasPendingToolCall(content)) {
+    return isRecentEnough(message.created_at, currentTime);
   }
 
   if (

@@ -58,7 +58,6 @@ import {
   effectiveOutputCap,
   expectedInspectionPath,
   initialLoopState,
-  isSelfInspectionSentinelLead,
   isValidInspectionPng,
   loopStateFromRow,
   parseContinuationBody,
@@ -726,6 +725,7 @@ Color: When the model has distinct parts, wrap each in a color() call with a fit
 Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, no open shells, and no self-intersections. Use a practical minimum wall thickness of 1.2 mm when dimensions are missing, thicker walls or ribs for load-bearing features, and details large enough for a 0.4 mm FDM nozzle.
 
 Connectivity — NEVER leave floating parts (CRITICAL). The result must always 3D-print, either as ONE connected piece or as a kit of SEPARATE parts. Decide which, then build it cleanly for that choice:
+- If the user asks for a single, one-piece, contiguous, or connected object, that choice is MANDATORY. Never output a kit, separate parts, an exploded layout, loose accessories, or multiple objects.
 - One connected piece: every feature (pegs, lugs, bosses, ribs, handles, brackets, text, etc.) must physically OVERLAP the body it attaches to and be combined with union() so the whole object reduces to a single continuous solid. Sink each feature into its parent by at least 0.5 mm of real solid overlap — never position it with an air gap, and never let it merely touch at a single coincident face. A peg on top of a surface must extend DOWN into that surface, not sit above it.
 - A kit of separate parts: only when the design genuinely needs distinct pieces (e.g. a body plus a matching lid, or mating halves). Make each piece its own connected solid, lay the pieces out side by side in the XY plane with a few mm of spacing between them, and rest every piece FLAT on the build plate so its lowest point is at z = 0. Give mating features (pegs/sockets, pins/holes) a 0.2-0.4 mm clearance. Never stack pieces in mid-air or leave one hovering above the plate.
 - Self-check before finishing: after each translate()/rotate(), trace the part's actual coordinates and confirm it either overlaps its parent (one piece) or sits on the plate at z = 0 (kit). If any component would float in empty space with a gap to everything else, move or extend it so it connects — a floating fragment is never acceptable.
@@ -819,6 +819,7 @@ A) If ANY requested feature is missing, malformed, misplaced, disconnected, non-
    - Raw OpenSCAD only: a single, complete, standalone script.
    - Declare every editable value as a descriptive snake_case top-of-file variable with an OpenSCAD Customizer trailing comment (e.g. wall_thickness = 2; // [1:0.5:8]). Never abbreviate names to single letters.
    - Keep the geometry watertight and manifold, and make it either ONE fully connected solid (each feature sunk into its parent by real overlapping material and combined with union()) OR a kit of separate pieces that each rest flat on the build plate — never leave a floating part or one that only touches at a point.
+   - If the user requested a single, one-piece, contiguous, or connected object, preserve that requirement exactly: rebuild it as one continuous solid and never return a kit, separate parts, an exploded layout, loose accessories, or multiple objects.
    - Respect printability: use a sensible minimum wall thickness (about 1.2 mm when unspecified) and keep details large enough for a 0.4 mm FDM nozzle.
 
 B) If EVERY requested feature is verified present, correct, connected, and printable, reply with the literal token LOOKS_GOOD: at the very START of your response, followed by one short, friendly sentence describing the finished model. Output nothing else.`;
@@ -1767,14 +1768,10 @@ async function handleContinuation(
               conversationId,
               userId,
               remainingBudgetMs,
-              // Suppress progress while the partial reply could still be a
-              // LOOKS_GOOD approval (its OpenSCAD-token-bearing sentence would
-              // otherwise flash as broken code in the preview); stream a rebuild
-              // normally once the lead provably isn't the sentinel.
-              onProgress: (streamed) => {
-                if (isSelfInspectionSentinelLead(streamed)) return;
-                streamProgress(streamed);
-              },
+              // Keep the last compiled artifact visible during inspection.
+              // A rebuild replaces it atomically only after the complete reply
+              // has been validated, so partial OpenSCAD never breaks the viewer.
+              onProgress: () => {},
               budget: {
                 remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
                 promptChars: inspectPromptChars,

@@ -34,6 +34,7 @@ import { UserMessage } from '@/components/chat/UserMessage';
 import { AssistantLoading } from '@/components/chat/AssistantLoading';
 import { ChatTitle } from '@/components/chat/ChatTitle';
 import { LimitReachedMessage } from '@/components/LimitReachedMessage';
+import { buildAgentHandoffPrompt } from '@/utils/agentHandoff';
 
 const PIPELINE_META: Record<
   AgentPipeline,
@@ -183,10 +184,10 @@ export function AgentEditorView() {
     // multiview composer (seeded with the concept image as the front view).
     if (pipeline === 'multiview') return;
 
-    const text =
-      recommendation?.generationPrompt?.trim() ||
-      lastUserText ||
-      'Generate the object we designed.';
+    const text = buildAgentHandoffPrompt(
+      recommendation?.generationPrompt?.trim() || lastUserText,
+      pipeline,
+    );
 
     const content: Content = {
       text,

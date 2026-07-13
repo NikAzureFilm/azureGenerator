@@ -41,6 +41,39 @@ assert.equal(
 
 assert.equal(
   isAssistantGenerationInFlight(
+    assistantMessage(
+      {
+        text: 'Starting the mesh.',
+        toolCalls: [{ name: 'create_mesh', status: 'pending' }],
+      },
+      '2026-06-15T08:40:00.000Z',
+    ),
+    now,
+  ),
+  false,
+  'stale pending tool calls should not keep the UI loading forever',
+);
+
+assert.equal(
+  isAssistantGenerationInFlight(
+    assistantMessage(
+      {
+        cadJob: {
+          id: 'cad-job-1',
+          status: 'pending',
+          backend: 'text-to-cad',
+        },
+      },
+      '2026-06-15T05:30:00.000Z',
+    ),
+    now,
+  ),
+  true,
+  'an explicitly pending worker CAD job should remain active',
+);
+
+assert.equal(
+  isAssistantGenerationInFlight(
     assistantMessage({
       text: 'Starting the mesh.',
       toolCalls: [{ name: 'create_mesh', status: 'error' }],
