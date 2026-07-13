@@ -25,6 +25,7 @@ import {
 } from '../../../shared/imageGeneration.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
+import { buildFallbackRecommendation } from './recommendationFallback.ts';
 
 // Design-agent chat model: GPT-5.6 Terra via OpenRouter. Reasoning effort
 // defaults to 'low': measured 2026-07-13, 'medium' on this model was served
@@ -268,6 +269,7 @@ Workflow:
 4. Right after each generated image, you are shown the result in this same turn. Review it critically BEFORE speaking to the user: (a) does it match what the user asked for, (b) is it ONE connected physical piece with no floating or detached elements, (c) is it free of paper-thin or unsupported features that would fail 3D printing, (d) is it a clean render of a single object? If it clearly fails a check, immediately call generate_concept_image again — pass baseImageId to fix small flaws while keeping the design, or start fresh when the concept itself is wrong. You get at most one automatic redo per turn; if the redo is still flawed, tell the user honestly what you would change and ask them.
 5. After an image you are happy with, briefly ask what they'd like to change. Iterate until they're happy.
 6. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
+7. NEVER name or recommend a pipeline only in plain text. Whenever you tell the user that CAD, Mesh, or Multiview is recommended, you MUST call recommend_pipeline in that same turn so the Generate button appears.
 
 Everything you design MUST be 3D printable:
 - One contiguous physical piece: every element attached to or touching the main body — no floating, hovering, or detached parts, no loose accessories, no assemblies of separate objects.
@@ -760,6 +762,10 @@ Deno.serve(async (req) => {
       role: message.role,
       content: message.content,
     }));
+    const userDesignBriefs = messagesToSend
+      .filter((message) => message.role === 'user')
+      .map((message) => message.content.text?.trim() ?? '')
+      .filter(Boolean);
 
     const historyMessages: AgentChatMessage[] = (
       await Promise.all(
@@ -1270,7 +1276,7 @@ Deno.serve(async (req) => {
                 content: [
                   {
                     type: 'text',
-                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request and the 3D-printability rules (one connected piece, nothing floating or detached, no unprintably thin features, clean single-object render). If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes, reply briefly to the user.',
+                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request and the 3D-printability rules (one connected piece, nothing floating or detached, no unprintably thin features, clean single-object render). If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes and the design is fully specified or the user asked you to recommend/generate, call recommend_pipeline now with the complete generation prompt; never merely name the recommended pipeline in prose. Otherwise, briefly ask what the user would like to change.',
                   },
                   ...reviewImageParts,
                 ],
@@ -1319,6 +1325,24 @@ Deno.serve(async (req) => {
             }
           }
         } finally {
+          if (
+            !abortSignal.aborted &&
+            !content.question &&
+            !content.recommendation
+          ) {
+            const fallbackRecommendation = buildFallbackRecommendation({
+              assistantText: content.text,
+              userBriefs: userDesignBriefs,
+              hasConceptImage: !!content.images?.length,
+            });
+            if (fallbackRecommendation) {
+              content = {
+                ...content,
+                recommendation: fallbackRecommendation,
+              };
+            }
+          }
+
           if (content.toolCalls) {
             content = {
               ...content,
