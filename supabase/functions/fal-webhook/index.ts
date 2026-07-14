@@ -2,6 +2,10 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { getServiceRoleSupabaseClient } from '../_shared/supabaseClient.ts';
 import { billing } from '../_shared/billingClient.ts';
 import {
+  releaseReservedGenerationCharge,
+  settleReservedGenerationCharge,
+} from '../_shared/deferredTokenLedger.ts';
+import {
   FEATURE_COSTS,
   getCreativeModelTokenCost,
 } from '../../../shared/tokenCosts.ts';
@@ -36,29 +40,55 @@ function getMeshRefundTokenCost(meshData: Record<string, unknown>): number {
   );
 }
 
-async function refundFailedMeshJob(
+async function getMeshUserEmail(meshData: Record<string, unknown>) {
+  if (typeof meshData.user_id !== 'string') return null;
+  const { data: userData, error: userError } =
+    await supabaseClient.auth.admin.getUserById(meshData.user_id);
+  if (userError || !userData.user?.email) {
+    console.error('Failed to load user for mesh billing:', {
+      userId: meshData.user_id,
+      error: userError?.message,
+    });
+    return null;
+  }
+  return userData.user.email;
+}
+
+async function refundLegacyFailedMeshJob(
   id: string,
   meshData: Record<string, unknown>,
 ) {
   if (typeof meshData.user_id !== 'string') return;
-
-  const { data: userData, error: userError } =
-    await supabaseClient.auth.admin.getUserById(meshData.user_id);
-  if (userError || !userData.user?.email) {
-    console.error('Failed to load user for mesh refund:', {
-      id,
-      userId: meshData.user_id,
-      error: userError?.message,
-    });
-    return;
-  }
-
-  await billing.refund(userData.user.email, {
+  const email = await getMeshUserEmail(meshData);
+  if (!email) return;
+  await billing.refund(email, {
     tokens: getMeshRefundTokenCost(meshData),
     operation: 'mesh',
     referenceId: id,
     userId: meshData.user_id,
   });
+}
+
+async function settleCompletedMeshJob(
+  id: string,
+  meshData: Record<string, unknown>,
+) {
+  if (typeof meshData.user_id !== 'string') {
+    throw new Error('Mesh user is missing');
+  }
+  const email = await getMeshUserEmail(meshData);
+  if (!email) throw new Error('Mesh user email is missing');
+
+  const result = await settleReservedGenerationCharge({
+    email,
+    userId: meshData.user_id,
+    referenceId: id,
+  });
+  // Jobs submitted before this rollout were prepaid and have no reservation.
+  if (!result.ok && result.reason === 'missing_reservation') return;
+  if (!result.ok) {
+    throw new Error(`Mesh token settlement failed: ${result.reason}`);
+  }
 }
 
 Deno.serve(async (request) => {
@@ -355,6 +385,11 @@ Deno.serve(async (request) => {
       metadata: { source: 'fal-webhook', fileExtension },
     });
 
+    if (mode !== 'preview') {
+      // The user is charged only after the model bytes are safely stored.
+      await settleCompletedMeshJob(id, meshData as Record<string, unknown>);
+    }
+
     const { error: updateError } = await supabaseClient
       .from(mode === 'preview' ? 'previews' : 'meshes')
       .update({
@@ -387,6 +422,40 @@ Deno.serve(async (request) => {
       meshDataStatus: meshData?.status,
     });
 
+    if (mode !== 'preview') {
+      try {
+        const releaseState = await releaseReservedGenerationCharge({
+          userId: meshData.user_id,
+          referenceId: id,
+        });
+        if (releaseState === 'settlement_in_progress') {
+          // A duplicate webhook arrived while the original callback is
+          // charging. Let that callback finish instead of marking the model
+          // failed or racing its reservation.
+          return new Response('Mesh callback already processing', {
+            status: 200,
+          });
+        }
+        // Backward compatibility for jobs that were prepaid before deferred
+        // settlement was deployed. A charged deferred job also needs a refund
+        // if a later persistence step fails.
+        if (releaseState === 'missing' || releaseState === 'charged') {
+          await refundLegacyFailedMeshJob(
+            id,
+            meshData as Record<string, unknown>,
+          );
+        }
+      } catch (billingError) {
+        console.error('Failed to release/refund mesh generation:', {
+          id,
+          error:
+            billingError instanceof Error
+              ? billingError.message
+              : String(billingError),
+        });
+      }
+    }
+
     meshStatus = 'failure';
 
     await supabaseClient
@@ -395,20 +464,6 @@ Deno.serve(async (request) => {
         status: meshStatus,
       })
       .eq('id', id);
-
-    if (mode !== 'preview') {
-      try {
-        await refundFailedMeshJob(id, meshData as Record<string, unknown>);
-      } catch (refundError) {
-        console.error('Failed to refund mesh tokens after webhook failure:', {
-          id,
-          error:
-            refundError instanceof Error
-              ? refundError.message
-              : String(refundError),
-        });
-      }
-    }
   }
 
   debugLog('=== SENDING BROADCAST ===');

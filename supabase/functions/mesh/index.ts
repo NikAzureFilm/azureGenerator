@@ -51,9 +51,9 @@ import {
   costControlErrorBody,
 } from '../_shared/costControls.ts';
 import {
-  RefundableTokenLedger,
-  type RefundFailure,
-} from '../_shared/refundableTokenLedger.ts';
+  DeferredTokenLedger,
+  type ReservationFailure,
+} from '../_shared/deferredTokenLedger.ts';
 import { initSentry, logError, logApiError } from '../_shared/sentry.ts';
 import { Buffer } from 'node:buffer';
 
@@ -74,13 +74,13 @@ const debugLog = (...args: unknown[]) => {
   if (DEBUG_LOGS) console.log(...args);
 };
 
-const logRefundFailure = ({ error, charge }: RefundFailure) => {
+const logReservationFailure = ({ error, charge }: ReservationFailure) => {
   logError(error, {
     functionName: 'mesh',
     statusCode: 502,
     userId: charge.body.userId,
     additionalContext: {
-      stage: 'refund_after_mesh_error',
+      stage: 'release_reservation_after_mesh_error',
       operation: charge.body.operation,
       referenceId: charge.body.referenceId,
       tokens: charge.body.tokens,
@@ -775,7 +775,7 @@ Be quirky and excited! Use wordplay or puns if appropriate.
 Do NOT use quotes around your response.`;
 
 Deno.serve(async (req) => {
-  const tokenLedger = new RefundableTokenLedger(billing);
+  const tokenLedger = new DeferredTokenLedger(billing);
   try {
     debugLog('=== DENO.SERVE MESH FUNCTION ENTRY POINT ===');
     debugLog('Mesh function called', {
@@ -974,7 +974,7 @@ Deno.serve(async (req) => {
 
     const meshReferenceId = crypto.randomUUID();
     try {
-      const result = await tokenLedger.consume(userData.user.email, {
+      const result = await tokenLedger.reserve(userData.user.email, {
         tokens: meshTokenCost,
         operation: 'mesh',
         referenceId: meshReferenceId,
@@ -1026,7 +1026,7 @@ Deno.serve(async (req) => {
           .single();
 
       if (originalMeshError || !originalMesh) {
-        await tokenLedger.refundAll(logRefundFailure);
+        await tokenLedger.releaseAll(logReservationFailure);
         return new Response(
           JSON.stringify({ error: { message: 'Original mesh not found' } }),
           {
@@ -1039,7 +1039,7 @@ Deno.serve(async (req) => {
       // Get the seed image from the mesh's images column
       const seedImageId = originalMesh.images?.[0];
       if (!seedImageId) {
-        await tokenLedger.refundAll(logRefundFailure);
+        await tokenLedger.releaseAll(logReservationFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'No seed image found for this mesh' },
@@ -1058,7 +1058,7 @@ Deno.serve(async (req) => {
           .download(`${userData.user.id}/${conversationId}/${seedImageId}`);
 
       if (downloadError || !imageBlob) {
-        await tokenLedger.refundAll(logRefundFailure);
+        await tokenLedger.releaseAll(logReservationFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'Failed to download seed image' },
@@ -1107,7 +1107,7 @@ Deno.serve(async (req) => {
         .single();
 
       if (newMeshError || !newMeshData) {
-        await tokenLedger.refundAll(logRefundFailure);
+        await tokenLedger.releaseAll(logReservationFailure);
         return new Response(
           JSON.stringify({
             error: { message: 'Failed to create upscaled mesh entry' },
@@ -1263,7 +1263,7 @@ Deno.serve(async (req) => {
             controller.close();
           } catch (error) {
             debugLog('Error in upscale stream:', error);
-            await tokenLedger.refundAll(logRefundFailure);
+            await tokenLedger.releaseAll(logReservationFailure);
             await supabaseClient
               .from('meshes')
               .update({ status: 'failure' })
@@ -1323,7 +1323,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (meshError) {
-      await tokenLedger.refundAll(logRefundFailure);
+      await tokenLedger.releaseAll(logReservationFailure);
       logError(meshError, {
         functionName: 'mesh',
         statusCode: 500,
@@ -1396,7 +1396,7 @@ Deno.serve(async (req) => {
       'Error stack:',
       unexpectedError instanceof Error ? unexpectedError.stack : undefined,
     );
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
 
     return new Response(
       JSON.stringify({
@@ -1430,7 +1430,7 @@ async function submitMeshJob(
   polygonCount: number | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
   multiviewImages: MultiviewImages | undefined,
-  tokenLedger: RefundableTokenLedger,
+  tokenLedger: DeferredTokenLedger,
   meshReferenceId: string,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
@@ -2312,7 +2312,7 @@ Output:`;
       conversationId,
       requestData: { meshId, model, meshTopology, polygonCount },
     });
-    await tokenLedger.refundReference(meshReferenceId, logRefundFailure);
+    await tokenLedger.releaseReference(meshReferenceId, logReservationFailure);
 
     // Persist the error into prompt JSONB for diagnostic visibility (no logs pipeline)
     const errorMessage =

@@ -167,6 +167,42 @@ export type Database = {
           },
         ];
       };
+      generation_token_reservations: {
+        Row: {
+          charged_at: string | null;
+          created_at: string;
+          operation: Database['public']['Enums']['token_operation_type'];
+          reference_id: string;
+          reserved_until: string;
+          status: string;
+          tokens: number;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          charged_at?: string | null;
+          created_at?: string;
+          operation: Database['public']['Enums']['token_operation_type'];
+          reference_id: string;
+          reserved_until: string;
+          status?: string;
+          tokens: number;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          charged_at?: string | null;
+          created_at?: string;
+          operation?: Database['public']['Enums']['token_operation_type'];
+          reference_id?: string;
+          reserved_until?: string;
+          status?: string;
+          tokens?: number;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       images: {
         Row: {
           conversation_id: string;
@@ -678,6 +714,14 @@ export type Database = {
       };
     };
     Functions: {
+      claim_generation_token_reservation: {
+        Args: { p_reference_id: string; p_user_id: string };
+        Returns: Json;
+      };
+      release_generation_token_reservation: {
+        Args: { p_reference_id: string; p_user_id: string };
+        Returns: string;
+      };
       cleanup_expired_generation_assets: {
         Args: { p_now?: string };
         Returns: {
@@ -717,6 +761,17 @@ export type Database = {
         Args: {
           p_operation: Database['public']['Enums']['token_operation_type'];
           p_reference_id?: string;
+          p_user_id: string;
+        };
+        Returns: Json;
+      };
+      reserve_generation_tokens: {
+        Args: {
+          p_available_tokens: number;
+          p_operation: Database['public']['Enums']['token_operation_type'];
+          p_reference_id: string;
+          p_tokens: number;
+          p_ttl_seconds?: number;
           p_user_id: string;
         };
         Returns: Json;

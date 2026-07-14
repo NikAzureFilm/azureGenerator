@@ -23,9 +23,9 @@ import {
 } from '../_shared/costControls.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import {
-  RefundableTokenLedger,
-  type RefundFailure,
-} from '../_shared/refundableTokenLedger.ts';
+  DeferredTokenLedger,
+  type ReservationFailure,
+} from '../_shared/deferredTokenLedger.ts';
 import {
   FEATURE_COSTS,
   getParametricBuildTokenCost,
@@ -70,13 +70,13 @@ const CHAT_TOKEN_COST = FEATURE_COSTS.chat.tokens;
 
 initSentry();
 
-const logRefundFailure = ({ error, charge }: RefundFailure) => {
+const logReservationFailure = ({ error, charge }: ReservationFailure) => {
   logError(error, {
     functionName: 'parametric-chat',
     statusCode: 502,
     userId: charge.body.userId,
     additionalContext: {
-      stage: 'refund_after_generation_error',
+      stage: 'release_reservation_after_generation_error',
       operation: charge.body.operation,
       referenceId: charge.body.referenceId,
       tokens: charge.body.tokens,
@@ -236,6 +236,19 @@ function streamMessage(
   } catch {
     // Controller closed — client has gone away. Nothing more to do.
   }
+}
+
+const STREAM_HEARTBEAT_MS = 15_000;
+
+function startStreamHeartbeat(controller: ReadableStreamDefaultController) {
+  const heartbeat = new TextEncoder().encode('\n');
+  return setInterval(() => {
+    try {
+      controller.enqueue(heartbeat);
+    } catch {
+      // The client disconnected or the stream already closed.
+    }
+  }, STREAM_HEARTBEAT_MS);
 }
 
 // Helper to escape regex special characters
@@ -1980,10 +1993,10 @@ Deno.serve(async (req) => {
     });
   }
 
-  const tokenLedger = new RefundableTokenLedger(billing);
-  const chatReferenceId = crypto.randomUUID();
+  const tokenLedger = new DeferredTokenLedger(billing);
+  const chatReferenceId = `${newMessageId}:chat`;
   try {
-    const result = await tokenLedger.consume(userData.user.email, {
+    const result = await tokenLedger.reserve(userData.user.email, {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
       referenceId: chatReferenceId,
@@ -2029,7 +2042,7 @@ Deno.serve(async (req) => {
     .order('created_at', { ascending: true })
     .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
   if (messagesError) {
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -2044,7 +2057,7 @@ Deno.serve(async (req) => {
     );
   }
   if (!messages || messages.length === 0) {
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
     return new Response(JSON.stringify({ error: 'Messages not found' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
@@ -2053,6 +2066,8 @@ Deno.serve(async (req) => {
 
   // Insert placeholder assistant message that we will stream updates into
   let content: Content = { model };
+  let completedBuildReferenceId: string | null = null;
+  let terminalGenerationFailed = false;
   const { data: newMessageData, error: newMessageError } = await supabaseClient
     .from('messages')
     .insert({
@@ -2066,7 +2081,7 @@ Deno.serve(async (req) => {
     .single()
     .overrideTypes<{ content: Content; role: 'assistant' }>();
   if (!newMessageData) {
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
     return new Response(
       JSON.stringify({
         error:
@@ -2229,6 +2244,7 @@ Deno.serve(async (req) => {
 
     const responseStream = new ReadableStream({
       async start(controller) {
+        const heartbeatId = startStreamHeartbeat(controller);
         let currentToolCall: {
           id: string;
           name: string;
@@ -2415,9 +2431,10 @@ Deno.serve(async (req) => {
           }
         } catch (error) {
           console.error(error);
+          terminalGenerationFailed = true;
           const hasUsefulContent = !!content.text || !!content.artifact;
           if (!hasUsefulContent) {
-            await tokenLedger.refundAll(logRefundFailure);
+            await tokenLedger.releaseAll(logReservationFailure);
           }
           if (!hasUsefulContent) {
             content = {
@@ -2427,6 +2444,7 @@ Deno.serve(async (req) => {
           }
           markAllToolsError();
         } finally {
+          clearInterval(heartbeatId);
           clearTimeout(agentTimeout);
           // Last-line defense: even if markAllToolsError was skipped (e.g.
           // the outer try completed without throwing but a tool call was
@@ -2434,7 +2452,10 @@ Deno.serve(async (req) => {
           content = markPendingToolsAsError(content);
           for (const toolCall of content.toolCalls ?? []) {
             if (toolCall.status === 'error' && toolCall.id) {
-              await tokenLedger.refundReference(toolCall.id, logRefundFailure);
+              await tokenLedger.releaseReference(
+                toolCall.id,
+                logReservationFailure,
+              );
             }
           }
           // Fallback: If no artifact was created but text contains OpenSCAD code,
@@ -2484,10 +2505,12 @@ Deno.serve(async (req) => {
             hasToolCalls &&
             content.toolCalls?.every((toolCall) => toolCall.status === 'error');
           if (!content.artifact && !content.text && hasOnlyErroredToolCalls) {
-            await tokenLedger.refundAll(logRefundFailure);
+            terminalGenerationFailed = true;
+            await tokenLedger.releaseAll(logReservationFailure);
           }
           if (!content.artifact && !content.text && !hasToolCalls) {
-            await tokenLedger.refundAll(logRefundFailure);
+            terminalGenerationFailed = true;
+            await tokenLedger.releaseAll(logReservationFailure);
             console.error(
               '[parametric-chat] empty response from model — no text, tool call, or artifact',
             );
@@ -2509,6 +2532,43 @@ Deno.serve(async (req) => {
             finalMessageData = data;
           } catch (dbError) {
             console.error('Failed to update message in DB:', dbError);
+          }
+
+          const failedGeneration =
+            terminalGenerationFailed ||
+            !!content.error ||
+            (!!hasOnlyErroredToolCalls && !completedBuildReferenceId);
+          if (!finalMessageData || failedGeneration) {
+            await tokenLedger.releaseAll(logReservationFailure);
+          } else {
+            const chargeReferenceId =
+              completedBuildReferenceId ?? chatReferenceId;
+            const settlement =
+              await tokenLedger.commitReference(chargeReferenceId);
+            if (!settlement.ok) {
+              await tokenLedger.releaseAll(logReservationFailure);
+              const billingFailureContent = withoutArtifact(content);
+              delete billingFailureContent.loop;
+              content = {
+                ...billingFailureContent,
+                error:
+                  settlement.reason === 'insufficient_tokens'
+                    ? 'insufficient_tokens'
+                    : 'billing_unavailable',
+                toolCalls: content.toolCalls?.map((toolCall) => ({
+                  ...toolCall,
+                  status: 'error',
+                })),
+              };
+              const { data: billingFailureMessage } = await supabaseClient
+                .from('messages')
+                .update({ content })
+                .eq('id', newMessageData.id)
+                .select()
+                .single()
+                .overrideTypes<{ content: Content; role: 'assistant' }>();
+              finalMessageData = billingFailureMessage;
+            }
           }
 
           // Open the agentic loop only when a build produced an artifact
@@ -2577,9 +2637,13 @@ Deno.serve(async (req) => {
                 return;
               }
 
-              // Deduct CAD generation tokens for model building.
+              // Upgrade the deferred chat reservation to the CAD build cost.
               try {
-                const paramResult = await tokenLedger.consume(
+                await tokenLedger.releaseReference(
+                  chatReferenceId,
+                  logReservationFailure,
+                );
+                const paramResult = await tokenLedger.reserve(
                   userData.user!.email!,
                   {
                     tokens: getParametricBuildTokenCost(model),
@@ -3003,9 +3067,9 @@ Deno.serve(async (req) => {
               const codeMissingOrProse =
                 !codeGenFailed && !hasRenderableScadCode(code);
               if (codeGenFailed || codeMissingOrProse) {
-                await tokenLedger.refundReference(
+                await tokenLedger.releaseReference(
                   toolCall.id,
-                  logRefundFailure,
+                  logReservationFailure,
                 );
                 // Preserve whatever partial artifact was streamed rather than
                 // unsetting it. Clearing `artifact` here flipped `hasArtifact`
@@ -3026,11 +3090,11 @@ Deno.serve(async (req) => {
                   ),
                 };
               } else {
-                await tokenLedger.refundReference(
+                await tokenLedger.releaseReference(
                   chatReferenceId,
-                  logRefundFailure,
+                  logReservationFailure,
                 );
-                tokenLedger.settleReference(toolCall.id);
+                completedBuildReferenceId = toolCall.id;
                 const artifact: ParametricArtifact = {
                   title,
                   version: 'v1',
@@ -3061,9 +3125,9 @@ Deno.serve(async (req) => {
               // `pending` gets flipped to `error` here so the DB write in
               // the outer finally never persists a zombie pending state.
               if (!resolved) {
-                await tokenLedger.refundReference(
+                await tokenLedger.releaseReference(
                   toolCall.id,
-                  logRefundFailure,
+                  logReservationFailure,
                 );
                 content = markToolAsError(content, toolCall.id);
                 streamMessage(controller, { ...newMessageData, content });
@@ -3164,9 +3228,7 @@ Deno.serve(async (req) => {
     console.error(error);
 
     const hasUsefulContent = !!content.text || !!content.artifact;
-    if (!hasUsefulContent) {
-      await tokenLedger.refundAll(logRefundFailure);
-    }
+    await tokenLedger.releaseAll(logReservationFailure);
 
     if (!hasUsefulContent) {
       content = {

@@ -7,6 +7,10 @@ import {
 } from '../_shared/supabaseClient.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
+  DeferredTokenLedger,
+  type ReservationFailure,
+} from '../_shared/deferredTokenLedger.ts';
+import {
   checkGenerationCostControls,
   costControlErrorBody,
 } from '../_shared/costControls.ts';
@@ -26,6 +30,19 @@ import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
 
 initSentry();
+
+const logReservationFailure = ({ error, charge }: ReservationFailure) => {
+  logError(error, {
+    functionName: 'cad-chat',
+    statusCode: 502,
+    userId: charge.body.userId,
+    additionalContext: {
+      stage: 'release_reservation_after_cad_error',
+      referenceId: charge.body.referenceId,
+      tokens: charge.body.tokens,
+    },
+  });
+};
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -313,34 +330,6 @@ function asCadArtifacts(value: unknown): CadJobArtifact {
   return artifacts;
 }
 
-function consumeTokens(
-  email: string,
-  userId: string,
-  model: string,
-  referenceId: string,
-) {
-  return billing.consume(email, {
-    tokens: getCadBackendTokenCost('text-to-cad', model),
-    operation: 'parametric',
-    referenceId,
-    userId,
-  });
-}
-
-function refundTokens(
-  email: string,
-  userId: string,
-  model: string,
-  referenceId: string,
-) {
-  return billing.refund(email, {
-    tokens: getCadBackendTokenCost('text-to-cad', model),
-    operation: 'parametric',
-    referenceId,
-    userId,
-  });
-}
-
 async function updateAssistantMessageContent({
   supabaseClient,
   messageId,
@@ -367,6 +356,7 @@ async function updateAssistantMessageContent({
       conversationId,
       additionalContext: { stage: 'update_assistant_message', messageId },
     });
+    throw error;
   }
 }
 
@@ -460,10 +450,20 @@ async function runTextToCadJob({
   prompt: Record<string, unknown>;
   pendingContent: Content;
 }) {
-  let tokensConsumed = false;
+  const tokenLedger = new DeferredTokenLedger(billing);
+  let tokensReserved = false;
 
   try {
-    const tokenResult = await consumeTokens(email, userId, model, jobId);
+    const tokenResult = await tokenLedger.reserve(
+      email,
+      {
+        tokens: getCadBackendTokenCost('text-to-cad', model),
+        operation: 'parametric',
+        referenceId: jobId,
+        userId,
+      },
+      { ttlSeconds: 21600 },
+    );
     if (!tokenResult.ok) {
       const failureContent: Content = {
         ...pendingContent,
@@ -491,7 +491,7 @@ async function runTextToCadJob({
       return;
     }
 
-    tokensConsumed = true;
+    tokensReserved = true;
 
     let workerBody: Record<string, unknown> | null = null;
     let previousError: string | undefined;
@@ -561,19 +561,14 @@ async function runTextToCadJob({
       content: successContent,
       status: 'success',
     });
+
+    const settlement = await tokenLedger.commitReference(jobId);
+    if (!settlement.ok) {
+      throw new Error(`CAD token settlement failed: ${settlement.reason}`);
+    }
   } catch (err) {
-    if (tokensConsumed) {
-      try {
-        await refundTokens(email, userId, model, jobId);
-      } catch (refundError) {
-        logError(refundError, {
-          functionName: 'cad-chat',
-          statusCode: 502,
-          userId,
-          conversationId,
-          additionalContext: { stage: 'refund_after_worker_submit_failure' },
-        });
-      }
+    if (tokensReserved) {
+      await tokenLedger.releaseReference(jobId, logReservationFailure);
     }
 
     const error =
@@ -636,21 +631,12 @@ Deno.serve(async (req) => {
   const { data: userData, error: userError } =
     await supabaseClient.auth.getUser();
 
-  if (!userData.user) {
-    logError(new Error('No user found in token'), {
+  if (userError || !userData.user) {
+    logError(userError ?? new Error('No user found in token'), {
       functionName: 'cad-chat',
       statusCode: 401,
     });
-    return jsonResponse({ error: 'Unauthorized' }, 401);
-  }
-
-  if (userError) {
-    logError(userError, {
-      functionName: 'cad-chat',
-      statusCode: 401,
-      userId: userData.user.id,
-    });
-    return jsonResponse({ error: userError.message }, 401);
+    return jsonResponse({ error: userError?.message ?? 'Unauthorized' }, 401);
   }
 
   if (!userData.user.email) {

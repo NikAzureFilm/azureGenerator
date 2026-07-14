@@ -104,3 +104,41 @@ Deno.test(
     }
   },
 );
+
+Deno.test('refundAll retries transient refund failures', async () => {
+  let refundAttempts = 0;
+  const billingClient: TestBillingClient = {
+    consume: (_email, body) =>
+      Promise.resolve({
+        ok: true,
+        tokensDeducted: body.tokens,
+        freeBalance: 0,
+        subscriptionBalance: 90,
+        purchasedBalance: 0,
+        totalBalance: 90,
+      }),
+    refund: () => {
+      refundAttempts += 1;
+      if (refundAttempts < 3) {
+        return Promise.reject(new Error('temporary billing outage'));
+      }
+      return Promise.resolve({ ok: true });
+    },
+  };
+  const ledger = new RefundableTokenLedger(billingClient);
+
+  await ledger.consume('user@example.com', {
+    tokens: 10,
+    operation: 'chat',
+    referenceId: 'retry-refund',
+    userId: 'user-1',
+  });
+  const failures = await ledger.refundAll();
+
+  if (refundAttempts !== 3) {
+    throw new Error(`expected three refund attempts, got ${refundAttempts}`);
+  }
+  if (failures.length !== 0) {
+    throw new Error('eventually successful refund should not be a failure');
+  }
+});

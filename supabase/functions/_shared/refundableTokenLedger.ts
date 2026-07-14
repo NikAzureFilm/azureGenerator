@@ -40,6 +40,11 @@ type BillingClientLike = {
   refund: (email: string, body: TokenChargeBody) => Promise<unknown>;
 };
 
+const REFUND_RETRY_DELAYS_MS = [0, 150, 500] as const;
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
 export class RefundableTokenLedger {
   private charges: TrackedTokenCharge[] = [];
 
@@ -87,10 +92,20 @@ export class RefundableTokenLedger {
 
     const failures: RefundFailure[] = [];
     for (const charge of selected) {
-      try {
-        await this.billingClient.refund(charge.email, charge.body);
-      } catch (error) {
-        const failure = { charge, error };
+      let lastError: unknown;
+      let refunded = false;
+      for (const delayMs of REFUND_RETRY_DELAYS_MS) {
+        if (delayMs > 0) await wait(delayMs);
+        try {
+          await this.billingClient.refund(charge.email, charge.body);
+          refunded = true;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!refunded) {
+        const failure = { charge, error: lastError };
         failures.push(failure);
         onRefundError?.(failure);
       }

@@ -3,13 +3,26 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
+assert.match(
+  source,
+  /new DeferredTokenLedger\(billing\)/,
+  'mesh generation should reserve credits without deducting them',
+);
+assert.match(
+  source,
+  /tokenLedger\.reserve\(userData\.user\.email/,
+  'mesh generation should reserve the selected model cost',
+);
+
 assert.doesNotMatch(
   source,
   /await\s+submitMeshJob\(/,
   'mesh function should not block the HTTP response while provider setup runs',
 );
 
-const waitUntilIndex = source.indexOf('EdgeRuntime.waitUntil(\n      submitMeshJob(');
+const waitUntilIndex = source.indexOf(
+  'EdgeRuntime.waitUntil(\n      submitMeshJob(',
+);
 const responseIndex = source.indexOf(
   'return new Response(JSON.stringify({ id: meshData.id, fileType })',
 );

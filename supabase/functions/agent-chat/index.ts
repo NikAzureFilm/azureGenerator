@@ -14,9 +14,9 @@ import Tree from '@shared/Tree.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
-  RefundableTokenLedger,
-  type RefundFailure,
-} from '../_shared/refundableTokenLedger.ts';
+  DeferredTokenLedger,
+  type ReservationFailure,
+} from '../_shared/deferredTokenLedger.ts';
 import { getBase64Images } from '../_shared/messageUtils.ts';
 import { FEATURE_COSTS } from '../../../shared/tokenCosts.ts';
 import {
@@ -77,13 +77,13 @@ const trace = (label: string, data?: unknown) => {
   );
 };
 
-const logRefundFailure = ({ error, charge }: RefundFailure) => {
+const logReservationFailure = ({ error, charge }: ReservationFailure) => {
   logError(error, {
     functionName: 'agent-chat',
     statusCode: 502,
     userId: charge.body.userId,
     additionalContext: {
-      stage: 'refund_after_generation_error',
+      stage: 'release_reservation_after_generation_error',
       operation: charge.body.operation,
       referenceId: charge.body.referenceId,
       tokens: charge.body.tokens,
@@ -401,6 +401,19 @@ function closeStream(controller: ReadableStreamDefaultController) {
   }
 }
 
+const STREAM_HEARTBEAT_MS = 15_000;
+
+function startStreamHeartbeat(controller: ReadableStreamDefaultController) {
+  const heartbeat = new TextEncoder().encode('\n');
+  return setInterval(() => {
+    try {
+      controller.enqueue(heartbeat);
+    } catch {
+      // The client disconnected or the stream already closed.
+    }
+  }, STREAM_HEARTBEAT_MS);
+}
+
 function sanitizeQuestionOptions(options: unknown): string[] {
   if (!Array.isArray(options)) return [];
   return options
@@ -477,12 +490,23 @@ Deno.serve(async (req) => {
     );
   }
 
-  const tokenLedger = new RefundableTokenLedger(billing);
+  const {
+    messageId,
+    conversationId,
+    newMessageId,
+  }: {
+    messageId: string;
+    conversationId: string;
+    newMessageId: string;
+  } = await req.json();
+
+  const tokenLedger = new DeferredTokenLedger(billing);
+  const chatReferenceId = `${newMessageId}:chat`;
   try {
-    const result = await tokenLedger.consume(userData.user.email, {
+    const result = await tokenLedger.reserve(userData.user.email, {
       tokens: CHAT_TOKEN_COST,
       operation: 'chat',
-      referenceId: crypto.randomUUID(),
+      referenceId: chatReferenceId,
       userId: userData.user.id,
     });
     if (!result.ok) {
@@ -519,16 +543,6 @@ Deno.serve(async (req) => {
       ? Deno.env.get('NGROK_URL')
       : Deno.env.get('SUPABASE_URL')
     )?.trim() ?? '';
-
-  const {
-    messageId,
-    conversationId,
-    newMessageId,
-  }: {
-    messageId: string;
-    conversationId: string;
-    newMessageId: string;
-  } = await req.json();
 
   trace('request_received', {
     conversationId,
@@ -570,7 +584,7 @@ Deno.serve(async (req) => {
     .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
 
   if (messagesError || !messages || messages.length === 0) {
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
     cleanup();
     return new Response(
       JSON.stringify({
@@ -602,6 +616,7 @@ Deno.serve(async (req) => {
   );
 
   let content: Content = {};
+  let terminalGenerationFailed = false;
 
   const { data: newMessageData, error: newMessageError } = await supabaseClient
     .from('messages')
@@ -620,7 +635,7 @@ Deno.serve(async (req) => {
     }>();
 
   if (!newMessageData) {
-    await tokenLedger.refundAll(logRefundFailure);
+    await tokenLedger.releaseAll(logReservationFailure);
     cleanup();
     return new Response(
       JSON.stringify({
@@ -790,6 +805,7 @@ Deno.serve(async (req) => {
 
     const responseStream = new ReadableStream({
       async start(controller) {
+        const heartbeatId = startStreamHeartbeat(controller);
         // Running conversation for the in-turn loop: rounds append their
         // assistant tool_calls + tool results here so the next Terra call
         // sees them.
@@ -1285,6 +1301,7 @@ Deno.serve(async (req) => {
             }
           }
         } catch (error) {
+          terminalGenerationFailed = true;
           console.error(
             'AZUREFILM_GENERATOR_TRACE inner_catch',
             error instanceof Error
@@ -1312,7 +1329,7 @@ Deno.serve(async (req) => {
               !!content.recommendation);
 
           if (!hasNonDefaultContent) {
-            await tokenLedger.refundAll(logRefundFailure);
+            await tokenLedger.releaseAll(logReservationFailure);
             if (abortSignal.aborted) {
               content = {
                 ...content,
@@ -1326,6 +1343,7 @@ Deno.serve(async (req) => {
             }
           }
         } finally {
+          clearInterval(heartbeatId);
           if (
             !abortSignal.aborted &&
             !content.question &&
@@ -1354,7 +1372,35 @@ Deno.serve(async (req) => {
                 })) || [],
             };
           }
-          const finalMessageData = await persistContent(content);
+          let finalMessageData = await persistContent(content);
+
+          const hasDeliverableContent = Boolean(
+            content.text?.trim() ||
+            content.images?.length ||
+            content.question ||
+            content.recommendation,
+          );
+          if (
+            !finalMessageData ||
+            terminalGenerationFailed ||
+            abortSignal.aborted ||
+            !hasDeliverableContent
+          ) {
+            await tokenLedger.releaseAll(logReservationFailure);
+          } else {
+            const settlement =
+              await tokenLedger.commitReference(chatReferenceId);
+            if (!settlement.ok) {
+              await tokenLedger.releaseAll(logReservationFailure);
+              content = {
+                error:
+                  settlement.reason === 'insufficient_tokens'
+                    ? 'insufficient_tokens'
+                    : 'billing_unavailable',
+              };
+              finalMessageData = await persistContent(content);
+            }
+          }
 
           if (finalMessageData) {
             streamMessage(controller, finalMessageData);
@@ -1392,8 +1438,8 @@ Deno.serve(async (req) => {
         !!content.question ||
         !!content.recommendation);
 
+    await tokenLedger.releaseAll(logReservationFailure);
     if (!hasNonDefaultContent) {
-      await tokenLedger.refundAll(logRefundFailure);
       content = {
         ...content,
         text: abortSignal.aborted

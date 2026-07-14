@@ -203,6 +203,31 @@ const consumeFromSupabase = async (
   }
 
   const { supabase, subscription, purchased } = await readBalances(body.userId);
+
+  // Reference IDs are idempotency keys. A settlement may be retried if an
+  // Edge Function loses the response after billing accepted the first call.
+  if (body.referenceId) {
+    const { data: existingCharge, error: existingChargeError } = await supabase
+      .from('token_transactions')
+      .select('id')
+      .eq('user_id', body.userId)
+      .eq('reference_id', body.referenceId)
+      .lt('amount', 0)
+      .limit(1)
+      .maybeSingle();
+    if (existingChargeError) throw existingChargeError;
+    if (existingCharge) {
+      return {
+        ok: true,
+        tokensDeducted: 0,
+        freeBalance: 0,
+        subscriptionBalance: subscription,
+        purchasedBalance: purchased,
+        totalBalance: subscription + purchased,
+      };
+    }
+  }
+
   const total = subscription + purchased;
   if (total < body.tokens) {
     return {
@@ -273,6 +298,31 @@ const refundToSupabase = async (body: RefundBody): Promise<RefundResult> => {
 
   const { supabase, subscription, purchased, isPaidSubscriptionActive } =
     await readBalances(body.userId);
+
+  if (body.referenceId) {
+    const { data: existingRefund, error: existingRefundError } = await supabase
+      .from('token_transactions')
+      .select('id')
+      .eq('user_id', body.userId)
+      .eq('operation', 'refund')
+      .eq('reference_id', body.referenceId)
+      .gt('amount', 0)
+      .limit(1)
+      .maybeSingle();
+    if (existingRefundError) throw existingRefundError;
+    if (existingRefund) {
+      return {
+        ok: true,
+        tokensRefunded: 0,
+        source: isPaidSubscriptionActive ? 'subscription' : 'purchased',
+        freeBalance: 0,
+        subscriptionBalance: subscription,
+        purchasedBalance: purchased,
+        totalBalance: subscription + purchased,
+      };
+    }
+  }
+
   const refundSource = isPaidSubscriptionActive ? 'subscription' : 'purchased';
   const subscriptionBalance = isPaidSubscriptionActive
     ? subscription + body.tokens
@@ -348,6 +398,7 @@ const apiKey = (): string => {
 
 type CallOptions = {
   allowStatus?: number[];
+  idempotencyKey?: string;
 };
 
 const call = async <T>(
@@ -361,6 +412,9 @@ const call = async <T>(
     headers: {
       Authorization: `Bearer ${apiKey()}`,
       'Content-Type': 'application/json',
+      ...(options?.idempotencyKey
+        ? { 'Idempotency-Key': options.idempotencyKey }
+        : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -436,6 +490,7 @@ export const billing = {
         ? consumeFromSupabase(body)
         : call<ConsumeResult>('POST', `/v1/users/${enc(email)}/consume`, body, {
             allowStatus: [422],
+            idempotencyKey: body.referenceId,
           }),
 
   refund: (email: string, body: RefundBody) =>
@@ -451,7 +506,9 @@ export const billing = {
         })
       : !isBillingServiceConfigured()
         ? refundToSupabase(body)
-        : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body),
+        : call<RefundResult>('POST', `/v1/users/${enc(email)}/refund`, body, {
+            idempotencyKey: body.referenceId,
+          }),
 
   createCheckout: (email: string, body: CheckoutBody) => {
     if (isLocalBillingBypassEnabled()) {
