@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  buildAgentConceptImagePrompt,
   enforce3DObjectPrompt,
   THREE_D_OBJECT_PROMPT_ENFORCEMENT,
 } from './imagePrompt.ts';
@@ -50,4 +52,40 @@ assert.equal(
 assert.equal(
   enforce3DObjectPrompt(''),
   `${THREE_D_OBJECT_PROMPT_ENFORCEMENT} User request: Generate a 3D object.`,
+);
+
+assert.match(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /slightly elevated three-quarter isometric camera/i,
+  'agent concepts should use a three-quarter 3D-object presentation',
+);
+
+assert.match(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /practical, functional, dimensioned, mechanical, or CAD-style parts[\s\S]*neutral matte graphite or dark-gray solid CAD material/i,
+  'practical CAD concepts should look like polished solid-model renders',
+);
+
+assert.match(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /never as a photograph of an object in a real environment/i,
+  'agent concepts should not become lifestyle photographs',
+);
+
+const agentConceptPrompt = buildAgentConceptImagePrompt(
+  'A 20 mm square desk cable clip with a 6 mm channel.',
+);
+assert.ok(
+  agentConceptPrompt.startsWith(AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT),
+  'agent concepts should put the agent render art direction first',
+);
+assert.ok(
+  agentConceptPrompt.includes(AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT),
+  'agent concepts should include the agent-specific render art direction',
+);
+assert.match(agentConceptPrompt, /20 mm square desk cable clip/);
+assert.equal(
+  buildAgentConceptImagePrompt(agentConceptPrompt),
+  agentConceptPrompt,
+  'agent concept prompt enforcement should be idempotent',
 );

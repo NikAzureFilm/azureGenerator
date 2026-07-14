@@ -25,6 +25,7 @@ import {
 } from '../../../shared/imageGeneration.ts';
 import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
+import { buildAgentConceptImagePrompt } from '../_shared/imagePrompt.ts';
 import { buildFallbackRecommendation } from './recommendationFallback.ts';
 
 // Design-agent chat model: GPT-5.6 Terra via OpenRouter. Reasoning effort
@@ -265,8 +266,8 @@ const systemPrompt = `You are the AzureFilm Generator design agent. Your job is 
 Workflow:
 1. If the request is ambiguous, clarify first — but ALWAYS via the ask_user tool, never as plain text: pass the question plus 2-4 short likely answers as options (the user can also type their own). Ask at most 1-2 questions before showing something (size, style, purpose, must-have features). If the request is already clear, skip straight to an image.
 2. When the object must match real-world hardware, standards, or products (phone models, camera mounts, screw threads, brand items, dimensions you don't know), use web_search FIRST to get the facts right. Never invent dimensions of real products.
-3. Use generate_concept_image to show the user what you understood. Pass a detailed, self-contained visual description of a SINGLE centered object. When refining an earlier concept, pass its image id as baseImageId so the identity is preserved and only the requested changes are applied.
-4. Right after each generated image, you are shown the result in this same turn. Review it critically BEFORE speaking to the user: (a) does it match what the user asked for, (b) is it ONE connected physical piece with no floating or detached elements, (c) is it free of paper-thin or unsupported features that would fail 3D printing, (d) is it a clean render of a single object? If it clearly fails a check, immediately call generate_concept_image again — pass baseImageId to fix small flaws while keeping the design, or start fresh when the concept itself is wrong. You get at most one automatic redo per turn; if the redo is still flawed, tell the user honestly what you would change and ask them.
+3. Use generate_concept_image to show the user what you understood. Pass a detailed, self-contained visual description of a SINGLE centered object. Every concept must read unmistakably as a polished 3D-object render. For practical CAD parts, show a slightly elevated three-quarter view on white with a neutral graphite solid material, crisp engineering geometry, visible wall thickness, and appropriate fillets, like a premium CAD product visualization, never a lifestyle photograph or flat illustration. When refining an earlier concept, pass its image id as baseImageId so the identity is preserved and only the requested changes are applied.
+4. Right after each generated image, you are shown the result in this same turn. Review it critically BEFORE speaking to the user: (a) does it match what the user asked for, (b) is it ONE connected physical piece with no floating or detached elements, (c) is it free of paper-thin or unsupported features that would fail 3D printing, (d) is it a clean, dimensional 3D-object render rather than a real-world photo or flat artwork, and (e) for practical CAD, does the three-quarter view clearly communicate the engineering geometry? If it clearly fails a check, immediately call generate_concept_image again — pass baseImageId to fix small flaws while keeping the design, or start fresh when the concept itself is wrong. You get at most one automatic redo per turn; if the redo is still flawed, tell the user honestly what you would change and ask them.
 5. After an image you are happy with, briefly ask what they'd like to change. Iterate until they're happy.
 6. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
 7. NEVER name or recommend a pipeline only in plain text. Whenever you tell the user that CAD, Mesh, or Multiview is recommended, you MUST call recommend_pipeline in that same turn so the Generate button appears.
@@ -289,7 +290,7 @@ const tools = [
     function: {
       name: 'generate_concept_image',
       description:
-        'Generates a concept image of the object being designed and shows it to the user. Pass a detailed visual description of a single centered 3D-printable object. To refine a previously generated concept, pass its image id as baseImageId — the new image preserves the identity of the base and applies only the described changes. The generated image is shown back to you in this same turn so you can review it and redo a flawed result.',
+        'Generates a polished three-dimensional concept render of the object being designed and shows it to the user. Pass a detailed visual description of a single centered 3D-printable object; practical CAD parts should use a three-quarter engineering-product view. To refine a previously generated concept, pass its image id as baseImageId — the new image preserves the identity of the base and applies only the described changes. The generated image is shown back to you in this same turn so you can review it and redo a flawed result.',
       parameters: {
         type: 'object',
         properties: {
@@ -888,7 +889,7 @@ Deno.serve(async (req) => {
                   body: JSON.stringify({
                     conversationId,
                     view: 'front',
-                    prompt: toolInput.prompt ?? '',
+                    prompt: buildAgentConceptImagePrompt(toolInput.prompt),
                     provider: getImageGenerationProvider(imageGenerationModel),
                     imageGenerationModel,
                     mode: 'input',
@@ -1276,7 +1277,7 @@ Deno.serve(async (req) => {
                 content: [
                   {
                     type: 'text',
-                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request and the 3D-printability rules (one connected piece, nothing floating or detached, no unprintably thin features, clean single-object render). If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes and the design is fully specified or the user asked you to recommend/generate, call recommend_pipeline now with the complete generation prompt; never merely name the recommended pipeline in prose. Otherwise, briefly ask what the user would like to change.',
+                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request, the 3D-printability rules, and the render art direction: one connected piece, nothing floating or detached, no unprintably thin features, and an unmistakable dimensional 3D-object render rather than a lifestyle photo or flat artwork. For a practical CAD part, require a clear three-quarter engineering-product view with readable solid geometry. If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes and the design is fully specified or the user asked you to recommend/generate, call recommend_pipeline now with the complete generation prompt; never merely name the recommended pipeline in prose. Otherwise, briefly ask what the user would like to change.',
                   },
                   ...reviewImageParts,
                 ],
