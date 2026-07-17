@@ -18,5 +18,11 @@ assert.match(source, /0\.25-0\.4 mm clearance per side/);
 assert.match(source, /no bridges over about 10 mm/);
 assert.match(source, /const KIMI_K3_MAX_ATTEMPTS = 3/);
 assert.match(source, /response\.status === 429/);
+assert.match(
+  source,
+  /const nonStreamingBody = \{ \.\.\.requestBody, stream: false \}/,
+);
+assert.match(source, /completionJsonAsSse/);
+assert.match(source, /Kimi K3 is temporarily at capacity/);
 
 console.log('agent Kimi K3 and printability tests passed');

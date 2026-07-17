@@ -187,4 +187,9 @@ assert.match(
 );
 assert.match(source, /const KIMI_K3_MAX_ATTEMPTS = 3/);
 assert.match(source, /requestBody\.model === KIMI_K3_MODEL/);
+assert.match(
+  source,
+  /const nonStreamingBody = \{ \.\.\.requestBody, stream: false \}/,
+);
+assert.match(source, /completionJsonAsSse/);
 assert.match(source, /temporarily at capacity/);

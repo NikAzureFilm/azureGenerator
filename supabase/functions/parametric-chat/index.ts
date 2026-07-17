@@ -491,6 +491,97 @@ function openRouterHeaders(): Record<string, string> {
   };
 }
 
+type OpenRouterJsonCompletion = {
+  error?: { code?: number | string; message?: string };
+  choices?: Array<{
+    message?: {
+      content?: string;
+      reasoning?: string;
+      tool_calls?: unknown[];
+    };
+    finish_reason?: string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+function completionJsonAsSse(payload: OpenRouterJsonCompletion): string {
+  const chunk = {
+    ...payload,
+    choices: payload.choices?.map((choice) => ({
+      ...choice,
+      delta: choice.message,
+      message: undefined,
+    })),
+  };
+  return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
+}
+
+// Kimi's sole launch provider sometimes reports capacity errors inside an HTTP
+// 200 stream, which cannot be retried after the caller starts consuming SSE.
+// Request it non-streaming, inspect the complete envelope, retry embedded 429s,
+// then adapt a successful completion back to SSE for the existing pipeline.
+async function fetchKimiK3ChatCompletion(
+  requestBody: OpenRouterRequest,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const nonStreamingBody = { ...requestBody, stream: false };
+  let lastResponse: Response | null = null;
+  let lastText = '';
+
+  for (let attempt = 1; attempt <= KIMI_K3_MAX_ATTEMPTS; attempt++) {
+    lastResponse = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: openRouterHeaders(),
+      body: JSON.stringify(nonStreamingBody),
+      signal,
+    });
+    lastText = await lastResponse.text();
+
+    let payload: OpenRouterJsonCompletion | null = null;
+    try {
+      payload = JSON.parse(lastText) as OpenRouterJsonCompletion;
+    } catch {
+      // Preserve the upstream body below when it is not valid JSON.
+    }
+
+    const embeddedCode = Number(payload?.error?.code);
+    const isCapacityError = lastResponse.status === 429 || embeddedCode === 429;
+    if (isCapacityError && attempt < KIMI_K3_MAX_ATTEMPTS) {
+      const delayMs = KIMI_K3_RETRY_BASE_MS * attempt;
+      console.warn(
+        `Kimi K3 provider returned 429; retrying attempt ${attempt + 1}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if (!lastResponse.ok || payload?.error || !payload) {
+      const status = isCapacityError
+        ? 429
+        : lastResponse.ok
+          ? 502
+          : lastResponse.status;
+      return new Response(lastText, {
+        status,
+        statusText: lastResponse.statusText,
+        headers: lastResponse.headers,
+      });
+    }
+
+    return new Response(completionJsonAsSse(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  return new Response(lastText, {
+    status: lastResponse?.status ?? 502,
+    statusText: lastResponse?.statusText,
+    headers: lastResponse?.headers,
+  });
+}
+
 function getOpenRouterFallbackModel(model: string): string | null {
   // NOTE: GPT-5.6 Sol deliberately has NO fallback. It's a user-selected premium
   // CAD model, so silently downgrading it to a weaker model (it used to fall back
@@ -535,6 +626,10 @@ async function fetchOpenRouterChatCompletion(
   requestBody: OpenRouterRequest,
   signal?: AbortSignal,
 ): Promise<Response> {
+  if (requestBody.model === KIMI_K3_MODEL) {
+    return fetchKimiK3ChatCompletion(requestBody, signal);
+  }
+
   let response = await fetch(OPENROUTER_API_URL, {
     method: 'POST',
     headers: openRouterHeaders(),
@@ -544,25 +639,7 @@ async function fetchOpenRouterChatCompletion(
 
   if (response.ok) return response;
 
-  let errorText = await response.text();
-  if (requestBody.model === KIMI_K3_MODEL && response.status === 429) {
-    for (let attempt = 2; attempt <= KIMI_K3_MAX_ATTEMPTS; attempt++) {
-      const delayMs = KIMI_K3_RETRY_BASE_MS * (attempt - 1);
-      console.warn(
-        `Kimi K3 provider returned 429; retrying attempt ${attempt}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      response = await fetch(OPENROUTER_API_URL, {
-        method: 'POST',
-        headers: openRouterHeaders(),
-        body: JSON.stringify(requestBody),
-        signal,
-      });
-      if (response.ok) return response;
-      errorText = await response.text();
-      if (response.status !== 429) break;
-    }
-  }
+  const errorText = await response.text();
   const fallbackModel = getOpenRouterFallbackModel(requestBody.model);
   if (
     fallbackModel &&
