@@ -80,8 +80,12 @@ Deno.test(
   async () => {
     const { rows, store } = createStore();
     let consumeCalls = 0;
+    let statusUserId: string | undefined;
     const billingClient = {
-      getStatus: () => Promise.resolve({ tokens: { total: 100 } }),
+      getStatus: (_email: string, userId?: string) => {
+        statusUserId = userId;
+        return Promise.resolve({ tokens: { total: 100 } });
+      },
       consume: (
         _email: string,
         body: TokenChargeBody,
@@ -106,6 +110,10 @@ Deno.test(
       userId: 'user-1',
     });
     assert(reserved.ok, 'reservation should succeed');
+    assert(
+      statusUserId === 'user-1',
+      'reservation should pass the user id to the Supabase billing fallback',
+    );
 
     await ledger.releaseAll();
     assert(consumeCalls === 0, 'failed generation must not consume tokens');
