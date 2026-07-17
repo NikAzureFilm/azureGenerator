@@ -185,3 +185,6 @@ assert.match(
   /bridges longer than about 10 mm/,
   'the CAD prompt should bound unsupported FDM spans',
 );
+assert.match(source, /const KIMI_K3_MAX_ATTEMPTS = 3/);
+assert.match(source, /requestBody\.model === KIMI_K3_MODEL/);
+assert.match(source, /temporarily at capacity/);

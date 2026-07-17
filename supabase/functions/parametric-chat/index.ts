@@ -93,6 +93,8 @@ const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 8000;
 const FABLE_COMPLETION_TOKEN_LIMIT = 24000;
+const KIMI_K3_MAX_ATTEMPTS = 3;
+const KIMI_K3_RETRY_BASE_MS = 1_500;
 // Per-model code-gen output caps now come from the shared roster via
 // outputTokenCapForModel().
 
@@ -143,6 +145,9 @@ function getUserFacingOpenRouterMessage(
 ): string | null {
   const message = extractOpenRouterErrorMessage(errorText);
   const normalized = message.toLowerCase();
+  if (status === 429 && normalized.includes('provider returned error')) {
+    return 'The selected CAD model is temporarily at capacity. Please retry in a moment.';
+  }
   if (
     status === 402 ||
     normalized.includes('requires more credits') ||
@@ -539,7 +544,25 @@ async function fetchOpenRouterChatCompletion(
 
   if (response.ok) return response;
 
-  const errorText = await response.text();
+  let errorText = await response.text();
+  if (requestBody.model === KIMI_K3_MODEL && response.status === 429) {
+    for (let attempt = 2; attempt <= KIMI_K3_MAX_ATTEMPTS; attempt++) {
+      const delayMs = KIMI_K3_RETRY_BASE_MS * (attempt - 1);
+      console.warn(
+        `Kimi K3 provider returned 429; retrying attempt ${attempt}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      response = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: openRouterHeaders(),
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+      if (response.ok) return response;
+      errorText = await response.text();
+      if (response.status !== 429) break;
+    }
+  }
   const fallbackModel = getOpenRouterFallbackModel(requestBody.model);
   if (
     fallbackModel &&

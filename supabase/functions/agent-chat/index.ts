@@ -37,6 +37,8 @@ const AGENT_MODEL = KIMI_K3_MODEL;
 const AGENT_REASONING_EFFORT =
   Deno.env.get('AGENT_CHAT_REASONING_EFFORT')?.trim() || 'low';
 const AGENT_MAX_TOKENS = 16000;
+const KIMI_K3_MAX_ATTEMPTS = 3;
+const KIMI_K3_RETRY_BASE_MS = 1_500;
 
 // Hard ceiling per Kimi round (fetch + stream). Without it a stalled
 // provider stream leaves the message empty and the client spinner infinite
@@ -1040,12 +1042,33 @@ Deno.serve(async (req) => {
             abortSignal.addEventListener('abort', onOuterAbort);
 
             try {
-              const response = await fetch(OPENROUTER_API_URL, {
+              let response = await fetch(OPENROUTER_API_URL, {
                 method: 'POST',
                 headers: openRouterHeaders(),
                 body: JSON.stringify(requestBody),
                 signal: roundAbort.signal,
               });
+
+              for (
+                let attempt = 2;
+                !response.ok &&
+                response.status === 429 &&
+                attempt <= KIMI_K3_MAX_ATTEMPTS;
+                attempt++
+              ) {
+                await response.body?.cancel();
+                const delayMs = KIMI_K3_RETRY_BASE_MS * (attempt - 1);
+                console.warn(
+                  `Kimi K3 provider returned 429; retrying attempt ${attempt}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
+                );
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                response = await fetch(OPENROUTER_API_URL, {
+                  method: 'POST',
+                  headers: openRouterHeaders(),
+                  body: JSON.stringify(requestBody),
+                  signal: roundAbort.signal,
+                });
+              }
 
               if (!response.ok) {
                 const errorText = await response.text();
