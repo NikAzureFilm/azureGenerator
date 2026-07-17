@@ -58,6 +58,8 @@ export const LLM_PRICES: Record<string, LlmPrice> = {
     outputPerM: 30,
     cachedInputPerM: 0.5,
   },
+  // Kimi K3 via OpenRouter; live catalog price verified 2026-07-17.
+  'moonshotai/kimi-k3': { inputPerM: 3, outputPerM: 15 },
   // Design-agent chat model via OpenRouter — published $2.50 / $15, 90%
   // cached-input discount.
   'openai/gpt-5.6-terra': {

@@ -35,10 +35,12 @@ const FLASH = 'google/gemini-3.5-flash';
 const GEMINI_PRO = 'google/gemini-3.1-pro-preview';
 const FABLE = 'anthropic/claude-fable-5';
 const GPT = 'openai/gpt-5.6-sol';
+const KIMI = 'moonshotai/kimi-k3';
 const OPUS = 'anthropic/claude-opus-4.8';
 
 test('tierForModel maps roster models to premium, off-roster to lite', () => {
   assert.equal(tierForModel(GPT), 'premium');
+  assert.equal(tierForModel(KIMI), 'premium');
   assert.equal(tierForModel(FLASH), 'lite');
   assert.equal(tierForModel(FABLE), 'lite');
   assert.equal(tierForModel(GEMINI_PRO), 'lite');
@@ -64,6 +66,7 @@ test('initialLoopState sets awaiting_client with per-model maxRounds', () => {
 test('initialLoopState derives inspection rounds from the roster', () => {
   // Exactly ONE review (inspection) round for the sole roster model.
   assert.equal(initialLoopState(GPT).maxRounds, 1);
+  assert.equal(initialLoopState(KIMI).maxRounds, 1);
   assert.equal(initialLoopState(FLASH).maxRounds, 0);
   assert.equal(initialLoopState(GEMINI_PRO).maxRounds, 0);
   assert.equal(initialLoopState(FABLE).maxRounds, 0);
@@ -75,10 +78,7 @@ test('initialLoopState derives inspection rounds from the roster', () => {
 
 test('finalizeLoop produces a terminal status', () => {
   assert.equal(finalizeLoop(initialLoopState(FABLE)).status, 'final');
-  assert.equal(
-    finalizeLoop(initialLoopState(GPT), 'failed').status,
-    'failed',
-  );
+  assert.equal(finalizeLoop(initialLoopState(GPT), 'failed').status, 'failed');
 });
 
 test('COST_CEILING_USD is $0.60', () => {
@@ -117,6 +117,14 @@ test('decideContinuation inspects the roster model under maxRounds', () => {
     0,
   );
   assert.deepEqual(d, { action: 'inspect' });
+  assert.deepEqual(
+    decideContinuation(
+      initialLoopState(KIMI),
+      { type: 'inspection', imagePath: 'p' },
+      0,
+    ),
+    { action: 'inspect' },
+  );
 });
 
 test('decideContinuation finalizes the roster model once maxRounds is reached', () => {
@@ -524,6 +532,8 @@ test('maxAffordableOutputTokens scales output cap with remaining budget', () => 
   );
   // GPT-5.6 Sol: $30/M out -> floor(0.60/30 * 1e6 * 0.8) = 16000.
   assert.equal(maxAffordableOutputTokens(GPT, 0.6), 16000);
+  // Kimi K3: $15/M out -> floor(0.60/15 * 1e6 * 0.8) = 32000.
+  assert.equal(maxAffordableOutputTokens(KIMI, 0.6), 32000);
 });
 
 test('maxAffordableOutputTokens returns 0 when nothing is left', () => {

@@ -31,12 +31,14 @@ const modelSelectorSource = readFileSync(
 const cadPremium = PARAMETRIC_MODELS.find(
   (model) => model.id === 'openai/gpt-5.6-sol',
 );
+const kimiK3 = PARAMETRIC_MODELS.find(
+  (model) => model.id === 'moonshotai/kimi-k3',
+);
 
 assert.equal(DEFAULT_PARAMETRIC_MODEL, 'openai/gpt-5.6-sol');
-// The picker lists only GPT-5.6 Sol from the canonical roster (Gemini removed).
 assert.deepEqual(
   PARAMETRIC_MODELS.map((model) => model.id),
-  ['openai/gpt-5.6-sol'],
+  ['openai/gpt-5.6-sol', 'moonshotai/kimi-k3'],
 );
 assert.ok(cadPremium);
 assert.equal(cadPremium.name, 'CAD Premium');
@@ -44,13 +46,19 @@ assert.equal(cadPremium.provider, 'OpenAI');
 assert.equal(cadPremium.tokenCost, 25);
 assert.equal(cadPremium.supportsVision, true);
 assert.notEqual(cadPremium.disabled, true);
+assert.ok(kimiK3);
+assert.equal(kimiK3.name, 'Kimi K3');
+assert.equal(kimiK3.provider, 'Moonshot AI');
+assert.equal(kimiK3.tokenCost, 25);
+assert.equal(kimiK3.supportsVision, true);
+assert.notEqual(kimiK3.disabled, true);
 // Every roster model is a valid picker choice (normalizes to itself).
 for (const model of PARAMETRIC_MODELS) {
   assert.equal(normalizeParametricChatModel(model.id), model.id);
 }
 assert.equal(normalizeParametricChatModel(undefined), DEFAULT_PARAMETRIC_MODEL);
 assert.equal(normalizeParametricChatModel('quality'), DEFAULT_PARAMETRIC_MODEL);
-// Stale clients still sending the retired Gemini id get the sole model.
+// Stale clients still sending the retired Gemini id get the default model.
 assert.equal(
   normalizeParametricChatModel('google/gemini-3.5-flash'),
   DEFAULT_PARAMETRIC_MODEL,

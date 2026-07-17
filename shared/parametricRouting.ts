@@ -3,6 +3,7 @@ export const GEMINI_31_PRO_MODEL = 'google/gemini-3.1-pro-preview';
 export const CLAUDE_FABLE_5_MODEL = 'anthropic/claude-fable-5';
 export const GPT_55_MODEL = 'openai/gpt-5.5';
 export const GPT_56_SOL_MODEL = 'openai/gpt-5.6-sol';
+export const KIMI_K3_MODEL = 'moonshotai/kimi-k3';
 export const OPUS_48_MODEL = 'anthropic/claude-opus-4.8';
 export const DEFAULT_CODE_GENERATION_MODEL = GPT_56_SOL_MODEL;
 
@@ -46,6 +47,17 @@ export const PARAMETRIC_MODEL_ROSTER: Record<string, ParametricModelEntry> = {
     description: 'Premium OpenAI reasoning for complex CAD generation',
     provider: 'OpenAI',
     priceKey: GPT_56_SOL_MODEL,
+    tokenCost: 25,
+    supportsVision: true,
+    maxInspectionRounds: 1,
+    outputTokenCap: 32000,
+  },
+  [KIMI_K3_MODEL]: {
+    id: KIMI_K3_MODEL,
+    label: 'Kimi K3',
+    description: 'Moonshot reasoning optimized for printable CAD parts',
+    provider: 'Moonshot AI',
+    priceKey: KIMI_K3_MODEL,
     tokenCost: 25,
     supportsVision: true,
     maxInspectionRounds: 1,

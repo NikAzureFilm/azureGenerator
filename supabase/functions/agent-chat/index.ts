@@ -27,18 +27,18 @@ import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
 import { buildAgentConceptImagePrompt } from '../_shared/imagePrompt.ts';
 import { buildFallbackRecommendation } from './recommendationFallback.ts';
+import { KIMI_K3_MODEL } from '../../../shared/parametricRouting.ts';
 
-// Design-agent chat model: GPT-5.6 Terra via OpenRouter. Reasoning effort
-// defaults to 'low': measured 2026-07-13, 'medium' on this model was served
-// at ~40-60s to first visible token (58s total for a 71-token turn) vs ~3.5s
-// total at 'low', with identical tool behavior. Flip back via the
-// AGENT_CHAT_REASONING_EFFORT secret if the provider speeds up.
-const AGENT_MODEL = 'openai/gpt-5.6-terra';
+// Kimi K3 powers design-agent planning as well as the selectable CAD model, so
+// concept review and the downstream printable-part brief use the same model.
+// Low effort keeps tool dispatch responsive; deployments can raise it through
+// AGENT_CHAT_REASONING_EFFORT after latency is characterized in production.
+const AGENT_MODEL = KIMI_K3_MODEL;
 const AGENT_REASONING_EFFORT =
   Deno.env.get('AGENT_CHAT_REASONING_EFFORT')?.trim() || 'low';
 const AGENT_MAX_TOKENS = 16000;
 
-// Hard ceiling per Terra round (fetch + stream). Without it a stalled
+// Hard ceiling per Kimi round (fetch + stream). Without it a stalled
 // provider stream leaves the message empty and the client spinner infinite
 // until the isolate is reaped.
 const ROUND_DEADLINE_MS = 120_000;
@@ -49,7 +49,7 @@ const WEB_SEARCH_MODEL = 'google/gemini-3.5-flash';
 const WEB_SEARCH_MAX_TOKENS = 2000;
 const WEB_SEARCH_RESULT_CHAR_CAP = 6000;
 
-// In-turn agent loop bounds. Each round is one Terra call; the loop continues
+// In-turn agent loop bounds. Each round is one Kimi call; the loop continues
 // after web_search results AND after generate_concept_image (the render is fed
 // back so the agent reviews it and may redo a flawed concept once — image cap
 // still MAX_IMAGES_PER_TURN). ask_user / recommend_pipeline end the turn. A
@@ -274,8 +274,10 @@ Workflow:
 
 Everything you design MUST be 3D printable:
 - One contiguous physical piece: every element attached to or touching the main body — no floating, hovering, or detached parts, no loose accessories, no assemblies of separate objects.
-- No impossibly thin walls, hair-fine spokes, or large unsupported overhangs; favor solid, self-supporting geometry that prints cleanly.
-- Apply this to every concept image description AND to every generationPrompt you pass to recommend_pipeline (state it explicitly there, with dimensions for cad).
+- Default to 0.4 mm-nozzle FDM: at least 1.2 mm walls, 0.8 mm raised details, and reinforced load-bearing tabs, bosses, and cantilevers.
+- Favor a broad flat build-plate face, no unsupported islands, no bridges over about 10 mm, and no overhangs beyond 45 degrees without chamfers or self-supporting profiles.
+- For mating hardware or moving parts, include 0.25-0.4 mm clearance per side, lead-in chamfers, and practical printed-hole compensation unless the user supplies calibrated values.
+- Apply these constraints to every concept image description AND every generationPrompt passed to recommend_pipeline; for CAD, state the critical dimensions, orientation, wall thickness, clearance, and reinforcement explicitly.
 
 Choosing the pipeline:
 - "cad": parametric CAD engineering. Best for dimensioned, functional, or mechanical parts — brackets, enclosures, gears, mounts, adapters, anything with measurements, flat faces, holes, tolerances, or hardware fit. Produces clean editable geometry, but not organic detail.
@@ -807,7 +809,7 @@ Deno.serve(async (req) => {
       async start(controller) {
         const heartbeatId = startStreamHeartbeat(controller);
         // Running conversation for the in-turn loop: rounds append their
-        // assistant tool_calls + tool results here so the next Terra call
+        // assistant tool_calls + tool results here so the next Kimi call
         // sees them.
         const convo: AgentChatMessage[] = [...historyMessages];
         let webSearchesUsed = 0;

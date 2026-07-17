@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  KIMI_K3_MODEL,
   isGeminiCodeGenerationModel,
   outputTokenCapForModel,
 } from '../../../shared/parametricRouting.ts';
@@ -13,6 +14,7 @@ assert.equal(isGeminiCodeGenerationModel('google/gemini-3.5-flash'), true);
 assert.equal(isGeminiCodeGenerationModel('anthropic/claude-fable-5'), false);
 assert.equal(isGeminiCodeGenerationModel('openai/gpt-5.5'), false);
 assert.equal(isGeminiCodeGenerationModel('openai/gpt-5.6-sol'), false);
+assert.equal(isGeminiCodeGenerationModel(KIMI_K3_MODEL), false);
 
 assert.match(
   source,
@@ -60,6 +62,7 @@ assert.equal(outputTokenCapForModel('google/gemini-3.5-flash'), 32000);
 assert.equal(outputTokenCapForModel('google/gemini-3.1-pro-preview'), 32000);
 assert.equal(outputTokenCapForModel('openai/gpt-5.5'), 32000);
 assert.equal(outputTokenCapForModel('openai/gpt-5.6-sol'), 32000);
+assert.equal(outputTokenCapForModel(KIMI_K3_MODEL), 32000);
 assert.equal(outputTokenCapForModel('anthropic/claude-opus-4.8'), 32000);
 assert.equal(outputTokenCapForModel('anthropic/claude-fable-5'), 32000);
 assert.match(
@@ -84,8 +87,18 @@ assert.match(
 );
 assert.match(
   source,
-  /\} else if \(usesPinnedEffortReasoning\(codeModel\)\) \{[\s\S]{0,400}?effort: SOL_CODE_GEN_REASONING_EFFORT,\s+exclude: true/,
-  'GPT-5.6 Sol round-0 code generation should run at the pinned hidden-reasoning effort',
+  /const KIMI_CODE_GEN_REASONING_EFFORT = 'medium'/,
+  'Kimi K3 CAD generation should use bounded medium reasoning',
+);
+assert.match(
+  source,
+  /model === KIMI_K3_MODEL[\s\S]{0,100}?KIMI_CODE_GEN_REASONING_EFFORT/,
+  'Kimi K3 should be included in the pinned-effort CAD model gate',
+);
+assert.match(
+  source,
+  /\} else if \(usesPinnedEffortReasoning\(codeModel\)\) \{[\s\S]{0,500}?effort:[\s\S]{0,150}?pinnedCodeGenerationReasoningEffort\(codeModel\)[\s\S]{0,150}?exclude: true/,
+  'effort-based round-0 CAD generation should use the model-specific pinned effort',
 );
 assert.match(
   source,
@@ -161,4 +174,14 @@ assert.match(
   source,
   /asUserFacingGenerationMessage\(error\) \?\?/,
   'outer failures before streaming should preserve user-facing OpenRouter diagnostics',
+);
+assert.match(
+  source,
+  /0\.25-0\.4 mm clearance per side/,
+  'the CAD prompt should give Kimi explicit printable-fit clearance guidance',
+);
+assert.match(
+  source,
+  /bridges longer than about 10 mm/,
+  'the CAD prompt should bound unsupported FDM spans',
 );

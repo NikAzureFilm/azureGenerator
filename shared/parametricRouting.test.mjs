@@ -6,6 +6,7 @@ import {
   GEMINI_35_FLASH_MODEL,
   GPT_55_MODEL,
   GPT_56_SOL_MODEL,
+  KIMI_K3_MODEL,
   OPUS_48_MODEL,
   PARAMETRIC_MODEL_ROSTER,
   getCodeGenerationProviderCandidates,
@@ -20,12 +21,12 @@ assert.equal(GEMINI_31_PRO_MODEL, 'google/gemini-3.1-pro-preview');
 assert.equal(CLAUDE_FABLE_5_MODEL, 'anthropic/claude-fable-5');
 assert.equal(GPT_55_MODEL, 'openai/gpt-5.5');
 assert.equal(GPT_56_SOL_MODEL, 'openai/gpt-5.6-sol');
+assert.equal(KIMI_K3_MODEL, 'moonshotai/kimi-k3');
 assert.equal(OPUS_48_MODEL, 'anthropic/claude-opus-4.8');
 
 assert.equal(DEFAULT_CODE_GENERATION_MODEL, GPT_56_SOL_MODEL);
 
-// GPT-5.6 Sol is the single selectable / accepted CAD model.
-const ALL_MODELS = [GPT_56_SOL_MODEL];
+const ALL_MODELS = [GPT_56_SOL_MODEL, KIMI_K3_MODEL];
 assert.deepEqual(
   Object.keys(PARAMETRIC_MODEL_ROSTER).sort(),
   [...ALL_MODELS].sort(),
@@ -36,6 +37,7 @@ for (const model of ALL_MODELS) {
 
 // Per-model roster-derived helpers. Exactly ONE review (inspection) round.
 assert.equal(inspectionRoundsForModel(GPT_56_SOL_MODEL), 1);
+assert.equal(inspectionRoundsForModel(KIMI_K3_MODEL), 1);
 assert.equal(inspectionRoundsForModel(GEMINI_35_FLASH_MODEL), 0);
 assert.equal(inspectionRoundsForModel(GEMINI_31_PRO_MODEL), 0);
 assert.equal(inspectionRoundsForModel(CLAUDE_FABLE_5_MODEL), 0);
@@ -47,6 +49,7 @@ assert.equal(outputTokenCapForModel(CLAUDE_FABLE_5_MODEL), 32000);
 assert.equal(outputTokenCapForModel(GEMINI_35_FLASH_MODEL), 32000);
 assert.equal(outputTokenCapForModel(GPT_55_MODEL), 32000);
 assert.equal(outputTokenCapForModel(GPT_56_SOL_MODEL), 32000);
+assert.equal(outputTokenCapForModel(KIMI_K3_MODEL), 32000);
 assert.equal(outputTokenCapForModel(OPUS_48_MODEL), 32000);
 assert.equal(outputTokenCapForModel('some/unknown'), 32000);
 
@@ -60,6 +63,13 @@ assert.deepEqual(getCodeGenerationProviderCandidates(GPT_56_SOL_MODEL), [
     provider: 'openrouter',
     model: GPT_56_SOL_MODEL,
     usageModel: GPT_56_SOL_MODEL,
+  },
+]);
+assert.deepEqual(getCodeGenerationProviderCandidates(KIMI_K3_MODEL), [
+  {
+    provider: 'openrouter',
+    model: KIMI_K3_MODEL,
+    usageModel: KIMI_K3_MODEL,
   },
 ]);
 
