@@ -23,6 +23,11 @@ assert.match(
   /const nonStreamingBody = \{ \.\.\.requestBody, stream: false \}/,
 );
 assert.match(source, /completionJsonAsSse/);
+assert.match(
+  source,
+  /if \(response\.status === 429\) \{\s+throw new UserFacingAgentError/,
+  'all upstream 429 responses should surface as Kimi capacity errors',
+);
 assert.match(source, /Kimi K3 is temporarily at capacity/);
 
 console.log('agent Kimi K3 and printability tests passed');

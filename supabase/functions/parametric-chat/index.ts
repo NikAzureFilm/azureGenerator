@@ -145,7 +145,7 @@ function getUserFacingOpenRouterMessage(
 ): string | null {
   const message = extractOpenRouterErrorMessage(errorText);
   const normalized = message.toLowerCase();
-  if (status === 429 && normalized.includes('provider returned error')) {
+  if (status === 429) {
     return 'The selected CAD model is temporarily at capacity. Please retry in a moment.';
   }
   if (

@@ -1146,10 +1146,7 @@ Deno.serve(async (req) => {
                 console.error(
                   `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
                 );
-                if (
-                  response.status === 429 &&
-                  errorText.toLowerCase().includes('provider returned error')
-                ) {
+                if (response.status === 429) {
                   throw new UserFacingAgentError(
                     'Kimi K3 is temporarily at capacity. Please retry in a moment.',
                   );

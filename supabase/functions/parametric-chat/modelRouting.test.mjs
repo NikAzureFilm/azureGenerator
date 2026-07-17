@@ -192,4 +192,9 @@ assert.match(
   /const nonStreamingBody = \{ \.\.\.requestBody, stream: false \}/,
 );
 assert.match(source, /completionJsonAsSse/);
+assert.match(
+  source,
+  /if \(status === 429\) \{\s+return 'The selected CAD model is temporarily at capacity/,
+  'all upstream 429 responses should surface as CAD capacity errors',
+);
 assert.match(source, /temporarily at capacity/);
