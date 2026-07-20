@@ -195,6 +195,21 @@ const readBalances = async (userId: string) => {
   return { supabase, subscription, purchased, isPaidSubscriptionActive };
 };
 
+const statusFromSupabase = async (userId: string): Promise<BillingStatus> => {
+  const { subscription, purchased, isPaidSubscriptionActive } =
+    await readBalances(userId);
+  return {
+    user: { hasTrialed: false },
+    subscription: null,
+    tokens: {
+      free: isPaidSubscriptionActive ? 0 : subscription,
+      subscription: isPaidSubscriptionActive ? subscription : 0,
+      purchased,
+      total: subscription + purchased,
+    },
+  };
+};
+
 const consumeFromSupabase = async (
   body: ConsumeBody,
 ): Promise<ConsumeResult> => {
@@ -478,10 +493,12 @@ export type CancelSubscriptionResult =
   | { canceled: false; reason: 'no_subscription' | 'already_canceled' };
 
 export const billing = {
-  getStatus: (email: string) =>
+  getStatus: (email: string, userId?: string) =>
     isLocalBillingBypassEnabled()
       ? Promise.resolve(localStatus())
-      : call<BillingStatus>('GET', `/v1/users/${enc(email)}/status`),
+      : !isBillingServiceConfigured() && userId
+        ? statusFromSupabase(userId)
+        : call<BillingStatus>('GET', `/v1/users/${enc(email)}/status`),
 
   consume: (email: string, body: ConsumeBody) =>
     isLocalBillingBypassEnabled()
