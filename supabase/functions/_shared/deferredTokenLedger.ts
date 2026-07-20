@@ -7,10 +7,7 @@ import type {
 } from './refundableTokenLedger.ts';
 
 type BillingClientLike = {
-  getStatus: (
-    email: string,
-    userId?: string,
-  ) => Promise<{ tokens: { total: number } }>;
+  getStatus: (email: string) => Promise<{ tokens: { total: number } }>;
   consume: (
     email: string,
     body: TokenChargeBody,
@@ -274,7 +271,7 @@ export class DeferredTokenLedger {
       );
     }
 
-    const status = await this.billingClient.getStatus(email, body.userId);
+    const status = await this.billingClient.getStatus(email);
     const result = await this.store.reserve({
       userId: body.userId,
       referenceId: body.referenceId,

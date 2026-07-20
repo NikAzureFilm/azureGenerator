@@ -27,20 +27,18 @@ import { logLlmUsage } from '../_shared/providerUsage.ts';
 import { checkRateLimit } from '../_shared/rateLimit.ts';
 import { buildAgentConceptImagePrompt } from '../_shared/imagePrompt.ts';
 import { buildFallbackRecommendation } from './recommendationFallback.ts';
-import { KIMI_K3_MODEL } from '../../../shared/parametricRouting.ts';
 
-// Kimi K3 powers design-agent planning as well as the selectable CAD model, so
-// concept review and the downstream printable-part brief use the same model.
-// Low effort keeps tool dispatch responsive; deployments can raise it through
-// AGENT_CHAT_REASONING_EFFORT after latency is characterized in production.
-const AGENT_MODEL = KIMI_K3_MODEL;
+// Design-agent chat model: GPT-5.6 Terra via OpenRouter. Reasoning effort
+// defaults to 'low': measured 2026-07-13, 'medium' on this model was served
+// at ~40-60s to first visible token (58s total for a 71-token turn) vs ~3.5s
+// total at 'low', with identical tool behavior. Flip back via the
+// AGENT_CHAT_REASONING_EFFORT secret if the provider speeds up.
+const AGENT_MODEL = 'openai/gpt-5.6-terra';
 const AGENT_REASONING_EFFORT =
   Deno.env.get('AGENT_CHAT_REASONING_EFFORT')?.trim() || 'low';
 const AGENT_MAX_TOKENS = 16000;
-const KIMI_K3_MAX_ATTEMPTS = 3;
-const KIMI_K3_RETRY_BASE_MS = 1_500;
 
-// Hard ceiling per Kimi round (fetch + stream). Without it a stalled
+// Hard ceiling per Terra round (fetch + stream). Without it a stalled
 // provider stream leaves the message empty and the client spinner infinite
 // until the isolate is reaped.
 const ROUND_DEADLINE_MS = 120_000;
@@ -51,7 +49,7 @@ const WEB_SEARCH_MODEL = 'google/gemini-3.5-flash';
 const WEB_SEARCH_MAX_TOKENS = 2000;
 const WEB_SEARCH_RESULT_CHAR_CAP = 6000;
 
-// In-turn agent loop bounds. Each round is one Kimi call; the loop continues
+// In-turn agent loop bounds. Each round is one Terra call; the loop continues
 // after web_search results AND after generate_concept_image (the render is fed
 // back so the agent reviews it and may redo a flawed concept once — image cap
 // still MAX_IMAGES_PER_TURN). ask_user / recommend_pipeline end the turn. A
@@ -122,100 +120,6 @@ function openRouterHeaders(): Record<string, string> {
     'HTTP-Referer': 'https://azurefilm.com',
     'X-Title': 'AzureFilm Generator',
   };
-}
-
-class UserFacingAgentError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UserFacingAgentError';
-  }
-}
-
-type OpenRouterJsonCompletion = {
-  error?: { code?: number | string; message?: string };
-  choices?: Array<{
-    message?: {
-      content?: string;
-      reasoning?: string;
-      tool_calls?: unknown[];
-    };
-    finish_reason?: string;
-    [key: string]: unknown;
-  }>;
-  [key: string]: unknown;
-};
-
-function completionJsonAsSse(payload: OpenRouterJsonCompletion): string {
-  const chunk = {
-    ...payload,
-    choices: payload.choices?.map((choice) => ({
-      ...choice,
-      delta: choice.message,
-      message: undefined,
-    })),
-  };
-  return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
-}
-
-async function fetchKimiK3ChatCompletion(
-  requestBody: Record<string, unknown>,
-  signal: AbortSignal,
-): Promise<Response> {
-  const nonStreamingBody = { ...requestBody, stream: false };
-  let lastResponse: Response | null = null;
-  let lastText = '';
-
-  for (let attempt = 1; attempt <= KIMI_K3_MAX_ATTEMPTS; attempt++) {
-    lastResponse = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: openRouterHeaders(),
-      body: JSON.stringify(nonStreamingBody),
-      signal,
-    });
-    lastText = await lastResponse.text();
-
-    let payload: OpenRouterJsonCompletion | null = null;
-    try {
-      payload = JSON.parse(lastText) as OpenRouterJsonCompletion;
-    } catch {
-      // Preserve the raw upstream body below.
-    }
-
-    const embeddedCode = Number(payload?.error?.code);
-    const isCapacityError = lastResponse.status === 429 || embeddedCode === 429;
-    if (isCapacityError && attempt < KIMI_K3_MAX_ATTEMPTS) {
-      const delayMs = KIMI_K3_RETRY_BASE_MS * attempt;
-      console.warn(
-        `Kimi K3 provider returned 429; retrying attempt ${attempt + 1}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      continue;
-    }
-
-    if (!lastResponse.ok || payload?.error || !payload) {
-      const status = isCapacityError
-        ? 429
-        : lastResponse.ok
-          ? 502
-          : lastResponse.status;
-      return new Response(lastText, {
-        status,
-        statusText: lastResponse.statusText,
-        headers: lastResponse.headers,
-      });
-    }
-
-    return new Response(completionJsonAsSse(payload), {
-      status: 200,
-      headers: { 'Content-Type': 'text/event-stream' },
-    });
-  }
-
-  return new Response(lastText, {
-    status: lastResponse?.status ?? 502,
-    statusText: lastResponse?.statusText,
-    headers: lastResponse?.headers,
-  });
 }
 
 // User turns replay as text plus inline base64 image parts (data URLs work in
@@ -370,10 +274,8 @@ Workflow:
 
 Everything you design MUST be 3D printable:
 - One contiguous physical piece: every element attached to or touching the main body — no floating, hovering, or detached parts, no loose accessories, no assemblies of separate objects.
-- Default to 0.4 mm-nozzle FDM: at least 1.2 mm walls, 0.8 mm raised details, and reinforced load-bearing tabs, bosses, and cantilevers.
-- Favor a broad flat build-plate face, no unsupported islands, no bridges over about 10 mm, and no overhangs beyond 45 degrees without chamfers or self-supporting profiles.
-- For mating hardware or moving parts, include 0.25-0.4 mm clearance per side, lead-in chamfers, and practical printed-hole compensation unless the user supplies calibrated values.
-- Apply these constraints to every concept image description AND every generationPrompt passed to recommend_pipeline; for CAD, state the critical dimensions, orientation, wall thickness, clearance, and reinforcement explicitly.
+- No impossibly thin walls, hair-fine spokes, or large unsupported overhangs; favor solid, self-supporting geometry that prints cleanly.
+- Apply this to every concept image description AND to every generationPrompt you pass to recommend_pipeline (state it explicitly there, with dimensions for cad).
 
 Choosing the pipeline:
 - "cad": parametric CAD engineering. Best for dimensioned, functional, or mechanical parts — brackets, enclosures, gears, mounts, adapters, anything with measurements, flat faces, holes, tolerances, or hardware fit. Produces clean editable geometry, but not organic detail.
@@ -905,7 +807,7 @@ Deno.serve(async (req) => {
       async start(controller) {
         const heartbeatId = startStreamHeartbeat(controller);
         // Running conversation for the in-turn loop: rounds append their
-        // assistant tool_calls + tool results here so the next Kimi call
+        // assistant tool_calls + tool results here so the next Terra call
         // sees them.
         const convo: AgentChatMessage[] = [...historyMessages];
         let webSearchesUsed = 0;
@@ -1136,21 +1038,18 @@ Deno.serve(async (req) => {
             abortSignal.addEventListener('abort', onOuterAbort);
 
             try {
-              const response = await fetchKimiK3ChatCompletion(
-                requestBody,
-                roundAbort.signal,
-              );
+              const response = await fetch(OPENROUTER_API_URL, {
+                method: 'POST',
+                headers: openRouterHeaders(),
+                body: JSON.stringify(requestBody),
+                signal: roundAbort.signal,
+              });
 
               if (!response.ok) {
                 const errorText = await response.text();
                 console.error(
                   `OpenRouter API Error: ${response.status} - ${errorText.slice(0, 500)}`,
                 );
-                if (response.status === 429) {
-                  throw new UserFacingAgentError(
-                    'Kimi K3 is temporarily at capacity. Please retry in a moment.',
-                  );
-                }
                 throw new Error(
                   `OpenRouter API error: ${response.statusText} (${response.status})`,
                 );
@@ -1439,10 +1338,7 @@ Deno.serve(async (req) => {
             } else {
               content = {
                 ...content,
-                text:
-                  error instanceof UserFacingAgentError
-                    ? error.message
-                    : 'An error occurred while processing your request.',
+                text: 'An error occurred while processing your request.',
               };
             }
           }
@@ -1548,9 +1444,7 @@ Deno.serve(async (req) => {
         ...content,
         text: abortSignal.aborted
           ? 'Generation stopped! Retry or enter a new prompt.'
-          : error instanceof UserFacingAgentError
-            ? error.message
-            : 'An error occurred while processing your request.',
+          : 'An error occurred while processing your request.',
       };
     }
 

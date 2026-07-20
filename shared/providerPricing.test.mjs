@@ -35,11 +35,6 @@ assert.deepEqual(LLM_PRICES['openai/gpt-5.6-sol'], {
   cachedInputPerM: 0.5,
 });
 assert.equal(llmCostUsd('openai/gpt-5.6-sol', 1_000_000, 1_000_000), 35);
-assert.deepEqual(LLM_PRICES['moonshotai/kimi-k3'], {
-  inputPerM: 3,
-  outputPerM: 15,
-});
-assert.equal(llmCostUsd('moonshotai/kimi-k3', 1_000_000, 1_000_000), 18);
 
 assert.deepEqual(OPENAI_IMAGE_PRICES, {
   low: 0.006,

@@ -33,7 +33,6 @@ import {
 import {
   DEFAULT_CODE_GENERATION_MODEL,
   GPT_56_SOL_MODEL,
-  KIMI_K3_MODEL,
   getCodeGenerationProviderCandidates,
   isGeminiCodeGenerationModel,
   modelSupportsVision,
@@ -93,8 +92,6 @@ const OPENROUTER_DEEPSEEK_V4_PRO_FALLBACK_MODEL = 'anthropic/claude-haiku-4.5';
 const DEFAULT_REASONING_TOKEN_LIMIT = 12000;
 const FABLE_REASONING_TOKEN_LIMIT = 8000;
 const FABLE_COMPLETION_TOKEN_LIMIT = 24000;
-const KIMI_K3_MAX_ATTEMPTS = 3;
-const KIMI_K3_RETRY_BASE_MS = 1_500;
 // Per-model code-gen output caps now come from the shared roster via
 // outputTokenCapForModel().
 
@@ -145,9 +142,6 @@ function getUserFacingOpenRouterMessage(
 ): string | null {
   const message = extractOpenRouterErrorMessage(errorText);
   const normalized = message.toLowerCase();
-  if (status === 429) {
-    return 'The selected CAD model is temporarily at capacity. Please retry in a moment.';
-  }
   if (
     status === 402 ||
     normalized.includes('requires more credits') ||
@@ -187,7 +181,7 @@ function isClaudeFable5(model: string): boolean {
   return bareAnthropicModelId(model) === 'claude-fable-5';
 }
 
-// GPT-5.6 Sol runs at a PINNED medium
+// GPT-5.6 Sol is the sole CAD code-gen model and runs at a PINNED medium
 // hidden-reasoning effort for code generation — round-0, continuation repairs,
 // and the self-inspection review alike. Measured 2026-07-13 (OpenRouter, real
 // code-gen prompt): 'high' spent 188-218s reasoning before the FIRST visible
@@ -196,16 +190,8 @@ function isClaudeFable5(model: string): boolean {
 // resolved. 'medium' measured ~89s to first token / ~104s total, which fits
 // the request budget with margin.
 const SOL_CODE_GEN_REASONING_EFFORT = 'medium';
-// Kimi K3 is likewise pinned to medium for printable-part reasoning without
-// letting its visual inspection leg escalate beyond the edge request budget.
-const KIMI_CODE_GEN_REASONING_EFFORT = 'medium';
-function pinnedCodeGenerationReasoningEffort(model: string): 'medium' | null {
-  if (model === GPT_56_SOL_MODEL) return SOL_CODE_GEN_REASONING_EFFORT;
-  if (model === KIMI_K3_MODEL) return KIMI_CODE_GEN_REASONING_EFFORT;
-  return null;
-}
 function usesPinnedEffortReasoning(model: string): boolean {
-  return pinnedCodeGenerationReasoningEffort(model) !== null;
+  return model === GPT_56_SOL_MODEL;
 }
 
 // Attribute usage/cost to the model OpenRouter actually served (its responses
@@ -491,97 +477,6 @@ function openRouterHeaders(): Record<string, string> {
   };
 }
 
-type OpenRouterJsonCompletion = {
-  error?: { code?: number | string; message?: string };
-  choices?: Array<{
-    message?: {
-      content?: string;
-      reasoning?: string;
-      tool_calls?: unknown[];
-    };
-    finish_reason?: string;
-    [key: string]: unknown;
-  }>;
-  [key: string]: unknown;
-};
-
-function completionJsonAsSse(payload: OpenRouterJsonCompletion): string {
-  const chunk = {
-    ...payload,
-    choices: payload.choices?.map((choice) => ({
-      ...choice,
-      delta: choice.message,
-      message: undefined,
-    })),
-  };
-  return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
-}
-
-// Kimi's sole launch provider sometimes reports capacity errors inside an HTTP
-// 200 stream, which cannot be retried after the caller starts consuming SSE.
-// Request it non-streaming, inspect the complete envelope, retry embedded 429s,
-// then adapt a successful completion back to SSE for the existing pipeline.
-async function fetchKimiK3ChatCompletion(
-  requestBody: OpenRouterRequest,
-  signal?: AbortSignal,
-): Promise<Response> {
-  const nonStreamingBody = { ...requestBody, stream: false };
-  let lastResponse: Response | null = null;
-  let lastText = '';
-
-  for (let attempt = 1; attempt <= KIMI_K3_MAX_ATTEMPTS; attempt++) {
-    lastResponse = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: openRouterHeaders(),
-      body: JSON.stringify(nonStreamingBody),
-      signal,
-    });
-    lastText = await lastResponse.text();
-
-    let payload: OpenRouterJsonCompletion | null = null;
-    try {
-      payload = JSON.parse(lastText) as OpenRouterJsonCompletion;
-    } catch {
-      // Preserve the upstream body below when it is not valid JSON.
-    }
-
-    const embeddedCode = Number(payload?.error?.code);
-    const isCapacityError = lastResponse.status === 429 || embeddedCode === 429;
-    if (isCapacityError && attempt < KIMI_K3_MAX_ATTEMPTS) {
-      const delayMs = KIMI_K3_RETRY_BASE_MS * attempt;
-      console.warn(
-        `Kimi K3 provider returned 429; retrying attempt ${attempt + 1}/${KIMI_K3_MAX_ATTEMPTS} after ${delayMs}ms`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      continue;
-    }
-
-    if (!lastResponse.ok || payload?.error || !payload) {
-      const status = isCapacityError
-        ? 429
-        : lastResponse.ok
-          ? 502
-          : lastResponse.status;
-      return new Response(lastText, {
-        status,
-        statusText: lastResponse.statusText,
-        headers: lastResponse.headers,
-      });
-    }
-
-    return new Response(completionJsonAsSse(payload), {
-      status: 200,
-      headers: { 'Content-Type': 'text/event-stream' },
-    });
-  }
-
-  return new Response(lastText, {
-    status: lastResponse?.status ?? 502,
-    statusText: lastResponse?.statusText,
-    headers: lastResponse?.headers,
-  });
-}
-
 function getOpenRouterFallbackModel(model: string): string | null {
   // NOTE: GPT-5.6 Sol deliberately has NO fallback. It's a user-selected premium
   // CAD model, so silently downgrading it to a weaker model (it used to fall back
@@ -626,10 +521,6 @@ async function fetchOpenRouterChatCompletion(
   requestBody: OpenRouterRequest,
   signal?: AbortSignal,
 ): Promise<Response> {
-  if (requestBody.model === KIMI_K3_MODEL) {
-    return fetchKimiK3ChatCompletion(requestBody, signal);
-  }
-
   let response = await fetch(OPENROUTER_API_URL, {
     method: 'POST',
     headers: openRouterHeaders(),
@@ -844,12 +735,7 @@ Optionally put a technical description comment on the line above a parameter and
 
 Color: When the model has distinct parts, wrap each in a color() call with a fitting named color so the preview reads expressively. Expose colors as string parameters (e.g. \`body_color = "SteelBlue";\` then \`color(body_color) ...\`) so the user can tweak them from the parameter panel. Always name them \`*_color\` and use CSS named colors or #RRGGBB hex values as defaults. Use technical/customizer comments only; never include meta-commentary about tools, APIs, prompts, or implementation details. If the user asks about anything other than OpenSCAD CAD, only return 404.
 
-Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, no open shells, and no self-intersections. Unless the user specifies another process, design for FDM with a 0.4 mm nozzle and 0.2 mm layers.
-- Use at least 1.2 mm walls (three extrusion lines), 0.8 mm embossed/raised details, 1.0 mm load-bearing pins, and thicker walls, gussets, or ribs where forces concentrate.
-- Put a broad, flat face at z = 0. Avoid unsupported islands, bridges longer than about 10 mm, and overhangs steeper than 45 degrees from vertical; replace underside fillets with chamfers or teardrop profiles where support would otherwise be required.
-- Give mating or moving FDM parts 0.25-0.4 mm clearance per side unless the user provides a calibrated fit. Slightly oversize printed holes (about 0.2 mm on diameter for common hardware) and add lead-in chamfers to insertion features.
-- Preserve strength across layer lines: add root fillets and triangular gussets to cantilevers, orient thin tabs so loads do not split layers, and avoid abrupt stress risers.
-- Boolean cuts must pass fully through their target with epsilon overlap. Avoid coplanar-only unions, zero-thickness faces, trapped internal voids, and decorative fragments too small to slice.
+Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, no open shells, and no self-intersections. Use a practical minimum wall thickness of 1.2 mm when dimensions are missing, thicker walls or ribs for load-bearing features, and details large enough for a 0.4 mm FDM nozzle.
 
 Connectivity — NEVER leave floating parts (CRITICAL). The result must always 3D-print, either as ONE connected piece or as a kit of SEPARATE parts. Decide which, then build it cleanly for that choice:
 - If the user asks for a single, one-piece, contiguous, or connected object, that choice is MANDATORY. Never output a kit, separate parts, an exploded layout, loose accessories, or multiple objects.
@@ -936,7 +822,7 @@ Judge the model from the RENDER, not from reading the code — the render is the
 Inspection method:
 1. List every distinct feature the user explicitly asked for (e.g. "a mug with a handle and a lid" → body, handle, lid).
 2. For each feature, look across every relevant view and confirm it is genuinely present, has the right shape and proportions, sits in the correct place, physically connects to the rest of the model, and can be 3D-printed.
-3. Actively hunt for defects the code can hide: parts floating in mid-air or not resting on the build plate, walls too thin to print, pieces that only touch at a single edge or face instead of overlapping with real material, self-intersections, unprintable bridges/overhangs, missing fit clearance or hole compensation, stress-prone tabs, trapped voids, and results that are cruder or more simplified than what was requested.
+3. Actively hunt for defects the code can hide: parts floating in mid-air or not resting on the build plate, walls too thin to print, pieces that only touch at a single edge or face instead of overlapping with real material, self-intersections, and results that are cruder or more simplified than what was requested.
 
 A model that merely COMPILES is not good enough — approve it only when the rendered views actually match the request.
 
@@ -947,7 +833,7 @@ A) If ANY requested feature is missing, malformed, misplaced, disconnected, non-
    - Declare every editable value as a descriptive snake_case top-of-file variable with an OpenSCAD Customizer trailing comment (e.g. wall_thickness = 2; // [1:0.5:8]). Never abbreviate names to single letters.
    - Keep the geometry watertight and manifold, and make it either ONE fully connected solid (each feature sunk into its parent by real overlapping material and combined with union()) OR a kit of separate pieces that each rest flat on the build plate — never leave a floating part or one that only touches at a point.
    - If the user requested a single, one-piece, contiguous, or connected object, preserve that requirement exactly: rebuild it as one continuous solid and never return a kit, separate parts, an exploded layout, loose accessories, or multiple objects.
-   - Respect FDM printability: use at least 1.2 mm walls when unspecified, keep details large enough for a 0.4 mm nozzle, put a broad face at z = 0, avoid unsupported spans and steep overhangs, add functional clearances and lead-ins, and reinforce load-bearing roots with fillets, ribs, or gussets.
+   - Respect printability: use a sensible minimum wall thickness (about 1.2 mm when unspecified) and keep details large enough for a 0.4 mm FDM nozzle.
 
 B) If EVERY requested feature is verified present, correct, connected, and printable, reply with the literal token LOOKS_GOOD: at the very START of your response, followed by one short, friendly sentence describing the finished model. Output nothing else.`;
 
@@ -1182,9 +1068,7 @@ async function generateContinuationCode(params: {
       // GPT-5.6 Sol stays pinned to medium even for the self-inspection call —
       // 'high' cannot finish inside an edge request (see the constant's note).
       codeRequestBody.reasoning = {
-        effort:
-          pinnedCodeGenerationReasoningEffort(codeModel) ??
-          SOL_CODE_GEN_REASONING_EFFORT,
+        effort: SOL_CODE_GEN_REASONING_EFFORT,
         exclude: true,
       };
     } else if (reasoningEffort === 'high') {
@@ -2964,9 +2848,7 @@ Deno.serve(async (req) => {
                   // GPT-5.6 Sol CAD code-gen runs at pinned medium hidden
                   // reasoning, regardless of the client's thinking flag.
                   codeRequestBody.reasoning = {
-                    effort:
-                      pinnedCodeGenerationReasoningEffort(codeModel) ??
-                      SOL_CODE_GEN_REASONING_EFFORT,
+                    effort: SOL_CODE_GEN_REASONING_EFFORT,
                     exclude: true,
                   };
                 } else if (codeReasoningEnabled) {
