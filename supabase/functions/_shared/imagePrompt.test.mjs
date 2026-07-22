@@ -36,6 +36,24 @@ assert.match(
   'global image enforcement should require a single connected, contiguous printable piece',
 );
 
+assert.match(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /matte non-reflective surfaces and flat uniform solid colors per region/i,
+  'global image enforcement should mandate flat matte solid colors for print-friendly palettes',
+);
+
+assert.match(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /no color gradients or baked-in shading/i,
+  'global image enforcement should forbid gradients and baked-in shading',
+);
+
+assert.doesNotMatch(
+  THREE_D_OBJECT_PROMPT_ENFORCEMENT,
+  /soft ground shadow/i,
+  'global image enforcement should no longer bake a ground shadow into the render',
+);
+
 assert.equal(
   enforce3DObjectPrompt('Generate a Charizard.'),
   `${THREE_D_OBJECT_PROMPT_ENFORCEMENT} User request: Generate a Charizard.`,
@@ -76,6 +94,18 @@ assert.match(
   AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
   /faithful, vibrant, true-to-character colors and materials[\s\S]*never use gray, graphite, or monochrome CAD material/i,
   'character/organic/decorative concepts should keep true-to-character colors, never gray CAD material',
+);
+
+assert.match(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /flat, matte, evenly lit solid color regions with no shadows, reflections, specular highlights, or gradients/i,
+  'character/organic/decorative concepts should be rendered as flat, matte, shadow-free solid colors',
+);
+
+assert.doesNotMatch(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /soft contact shadow/i,
+  'agent concept art direction should no longer globally mandate a soft contact shadow',
 );
 
 const agentConceptPrompt = buildAgentConceptImagePrompt(

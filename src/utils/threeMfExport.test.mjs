@@ -17,6 +17,7 @@ import {
   createThreeMfBlobFromColoredMesh,
   createThreeMfBlobFromScene,
   analyzeThreeMfMeshTopology,
+  quantizeTriangleColors,
   validateThreeMfBlob,
 } from './threeMfExport.ts';
 
@@ -2096,4 +2097,132 @@ assert.equal(
   countPackagedMeshComponents(twoBodyModelXml),
   1,
   'two separated bodies must export as a single connected 3MF mesh',
+);
+
+// --- Palette distinctness: near-duplicate palette colors at low color counts ---
+
+// The strictest low-count separation the exporter enforces (weighted RGB metric,
+// matching quantizeTriangleColors' PALETTE_MIN_SEPARATION). Two filament colors
+// closer than this at colorCount <= 4 should be collapsed into one slot.
+const LOW_COUNT_PALETTE_SEPARATION = 0.14;
+
+function paletteColorDistance(a, b) {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(0.299 * dr * dr + 0.587 * dg * dg + 0.114 * db * db);
+}
+
+function colorSample(hex, weight) {
+  return { color: new THREE.Color(hex), weight };
+}
+
+const isPurpleFamily = (color) =>
+  color.b > 0.4 && color.r > 0.3 && color.g < 0.3;
+const isRedFamily = (color) => color.r > 0.5 && color.g < 0.4 && color.b < 0.5;
+const isNearWhite = (color) => color.r > 0.8 && color.g > 0.8 && color.b > 0.8;
+const isNearBlack = (color) => color.r < 0.2 && color.g < 0.2 && color.b < 0.2;
+
+function assertNoNearDuplicates(palette, minSeparation, label) {
+  for (let i = 0; i < palette.length; i += 1) {
+    for (let j = i + 1; j < palette.length; j += 1) {
+      assert.ok(
+        paletteColorDistance(palette[i], palette[j]) >= minSeparation,
+        `${label}: palette entries ${i} and ${j} are near-duplicates`,
+      );
+    }
+  }
+}
+
+// Baked-lighting Gengar: the huge purple mass split into two shades that stole a
+// filament slot from the small black regions (eye outlines, teeth gaps). At
+// colorCount 4 the palette must keep exactly one purple and still surface the
+// red, near-white, and near-black.
+const gengarSamples = [
+  colorSample('#AC03D5', 0.55),
+  colorSample('#B508DE', 0.25),
+  colorSample('#FDFDFD', 0.1),
+  colorSample('#C2255B', 0.07),
+  colorSample('#111111', 0.03),
+];
+const gengarPalette = quantizeTriangleColors(gengarSamples, 4);
+assert.equal(
+  gengarPalette.filter(isPurpleFamily).length,
+  1,
+  'Gengar palette keeps exactly one purple-family color at colorCount 4',
+);
+assert.ok(
+  gengarPalette.some(isRedFamily),
+  'Gengar palette keeps the red region',
+);
+assert.ok(
+  gengarPalette.some(isNearWhite),
+  'Gengar palette keeps the near-white region',
+);
+assert.ok(
+  gengarPalette.some(isNearBlack),
+  'Gengar palette recovers the near-black region',
+);
+assertNoNearDuplicates(
+  gengarPalette,
+  LOW_COUNT_PALETTE_SEPARATION,
+  'Gengar colorCount 4',
+);
+
+// High-count freedom: the same samples at colorCount 8 must NOT force the two
+// near-identical purples together — the user asked for many shades.
+const gengarHighCountPalette = quantizeTriangleColors(gengarSamples, 8);
+assert.equal(
+  gengarHighCountPalette.filter(isPurpleFamily).length,
+  2,
+  'colorCount 8 lets both near-identical purples survive',
+);
+
+// Re-seed path: a purple cluster spread across three brightness shades makes the
+// brightness-spread seeding place two centroids inside the purple mass, crowding
+// out the small red region. The merge+reseed loop must reclaim the freed slot
+// for red rather than leaving a second purple.
+const clusteredPurpleSamples = [
+  colorSample('#111111', 0.03),
+  colorSample('#9A00C8', 0.25),
+  colorSample('#A400D2', 0.3),
+  colorSample('#AE00DC', 0.22),
+  colorSample('#C2255B', 0.1),
+  colorSample('#FDFDFD', 0.1),
+];
+const clusteredPurplePalette = quantizeTriangleColors(clusteredPurpleSamples, 4);
+assert.equal(
+  clusteredPurplePalette.filter(isPurpleFamily).length,
+  1,
+  'clustered purples collapse to one slot even when seeding double-seeds them',
+);
+assert.ok(
+  clusteredPurplePalette.some(isRedFamily),
+  'the freed slot is re-seeded with the distinct red region',
+);
+assert.ok(
+  clusteredPurplePalette.some(isNearBlack),
+  'clustered-purple palette keeps the near-black region',
+);
+assert.ok(
+  clusteredPurplePalette.some(isNearWhite),
+  'clustered-purple palette keeps the near-white region',
+);
+assertNoNearDuplicates(
+  clusteredPurplePalette,
+  LOW_COUNT_PALETTE_SEPARATION,
+  'clustered purples colorCount 4',
+);
+
+// Fewer, not duplicates: when only two near-identical purples exist, a request
+// for four colors must return a single slot rather than padding with duplicates.
+const twoNearPurpleSamples = [
+  colorSample('#AC03D5', 0.6),
+  colorSample('#B508DE', 0.4),
+];
+const twoNearPurplePalette = quantizeTriangleColors(twoNearPurpleSamples, 4);
+assert.equal(
+  twoNearPurplePalette.length,
+  1,
+  'two near-identical purples collapse to a single palette color at colorCount 4',
 );

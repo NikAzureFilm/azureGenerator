@@ -4462,35 +4462,117 @@ function getMaterialColor(material: THREE.Material): THREE.Color {
   return new THREE.Color(0.8, 0.8, 0.8);
 }
 
-function quantizeTriangleColors(
+// Baseline perceptual gap (in the 0..1 luminance-weighted RGB metric) that two
+// filament colors must keep at the strictest, low color counts. At high counts
+// the user has explicitly asked for many shades, so near-duplicates are allowed.
+const PALETTE_MIN_SEPARATION = 0.14;
+const PALETTE_MERGE_ROUNDS = 4;
+
+// Minimum separation required between palette colors, scaled by the requested
+// count: strict for <= 4, relaxed linearly across 5-7, and disabled at >= 8.
+function paletteMinSeparation(colorCount: number): number {
+  if (colorCount >= 8) {
+    return 0;
+  }
+  const relaxation = Math.min(1, Math.max(0, (8 - colorCount) / 4));
+  return PALETTE_MIN_SEPARATION * relaxation;
+}
+
+// Luminance-weighted squared RGB distance (same 0.299/0.587/0.114 channel
+// weights as perceivedBrightness) so a shift in green counts more than blue.
+// Used only for the near-duplicate/separation logic; triangle-to-palette
+// assignment still uses findNearestPaletteIndex's plain RGB distance.
+function weightedColorDistanceSq(a: THREE.Color, b: THREE.Color): number {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return 0.299 * dr * dr + 0.587 * dg * dg + 0.114 * db * db;
+}
+
+function aggregateSamplesByColor(samples: ColorSample[]): ColorSample[] {
+  const byHex = new Map<string, ColorSample>();
+  for (const sample of samples) {
+    const hex = colorToHex(sample.color);
+    const existing = byHex.get(hex);
+    if (existing) {
+      existing.weight += sample.weight;
+    } else {
+      byHex.set(hex, { color: sample.color.clone(), weight: sample.weight });
+    }
+  }
+  return [...byHex.values()];
+}
+
+function mergeColorsByWeight(
+  a: THREE.Color,
+  weightA: number,
+  b: THREE.Color,
+  weightB: number,
+): THREE.Color {
+  const total = weightA + weightB;
+  if (total <= 0) {
+    return a.clone();
+  }
+  return new THREE.Color(
+    (a.r * weightA + b.r * weightB) / total,
+    (a.g * weightA + b.g * weightB) / total,
+    (a.b * weightA + b.b * weightB) / total,
+  );
+}
+
+// Collapse any weighted colors closer than the separation threshold into a
+// single weight-proportional color, repeating until every remaining pair is
+// distinct. Returns fewer colors rather than near-duplicates.
+function collapseNearDuplicateColors(
+  entries: ColorSample[],
+  minSeparationSq: number,
+): ColorSample[] {
+  if (minSeparationSq <= 0) {
+    return entries;
+  }
+  const merged = entries.map((entry) => ({
+    color: entry.color.clone(),
+    weight: entry.weight,
+  }));
+  while (merged.length > 1) {
+    let closestPair: [number, number] | null = null;
+    let closestDistanceSq = minSeparationSq;
+    for (let i = 0; i < merged.length; i += 1) {
+      for (let j = i + 1; j < merged.length; j += 1) {
+        const distanceSq = weightedColorDistanceSq(
+          merged[i].color,
+          merged[j].color,
+        );
+        if (distanceSq < closestDistanceSq) {
+          closestDistanceSq = distanceSq;
+          closestPair = [i, j];
+        }
+      }
+    }
+    if (!closestPair) {
+      break;
+    }
+    const [i, j] = closestPair;
+    merged[i] = {
+      color: mergeColorsByWeight(
+        merged[i].color,
+        merged[i].weight,
+        merged[j].color,
+        merged[j].weight,
+      ),
+      weight: merged[i].weight + merged[j].weight,
+    };
+    merged.splice(j, 1);
+  }
+  return merged;
+}
+
+function refineCentroids(
+  centroids: THREE.Color[],
   samples: ColorSample[],
-  colorCount: number,
-): THREE.Color[] {
-  if (samples.length === 0) {
-    return [new THREE.Color(0.8, 0.8, 0.8)];
-  }
-
-  const uniqueColors = dedupeColors(samples.map((sample) => sample.color));
-  if (uniqueColors.length <= colorCount) {
-    return uniqueColors;
-  }
-
-  const sortedColors = uniqueColors
-    .slice()
-    .sort((a, b) => perceivedBrightness(a) - perceivedBrightness(b));
-  const centroids = Array.from({ length: colorCount }, (_, index) => {
-    const sourceIndex =
-      colorCount === 1
-        ? Math.floor(sortedColors.length / 2)
-        : Math.round((index * (sortedColors.length - 1)) / (colorCount - 1));
-    return sortedColors[sourceIndex].clone();
-  });
-
-  while (centroids.length < colorCount) {
-    centroids.push(uniqueColors[centroids.length].clone());
-  }
-
-  for (let iteration = 0; iteration < 8; iteration += 1) {
+  iterations: number,
+): void {
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
     const buckets = centroids.map(() => ({
       color: new THREE.Color(0, 0, 0),
       weight: 0,
@@ -4514,16 +4596,144 @@ function quantizeTriangleColors(
       }
     });
   }
-
-  return centroids;
 }
 
-function dedupeColors(colors: THREE.Color[]): THREE.Color[] {
-  const byHex = new Map<string, THREE.Color>();
-  colors.forEach((color) => {
-    byHex.set(colorToHex(color), color.clone());
+function computeCentroidWeights(
+  centroids: THREE.Color[],
+  samples: ColorSample[],
+): number[] {
+  const weights = centroids.map(() => 0);
+  for (const sample of samples) {
+    const index = findNearestPaletteIndex(sample.color, centroids);
+    weights[index] += sample.weight;
+  }
+  return weights;
+}
+
+// Pick the color that best fills a freed slot: the one furthest from every
+// current centroid, scaled by its weight so a few stray pixels can't claim a
+// filament while a small-but-distinct region (e.g. black eye outlines) still
+// can. Returns null when nothing is separated enough to deserve its own slot.
+function findReseedColor(
+  weightedColors: ColorSample[],
+  centroids: THREE.Color[],
+  minSeparationSq: number,
+): THREE.Color | null {
+  let best: THREE.Color | null = null;
+  let bestScore = 0;
+  for (const entry of weightedColors) {
+    let nearestDistanceSq = Number.POSITIVE_INFINITY;
+    for (const centroid of centroids) {
+      const distanceSq = weightedColorDistanceSq(entry.color, centroid);
+      if (distanceSq < nearestDistanceSq) {
+        nearestDistanceSq = distanceSq;
+      }
+    }
+    if (nearestDistanceSq < minSeparationSq) {
+      continue;
+    }
+    const score = nearestDistanceSq * entry.weight;
+    if (score > bestScore) {
+      bestScore = score;
+      best = entry.color;
+    }
+  }
+  return best;
+}
+
+export function quantizeTriangleColors(
+  samples: ColorSample[],
+  colorCount: number,
+): THREE.Color[] {
+  if (samples.length === 0) {
+    return [new THREE.Color(0.8, 0.8, 0.8)];
+  }
+
+  const minSeparationSq = paletteMinSeparation(colorCount) ** 2;
+  const weightedColors = aggregateSamplesByColor(samples);
+
+  if (weightedColors.length <= colorCount) {
+    return collapseNearDuplicateColors(weightedColors, minSeparationSq).map(
+      (entry) => entry.color,
+    );
+  }
+
+  const sortedColors = weightedColors
+    .map((entry) => entry.color)
+    .sort((a, b) => perceivedBrightness(a) - perceivedBrightness(b));
+  const centroids = Array.from({ length: colorCount }, (_, index) => {
+    const sourceIndex =
+      colorCount === 1
+        ? Math.floor(sortedColors.length / 2)
+        : Math.round((index * (sortedColors.length - 1)) / (colorCount - 1));
+    return sortedColors[sourceIndex].clone();
   });
-  return [...byHex.values()];
+
+  while (centroids.length < colorCount) {
+    centroids.push(weightedColors[centroids.length].color.clone());
+  }
+
+  refineCentroids(centroids, samples, 8);
+
+  // Two centroids closer than the (count-scaled) threshold would spend two
+  // filament slots on the same visual color. Merge the closest such pair, then
+  // try to re-seed the freed slot at the most distinct remaining color so a
+  // small distinct region wins the slot instead of a second shade of the
+  // dominant color. Bounded rounds guarantee termination.
+  if (minSeparationSq > 0) {
+    for (let round = 0; round < PALETTE_MERGE_ROUNDS; round += 1) {
+      let closestPair: [number, number] | null = null;
+      let closestDistanceSq = minSeparationSq;
+      for (let i = 0; i < centroids.length; i += 1) {
+        for (let j = i + 1; j < centroids.length; j += 1) {
+          const distanceSq = weightedColorDistanceSq(
+            centroids[i],
+            centroids[j],
+          );
+          if (distanceSq < closestDistanceSq) {
+            closestDistanceSq = distanceSq;
+            closestPair = [i, j];
+          }
+        }
+      }
+      if (!closestPair) {
+        break;
+      }
+
+      const [i, j] = closestPair;
+      const weights = computeCentroidWeights(centroids, samples);
+      centroids[i] = mergeColorsByWeight(
+        centroids[i],
+        weights[i],
+        centroids[j],
+        weights[j],
+      );
+      centroids.splice(j, 1);
+
+      const reseedColor = findReseedColor(
+        weightedColors,
+        centroids,
+        minSeparationSq,
+      );
+      if (reseedColor) {
+        centroids.push(reseedColor.clone());
+        refineCentroids(centroids, samples, 4);
+      }
+    }
+
+    // Safety net: guarantee no near-duplicates survive even if the bounded loop
+    // ran out of rounds, dropping to fewer colors before returning duplicates.
+    const finalWeights = computeCentroidWeights(centroids, samples);
+    return collapseNearDuplicateColors(
+      centroids.map((color, index) => ({
+        color,
+        weight: finalWeights[index],
+      })),
+      minSeparationSq,
+    ).map((entry) => entry.color);
+  }
+
+  return centroids;
 }
 
 function findNearestPaletteIndex(

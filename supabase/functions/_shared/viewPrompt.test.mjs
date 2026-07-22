@@ -98,3 +98,22 @@ assert.equal(
   false,
   'input mode must not use the edit contract',
 );
+
+// Mesh-bound input images must come out flat and matte so the mesh texture
+// does not bake lit/shaded duplicates of the same color into the palette.
+const flatInputPrompt = buildImageGenerationPrompt({
+  view: 'front',
+  userPrompt: 'a red cube',
+  hasReference: false,
+  mode: 'input',
+});
+assert.match(
+  flatInputPrompt,
+  /flat, even, shadow-free lighting and matte, gradient-free solid colors/i,
+  'view instructions should request flat, shadow-free, matte solid colors',
+);
+assert.doesNotMatch(
+  flatInputPrompt,
+  /soft shadow directly underneath/i,
+  'view instructions should no longer bake a soft ground shadow into the render',
+);
