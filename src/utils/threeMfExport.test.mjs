@@ -2226,3 +2226,61 @@ assert.equal(
   1,
   'two near-identical purples collapse to a single palette color at colorCount 4',
 );
+
+// Mesh-scale guard: a photo-textured mesh yields millions of mostly-unique
+// color samples. Palette detection must stay fast (bounded downsampling) and
+// still surface a small-but-distinct region. Regression for the 2026-07-22
+// "Building color preview..." main-thread freeze.
+{
+  let seed = 424242;
+  const nextRandom = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const hugeSamples = [];
+  for (let i = 0; i < 1_000_000; i += 1) {
+    const bucket = i % 100;
+    let color;
+    if (bucket < 90) {
+      // continuous shaded purple — nearly every sample is a unique color
+      color = new THREE.Color(
+        0.55 + nextRandom() * 0.2,
+        nextRandom() * 0.06,
+        0.75 + nextRandom() * 0.2,
+      );
+    } else if (bucket < 97) {
+      color = new THREE.Color(
+        0.94 + nextRandom() * 0.06,
+        0.94 + nextRandom() * 0.06,
+        0.93 + nextRandom() * 0.07,
+      );
+    } else {
+      color = new THREE.Color(
+        nextRandom() * 0.1,
+        nextRandom() * 0.1,
+        nextRandom() * 0.1,
+      );
+    }
+    hugeSamples.push({ color, weight: 0.5 + nextRandom() });
+  }
+  const hugeStart = performance.now();
+  const hugePalette = quantizeTriangleColors(hugeSamples, 4);
+  const hugeElapsedMs = performance.now() - hugeStart;
+  assert.ok(
+    hugeElapsedMs < 10_000,
+    `mesh-scale palette detection must stay fast (took ${Math.round(hugeElapsedMs)}ms)`,
+  );
+  assert.equal(
+    hugePalette.filter(isPurpleFamily).length,
+    1,
+    'mesh-scale palette keeps exactly one purple-family color at colorCount 4',
+  );
+  assert.ok(
+    hugePalette.some(isNearBlack),
+    'mesh-scale palette still recovers the small near-black region',
+  );
+  assert.ok(
+    hugePalette.some(isNearWhite),
+    'mesh-scale palette keeps the near-white region',
+  );
+}

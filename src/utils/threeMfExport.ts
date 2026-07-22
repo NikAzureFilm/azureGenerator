@@ -4641,6 +4641,35 @@ function findReseedColor(
   return best;
 }
 
+// Palette detection only needs a statistically representative sample of the
+// triangle colors, not every triangle. Large textured meshes produce millions
+// of samples, and centroid refinement over all of them blocks the UI thread
+// for tens of seconds. A deterministic stride downsample keeps every region's
+// share of the distribution (small regions keep proportional representation)
+// while bounding the total palette work to a constant regardless of mesh size.
+const MAX_QUANTIZE_REFINEMENT_SAMPLES = 50_000;
+
+// Golden-ratio stepping instead of a fixed stride: triangle order often has
+// periodic structure (repeating strips, tiled UV islands), and a fixed stride
+// can resonate with that period and sample only one region. The irrational
+// step visits a low-discrepancy permutation of the index range, so every
+// region keeps proportional representation. Deterministic — no Math.random.
+const GOLDEN_RATIO_CONJUGATE = 0.6180339887498949;
+
+function downsampleColorSamples(samples: ColorSample[]): ColorSample[] {
+  if (samples.length <= MAX_QUANTIZE_REFINEMENT_SAMPLES) {
+    return samples;
+  }
+  const picked: ColorSample[] = [];
+  let position = 0;
+  for (let i = 0; i < MAX_QUANTIZE_REFINEMENT_SAMPLES; i += 1) {
+    position += GOLDEN_RATIO_CONJUGATE;
+    position -= Math.floor(position);
+    picked.push(samples[Math.floor(position * samples.length)]);
+  }
+  return picked;
+}
+
 export function quantizeTriangleColors(
   samples: ColorSample[],
   colorCount: number,
@@ -4650,6 +4679,7 @@ export function quantizeTriangleColors(
   }
 
   const minSeparationSq = paletteMinSeparation(colorCount) ** 2;
+  samples = downsampleColorSamples(samples);
   const weightedColors = aggregateSamplesByColor(samples);
 
   if (weightedColors.length <= colorCount) {
