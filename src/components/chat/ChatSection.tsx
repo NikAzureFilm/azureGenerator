@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Content,
@@ -8,7 +8,6 @@ import {
   normalizeCreativeModel,
 } from '@shared/types';
 import TextAreaChat from '@/components/TextAreaChat';
-import { SuggestionPills } from '@/components/chat/SuggestionPills';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { UserMessage } from '@/components/chat/UserMessage';
@@ -30,18 +29,12 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { normalizeParametricChatModel } from '@/lib/parametricModels';
-import { Pencil, Share } from 'lucide-react';
-import { useMeshData } from '@/hooks/useMeshData';
+import { Share } from 'lucide-react';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   normalizeImageGenerationModel,
   type ImageGenerationModel,
 } from '@shared/imageGeneration';
-import {
-  getComposerQuickActionDraft,
-  shouldShowComposerQuickActions,
-  type ComposerQuickAction,
-} from '@/utils/chatComposerActions';
 
 interface ChatSectionProps {
   messages: TreeNode<Message>[];
@@ -80,10 +73,6 @@ export function ChatSection({
 }: ChatSectionProps) {
   const isMobile = useIsMobile();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const [composerFocusRequest, setComposerFocusRequest] = useState<{
-    id: number;
-    draft?: string;
-  }>();
   const { conversation, updateConversation } = useConversation();
   const { session, billing } = useAuth();
   const totalTokens = billing?.tokens.total ?? 0;
@@ -157,70 +146,6 @@ export function ChatSection({
         .length;
     },
     [messages],
-  );
-
-  // Check mesh loading status if the last message has a mesh
-  const { data: meshData } = useMeshData({
-    id: lastMessage?.content?.mesh?.id || '',
-  });
-
-  // Only show suggestions when mesh is fully loaded or if there's no mesh
-  const shouldShowSuggestions = useMemo(() => {
-    const suggestions =
-      lastMessage?.content?.artifact?.suggestions ||
-      lastMessage?.content?.suggestions ||
-      [];
-
-    // No suggestions to show
-    if (suggestions.length === 0) return false;
-
-    // If there's no mesh, show suggestions immediately
-    if (!lastMessage?.content?.mesh) return true;
-
-    // If there's a mesh, only show suggestions when it's fully loaded
-    return meshData?.status === 'success';
-  }, [lastMessage, meshData]);
-
-  const suggestions = shouldShowSuggestions
-    ? lastMessage?.content?.artifact?.suggestions ||
-      lastMessage?.content?.suggestions ||
-      []
-    : [];
-  const showComposerQuickActions = shouldShowComposerQuickActions({
-    lastMessage,
-    isLoading,
-    limitReached,
-  });
-
-  const handleComposerQuickAction = useCallback(
-    (action: ComposerQuickAction) => {
-      const draft = getComposerQuickActionDraft(action);
-      setComposerFocusRequest((current) => ({
-        id: (current?.id ?? 0) + 1,
-        ...(draft !== undefined ? { draft } : {}),
-      }));
-      requestAnimationFrame(scrollToBottom);
-    },
-    [scrollToBottom],
-  );
-
-  const handleSuggestionSelect = useCallback(
-    (suggestion: string) => {
-      onSendMessage?.({
-        text: suggestion,
-        model:
-          conversation.type === 'creative'
-            ? normalizeCreativeModel(conversation.settings?.model)
-            : conversation.settings?.model,
-        imageGenerationModel,
-      });
-    },
-    [
-      conversation.settings?.model,
-      conversation.type,
-      imageGenerationModel,
-      onSendMessage,
-    ],
   );
 
   const handleModelChange = useCallback(
@@ -370,25 +295,6 @@ export function ChatSection({
       </ScrollArea>
       {onSendMessage && (
         <div className="w-full min-w-52 max-w-xl bg-transparent px-4 pb-6">
-          {showComposerQuickActions && (
-            <div className="flex flex-wrap gap-2 pb-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => handleComposerQuickAction('edit-output')}
-                className="h-8 rounded-full border-adam-neutral-700 bg-adam-neutral-800 px-3 text-xs text-adam-text-primary hover:bg-adam-neutral-700 hover:text-white"
-              >
-                <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                Edit output
-              </Button>
-            </div>
-          )}
-          <SuggestionPills
-            disabled={limitReached}
-            suggestions={suggestions}
-            onSelect={handleSuggestionSelect}
-          />
           <TextAreaChat
             stopGenerating={stopGenerating}
             onSubmit={onSendMessage}
@@ -405,7 +311,6 @@ export function ChatSection({
             }
             setImageGenerationModel={handleImageGenerationModelChange}
             conversation={conversation}
-            composerFocusRequest={composerFocusRequest}
             seedMultiviewImages={latestMultiviewImages}
             persistMultiviewDraft={persistMultiviewDraft}
           />
