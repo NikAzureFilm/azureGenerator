@@ -117,6 +117,10 @@ export type Content = {
   // When the assistant sends an error, its related to any error that occurred during generation
   error?: string;
   artifact?: ParametricArtifact;
+  // Prior artifact versions kept when the self-inspection loop revises code, so
+  // the user can view/download the pre-revision models. Oldest first; the live
+  // `artifact` is the latest. Absent on old messages and single-version rows.
+  artifactHistory?: ParametricArtifact[];
   index?: number;
   images?: string[];
   mesh?: Mesh;

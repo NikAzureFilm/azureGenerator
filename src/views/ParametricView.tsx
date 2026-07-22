@@ -3,7 +3,14 @@ import { ParameterSection } from '@/components/parameter/ParameterSection';
 import { Content, Message, Model, Parameter } from '@shared/types';
 import OpenSCADError from '@/lib/OpenSCADError';
 import { cn } from '@/lib/utils';
-import { useRef, useState, useMemo, useCallback, useLayoutEffect } from 'react';
+import {
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+  useLayoutEffect,
+  useEffect,
+} from 'react';
 import {
   ImperativePanelHandle,
   Panel,
@@ -21,6 +28,7 @@ import {
 import { ChevronsRight } from 'lucide-react';
 import { TreeNode } from '@shared/Tree';
 import { ParametricPreviewSection } from '@/components/viewer/ParametricPreviewSection';
+import { versionLabel } from '@/components/viewer/ArtifactVersionSwitcher';
 import { ParametricPreviewDialog } from '@/components/viewer/ParametricPreviewDialog';
 import { DxfExporter } from '@/utils/downloadUtils';
 
@@ -157,6 +165,26 @@ export default function ParametricView({
     () => !!currentMessage?.content.artifact,
     [currentMessage],
   );
+
+  // Artifact version history: prior pre-revision models kept by the inspection
+  // loop (oldest first) followed by the live artifact (latest). Selection lives
+  // here so both the preview and the parameter panel view the same version.
+  const versions = useMemo(() => {
+    const artifact = currentMessage?.content.artifact;
+    if (!artifact) return [];
+    return [...(currentMessage?.content.artifactHistory ?? []), artifact];
+  }, [currentMessage]);
+  const [selectedVersionIndex, setSelectedVersionIndex] = useState(0);
+  // Snap to the latest version whenever the message changes or a new loop round
+  // grows the version set, so live generation keeps following the newest model.
+  // A manual selection of an older version otherwise persists.
+  useEffect(() => {
+    setSelectedVersionIndex(versions.length > 0 ? versions.length - 1 : 0);
+  }, [currentMessage?.id, versions.length]);
+  const selectedArtifact =
+    versions[selectedVersionIndex] ?? currentMessage?.content.artifact;
+  const isViewingLatest =
+    versions.length === 0 || selectedVersionIndex >= versions.length - 1;
 
   // `react-resizable-panels` only honors `defaultSize` at initial mount, and
   // the PanelGroup's `autoSaveId` can restore a persisted size of 0 from a
@@ -326,6 +354,10 @@ export default function ParametricView({
               onDxfExportChange={handleDxfExportChange}
               color={color}
               fixError={!limitReached ? fixError : undefined}
+              versions={versions}
+              selectedVersionIndex={selectedVersionIndex}
+              onSelectVersion={setSelectedVersionIndex}
+              selectedCode={selectedArtifact?.code}
             />
           </Panel>
           {/*
@@ -396,12 +428,16 @@ export default function ParametricView({
             {hasArtifact && (
               <div className="relative h-full">
                 <ParameterSection
-                  parameters={
-                    currentMessage?.content.artifact?.parameters ?? []
-                  }
+                  parameters={selectedArtifact?.parameters ?? []}
                   onSubmit={changeParameters}
                   currentOutput={currentOutput}
                   dxfExporter={dxfExporter}
+                  artifactCode={selectedArtifact?.code}
+                  editingDisabled={!isViewingLatest}
+                  versionLabel={versionLabel(
+                    selectedArtifact,
+                    selectedVersionIndex,
+                  )}
                 />
               </div>
             )}

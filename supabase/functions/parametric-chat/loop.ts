@@ -3,7 +3,13 @@
 // (see loop.test.mjs). The effectful continuation handler in index.ts drives
 // these decisions and performs the actual LLM / storage / DB work.
 
-import type { LoopState, LoopStatus, LoopTier } from '@shared/types.ts';
+import type {
+  Content,
+  LoopState,
+  LoopStatus,
+  LoopTier,
+  ParametricArtifact,
+} from '@shared/types.ts';
 import {
   inspectionRoundsForModel,
   normalizeParametricGenerationModel,
@@ -17,6 +23,9 @@ import { hasRenderableScadCode } from '../../../shared/parametricParts.ts';
 
 // Shared compile-error repair cap (both tiers).
 export const MAX_REPAIRS = 2;
+// Most prior artifact versions kept on a message when the inspection loop
+// revises code. Bounds message-row size; oldest entries are dropped past this.
+export const MAX_ARTIFACT_HISTORY = 3;
 // Legacy fallback inspection rounds available to premium rows without a model.
 export const PREMIUM_MAX_ROUNDS = 1;
 // Hard true-cost ceiling per generation, enforced from the authoritative
@@ -550,6 +559,46 @@ export function finalizeLoop(
   status: Extract<LoopStatus, 'final' | 'failed'> = 'final',
 ): LoopState {
   return { ...loop, status };
+}
+
+// Bump a version label by its trailing integer: 'v1' -> 'v2' -> 'v3'. A label
+// with no trailing digits (or an empty one) falls back to appending '2'.
+function bumpArtifactVersion(version: string): string {
+  const match = /(\d+)$/.exec(version);
+  if (match) {
+    return version.slice(0, match.index) + String(Number(match[1]) + 1);
+  }
+  return `${version || 'v'}2`;
+}
+
+// Record the current artifact as a prior version and install `newArtifact` as
+// the latest. Called ONLY on the self-inspection REVISION branch (the previous
+// artifact compiled clean and was reviewed), never on compile-error repairs —
+// broken code isn't a viewable version. The new artifact's version label is the
+// previous label incremented; history is appended oldest-first and capped to
+// the most recent MAX_ARTIFACT_HISTORY entries. Pure so it's unit-testable.
+export function pushArtifactVersion(
+  content: Content,
+  newArtifact: ParametricArtifact,
+): Content {
+  const previous = content.artifact;
+  if (!previous) {
+    // No prior version to preserve — just install the new artifact.
+    return { ...content, artifact: newArtifact };
+  }
+  const history = [...(content.artifactHistory ?? []), previous];
+  const capped =
+    history.length > MAX_ARTIFACT_HISTORY
+      ? history.slice(history.length - MAX_ARTIFACT_HISTORY)
+      : history;
+  return {
+    ...content,
+    artifactHistory: capped,
+    artifact: {
+      ...newArtifact,
+      version: bumpArtifactVersion(previous.version),
+    },
+  };
 }
 
 export type ContinuationResult =

@@ -64,6 +64,7 @@ import {
   loopStateFromRow,
   parseContinuationBody,
   parseSelfInspectionReply,
+  pushArtifactVersion,
   stripScadCodeFences,
   truncateError,
 } from './loop.ts';
@@ -1867,12 +1868,13 @@ async function handleContinuation(
               ? ({ kind: 'unusable' } as const)
               : parseSelfInspectionReply(gen.rawCode);
             if (reply.kind === 'code') {
-              // The model rebuilt the geometry → new artifact version, next round.
+              // The model rebuilt the geometry → new artifact version, next
+              // round. Preserve the pre-revision artifact as a prior version so
+              // the user can view/download it, and bump the version label.
               nextRound = loopState.round + 1;
               nextStatus = 'awaiting_client';
               working = {
-                ...content,
-                artifact: buildArtifact(reply.code),
+                ...pushArtifactVersion(content, buildArtifact(reply.code)),
                 loop: mirror('awaiting_client', nextRound, nextRepairs),
               };
             } else if (reply.kind === 'good') {

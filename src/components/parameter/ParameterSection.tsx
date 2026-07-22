@@ -41,12 +41,22 @@ import {
   DxfExporter,
 } from '@/utils/downloadUtils';
 import { useToast } from '@/hooks/use-toast';
+import { cn } from '@/lib/utils';
 
 interface ParameterSectionProps {
   parameters: Parameter[];
   onSubmit: (message: Message | null, parameters: Parameter[]) => void;
   currentOutput?: Blob;
   dxfExporter?: DxfExporter | null;
+  // Code of the selected artifact version for the .scad export. Falls back to
+  // the live artifact's code when omitted.
+  artifactCode?: string;
+  // True when an older version is selected: parameter editing is disabled (a
+  // revision would branch off the latest, not the version being viewed) while
+  // downloads stay available.
+  editingDisabled?: boolean;
+  // Selected version label (e.g. 'V1') shown in the read-only hint.
+  versionLabel?: string;
 }
 
 type DownloadFormat = 'stl' | 'scad' | 'dxf' | 'step' | 'obj';
@@ -56,6 +66,9 @@ export function ParameterSection({
   onSubmit,
   currentOutput,
   dxfExporter,
+  artifactCode,
+  editingDisabled = false,
+  versionLabel,
 }: ParameterSectionProps) {
   const { currentMessage } = useCurrentMessage();
   const { toast } = useToast();
@@ -127,6 +140,9 @@ export function ParameterSection({
   );
 
   const handleCommit = (param: Parameter, value: Parameter['value']) => {
+    // Older versions are view-only; ignore any stray commit (the controls are
+    // also made non-interactive below).
+    if (editingDisabled) return;
     const validatedValue = validateParameterValue(param, value);
 
     const updatedParam = { ...param, value: validatedValue };
@@ -143,8 +159,9 @@ export function ParameterSection({
   };
 
   const handleDownloadOpenSCAD = () => {
-    if (!currentMessage?.content.artifact?.code) return;
-    downloadOpenSCADFile(currentMessage.content.artifact.code, currentMessage);
+    const scadCode = artifactCode ?? currentMessage?.content.artifact?.code;
+    if (!scadCode) return;
+    downloadOpenSCADFile(scadCode, currentMessage);
   };
 
   const handleDownloadDXF = async () => {
@@ -223,7 +240,7 @@ export function ParameterSection({
   };
   const formatAvailable: Record<DownloadFormat, boolean> = {
     stl: !!currentOutput,
-    scad: !!currentMessage?.content.artifact?.code,
+    scad: !!(artifactCode ?? currentMessage?.content.artifact?.code),
     dxf: !!dxfExporter && !isExporting,
     step: !!currentOutput && !isExporting,
     obj: !!currentOutput && !isExporting,
@@ -250,7 +267,7 @@ export function ParameterSection({
               <Button
                 variant="ghost"
                 className="h-8 w-8 rounded-full p-0 text-adam-text-primary transition-colors [@media(hover:hover)]:hover:bg-adam-neutral-950 [@media(hover:hover)]:hover:text-adam-neutral-10"
-                disabled={parameters.length === 0}
+                disabled={parameters.length === 0 || editingDisabled}
                 onClick={() => {
                   const newParameters = parameters.map((param) => ({
                     ...param,
@@ -270,7 +287,18 @@ export function ParameterSection({
       </div>
       <div className="flex h-[calc(100%-3.5rem)] flex-col justify-between overflow-hidden">
         <ScrollArea className="flex-1 px-6 py-6">
-          <div className="flex flex-col gap-3">
+          {editingDisabled && (
+            <div className="mb-4 rounded-md border border-adam-neutral-700 bg-adam-neutral-900/60 px-3 py-2 text-[11px] leading-snug text-adam-neutral-300">
+              Viewing {versionLabel ?? 'an older version'} — switch to the
+              latest version to edit parameters.
+            </div>
+          )}
+          <div
+            className={cn(
+              'flex flex-col gap-3',
+              editingDisabled && 'pointer-events-none opacity-60',
+            )}
+          >
             {mainParameters.length > 0 && (
               <Collapsible
                 open={dimensionsOpen}

@@ -26,6 +26,8 @@ import {
   parseContinuationBody,
   parseSelfInspectionReply,
   isSelfInspectionSentinelLead,
+  pushArtifactVersion,
+  MAX_ARTIFACT_HISTORY,
   stripScadCodeFences,
   tierForModel,
   truncateError,
@@ -901,4 +903,75 @@ test('parseContinuationBody accepts compile_ok', () => {
   });
   assert.equal(r.ok, true);
   assert.equal(r.continuation.result.type, 'compile_ok');
+});
+
+// --- Artifact version history (view/switch/download pre-review model) -----
+
+const artifact = (version, code) => ({
+  title: 'Widget',
+  version,
+  code,
+  parameters: [],
+});
+
+test('pushArtifactVersion bumps v1 -> v2 and preserves the previous version', () => {
+  const content = { text: 'hi', artifact: artifact('v1', 'cube(1);') };
+  const next = pushArtifactVersion(content, artifact('v1', 'cube(2);'));
+  // New artifact is the latest with a bumped label and the new code.
+  assert.equal(next.artifact.version, 'v2');
+  assert.equal(next.artifact.code, 'cube(2);');
+  // The pre-revision artifact is preserved unchanged as history.
+  assert.deepEqual(next.artifactHistory, [artifact('v1', 'cube(1);')]);
+  // Unrelated content fields are carried through.
+  assert.equal(next.text, 'hi');
+});
+
+test('pushArtifactVersion appends prior artifacts oldest-first', () => {
+  let content = { artifact: artifact('v1', 'a') };
+  content = pushArtifactVersion(content, artifact('v1', 'b'));
+  content = pushArtifactVersion(content, artifact('v2', 'c'));
+  assert.deepEqual(
+    content.artifactHistory.map((a) => a.code),
+    ['a', 'b'],
+  );
+  assert.equal(content.artifact.version, 'v3');
+  assert.equal(content.artifact.code, 'c');
+});
+
+test('pushArtifactVersion caps history at the most recent MAX_ARTIFACT_HISTORY', () => {
+  let content = { artifact: artifact('v1', 'c0') };
+  // Five revisions → six total codes c0..c5; only the newest 3 priors survive.
+  for (let i = 1; i <= 5; i++) {
+    content = pushArtifactVersion(content, artifact('v1', `c${i}`));
+  }
+  assert.equal(content.artifactHistory.length, MAX_ARTIFACT_HISTORY);
+  assert.deepEqual(
+    content.artifactHistory.map((a) => a.code),
+    ['c2', 'c3', 'c4'],
+  );
+  // Latest artifact holds the newest code; label bumped once per revision.
+  assert.equal(content.artifact.code, 'c5');
+  assert.equal(content.artifact.version, 'v6');
+});
+
+test('pushArtifactVersion creates the history array when absent', () => {
+  const content = { artifact: artifact('v1', 'x') };
+  assert.equal(content.artifactHistory, undefined);
+  const next = pushArtifactVersion(content, artifact('v1', 'y'));
+  assert.ok(Array.isArray(next.artifactHistory));
+  assert.equal(next.artifactHistory.length, 1);
+});
+
+test('pushArtifactVersion installs the new artifact when there is no prior one', () => {
+  // Defensive: with no existing artifact there is nothing to preserve or bump.
+  const next = pushArtifactVersion({ text: 'hi' }, artifact('v1', 'z'));
+  assert.equal(next.artifact.code, 'z');
+  assert.equal(next.artifact.version, 'v1');
+  assert.equal(next.artifactHistory, undefined);
+});
+
+test('pushArtifactVersion falls back to appending 2 for a non-numeric label', () => {
+  const content = { artifact: artifact('draft', 'a') };
+  const next = pushArtifactVersion(content, artifact('draft', 'b'));
+  assert.equal(next.artifact.version, 'draft2');
 });
