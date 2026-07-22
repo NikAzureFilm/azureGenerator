@@ -48,7 +48,11 @@ export const MIN_AFFORDABLE_OUTPUT_TOKENS = 2000;
 const OUTPUT_BUDGET_FRACTION = 0.8;
 // Rough chars-per-token for prompt input estimation.
 const CHARS_PER_TOKEN = 4;
-// Flat token estimate for one attached image in an input prompt.
+// Conservative per-image token estimate for input-cost budgeting. The
+// self-inspection round can now carry MORE than one image (the reference photo
+// AND the 7-view render), so callers pass an image COUNT and this constant is
+// charged per image — a flat one-image estimate would silently undercount a
+// two-image leg and let it slip the $0.60 ceiling.
 export const IMAGE_INPUT_TOKEN_ESTIMATE = 2000;
 // Server-side prompt input clamps for continuation code-gen (bound input cost).
 export const MAX_PROMPT_USER_TEXT_CHARS = 6000;
@@ -56,6 +60,79 @@ export const MAX_PROMPT_BASE_CODE_CHARS = 100_000;
 
 export function clampText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) : text;
+}
+
+// Like clampText but keeps the TAIL (end) instead of the head. The
+// self-inspection request text uses this: the branch's concatenated user turns
+// put the newest instructions (final dimensions, corrections, "make it bigger")
+// last, and those matter more to a review than the opening description.
+export function clampTextTail(text: string, max: number): string {
+  return text.length > max ? text.slice(text.length - max) : text;
+}
+
+// One content block in a self-inspection user turn: labeled text or an image.
+export type InspectionBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+export type InspectionMessage =
+  | { role: 'user' | 'assistant'; content: string }
+  | { role: 'user'; content: InspectionBlock[] };
+
+// Build the messages for the single self-inspection round, PHOTO-FIRST. When a
+// reference photo is present it is the primary design authority: the review turn
+// leads with the REFERENCE PHOTO, then the CURRENT CAD 7-view render, then the
+// instruction, and the request text is carried as SECONDARY context. When no
+// reference photo exists (text-only conversations) the round is render-only and
+// the request text carries no "secondary" label — the reviewer judges the render
+// against the request exactly as before. Pure so the shape is unit-testable
+// without the network. The returned content shape (string | labeled block array)
+// works for BOTH provider legs: buildGoogleContents converts the image_url
+// data-URLs to Google inlineData, and OpenRouter takes them as-is.
+export function buildInspectionMessages(params: {
+  requestText: string;
+  baseCode: string;
+  renderImageDataUrl: string;
+  referencePhotoDataUrl: string | null;
+  instruction: string;
+}): InspectionMessage[] {
+  const {
+    requestText,
+    baseCode,
+    renderImageDataUrl,
+    referencePhotoDataUrl,
+    instruction,
+  } = params;
+  const reviewParts: InspectionBlock[] = [];
+  if (referencePhotoDataUrl) {
+    reviewParts.push({
+      type: 'text',
+      text: 'REFERENCE PHOTO (primary) — the intended design; match its silhouette, proportions, part shapes, and where parts attach and sit:',
+    });
+    reviewParts.push({
+      type: 'image_url',
+      image_url: { url: referencePhotoDataUrl },
+    });
+  }
+  reviewParts.push({
+    type: 'text',
+    text: 'CURRENT CAD — 7-view orthographic render of the model your current OpenSCAD produces:',
+  });
+  reviewParts.push({
+    type: 'image_url',
+    image_url: { url: renderImageDataUrl },
+  });
+  reviewParts.push({ type: 'text', text: instruction });
+  const requestLabel = referencePhotoDataUrl
+    ? 'REQUEST TEXT (secondary):\n'
+    : '';
+  return [
+    {
+      role: 'user',
+      content: `${requestLabel}${requestText || 'Generate the model.'}`,
+    },
+    { role: 'assistant', content: baseCode },
+    { role: 'user', content: reviewParts },
+  ];
 }
 
 // Strip a single leading/trailing markdown code fence off an LLM reply. Pure and
@@ -166,12 +243,12 @@ export function affordableContinuationOutputCap(params: {
   model: string;
   remainingUsd: number;
   promptChars: number;
-  hasImage: boolean;
+  imageCount: number;
 }): number | null {
-  const { model, remainingUsd, promptChars, hasImage } = params;
+  const { model, remainingUsd, promptChars, imageCount } = params;
   const inputTokens =
     Math.ceil(promptChars / CHARS_PER_TOKEN) +
-    (hasImage ? IMAGE_INPUT_TOKEN_ESTIMATE : 0);
+    Math.max(0, imageCount) * IMAGE_INPUT_TOKEN_ESTIMATE;
   const outputPerM = llmOutputPerMUsd(model);
   const estimatedInputUsd = (inputTokens * llmInputPerMUsd(model)) / 1_000_000;
   const remainingAfterInputUsd = remainingUsd - estimatedInputUsd;

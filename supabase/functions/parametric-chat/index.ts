@@ -14,7 +14,7 @@ import {
 } from '../_shared/supabaseClient.ts';
 import Tree from '@shared/Tree.ts';
 import parseParameters from '../_shared/parseParameter.ts';
-import { formatUserMessage } from '../_shared/messageUtils.ts';
+import { formatUserMessage, getBase64Images } from '../_shared/messageUtils.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
@@ -52,7 +52,9 @@ import {
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
   buildGoogleContents,
+  buildInspectionMessages,
   clampText,
+  clampTextTail,
   computeLlmCallCostUsd,
   decideContinuation,
   effectiveOutputCap,
@@ -737,9 +739,11 @@ Color: When the model has distinct parts, wrap each in a color() call with a fit
 
 Printable output requirements: Make every generated model watertight and manifold, with closed solid geometry, no open shells, and no self-intersections. Use a practical minimum wall thickness of 1.2 mm when dimensions are missing, thicker walls or ribs for load-bearing features, and details large enough for a 0.4 mm FDM nozzle.
 
+Reference images (design authority): When the request includes one or more reference images, the IMAGE is the PRIMARY authority for the design — reproduce its silhouette, overall proportions, the shape of each part, and how the parts attach and sit relative to one another. Use the text as SECONDARY: it supplies exact dimensions, printability constraints, and specific changes the user asks for — the things the image cannot convey. On conflict, explicit user dimensions and printability requirements always win; otherwise prefer the image over generic prose styling.
+
 Connectivity — NEVER leave floating parts (CRITICAL). The result must always 3D-print, either as ONE connected piece or as a kit of SEPARATE parts. Decide which, then build it cleanly for that choice:
 - If the user asks for a single, one-piece, contiguous, or connected object, that choice is MANDATORY. Never output a kit, separate parts, an exploded layout, loose accessories, or multiple objects.
-- One connected piece: every feature (pegs, lugs, bosses, ribs, handles, brackets, text, etc.) must physically OVERLAP the body it attaches to and be combined with union() so the whole object reduces to a single continuous solid. Sink each feature into its parent by at least 0.5 mm of real solid overlap — never position it with an air gap, and never let it merely touch at a single coincident face. A peg on top of a surface must extend DOWN into that surface, not sit above it.
+- One connected piece: build ALL positive geometry into a single body first — union() the main mass together with every feature (pegs, lugs, bosses, ribs, handles, brackets, text, etc.) — and only THEN apply subtractive features (holes, slots, cable cutouts) with difference() on that combined body. Each feature must PENETRATE the body it attaches to by at least 1.5 mm of shared SOLID volume: a real interpenetrating overlap, never an air gap and never a merely coincident or touching face (coincident faces that only share a boundary are the number-one cause of parts that fall off in the slice). A peg on top of a surface must extend DOWN into that surface, not sit above it. Position every positive feature RELATIVE to its named parent's dimensions (e.g. at parent_height, or parent_radius - inset — never a hardcoded world coordinate), so it stays attached when the parent is resized. Where a sloped or vertical member meets a base or another member, add a gusset or fillet wedge at the joint so the connection has real printable thickness instead of a knife edge.
 - A kit of separate parts: only when the design genuinely needs distinct pieces (e.g. a body plus a matching lid, or mating halves). Make each piece its own connected solid, lay the pieces out side by side in the XY plane with a few mm of spacing between them, and rest every piece FLAT on the build plate so its lowest point is at z = 0. Give mating features (pegs/sockets, pins/holes) a 0.2-0.4 mm clearance. Never stack pieces in mid-air or leave one hovering above the plate.
 - Self-check before finishing: after each translate()/rotate(), trace the part's actual coordinates and confirm it either overlaps its parent (one piece) or sits on the plate at z = 0 (kit). If any component would float in empty space with a gap to everything else, move or extend it so it connects — a floating fragment is never acceptable.
 
@@ -815,20 +819,20 @@ module torus(r1, r2) {
 // strict OpenSCAD output rules, a per-feature visual inspection method, and a
 // two-outcome reply protocol. Original text (concepts only; no third-party code
 // or prompt copy).
-const PARAMETRIC_SELF_INSPECTION_PROMPT = `You are AzureFilm Generator inspecting a 3D-printable OpenSCAD model you just wrote. You are given the user's request, your current OpenSCAD source, and a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of exactly what that source produces.
+const PARAMETRIC_SELF_INSPECTION_PROMPT = `You are AzureFilm Generator inspecting a 3D-printable OpenSCAD model you just wrote. You may be given a REFERENCE PHOTO of the intended design, the user's request text, your current OpenSCAD source, and a labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of exactly what that source produces.
 
-Judge the model from the RENDER, not from reading the code — the render is the ground truth for what will actually print.
+Judge the model from the RENDER (the ground truth for what will actually print), comparing it against the design you were asked for.
 
 Inspection method:
-1. List every distinct feature the user explicitly asked for (e.g. "a mug with a handle and a lid" → body, handle, lid).
-2. For each feature, look across every relevant view and confirm it is genuinely present, has the right shape and proportions, sits in the correct place, physically connects to the rest of the model, and can be 3D-printed.
-3. Actively hunt for defects the code can hide: parts floating in mid-air or not resting on the build plate, walls too thin to print, pieces that only touch at a single edge or face instead of overlapping with real material, self-intersections, and results that are cruder or more simplified than what was requested.
+1. If a REFERENCE PHOTO is provided, it is the PRIMARY authority for the design. Compare the render to the photo and judge the match: same overall silhouette, proportions, the shape of each part, part placement, and attachments — and no missing parts and no extra parts. This is a SEMANTIC comparison, NOT pixel matching: the photo is a lit perspective shot while the render is an untextured orthographic view, so ignore differences in color, lighting, texture, camera angle, and background — focus on shape, structure, and which parts are present and where.
+2. Then check the request TEXT (secondary) for the constraints the photo cannot convey: specific dimensions, printability, and any explicit changes the user asked for. When no reference photo is provided, the request text is the primary authority — judge the render against it directly.
+3. Actively hunt for disconnected or floating parts: pieces hovering in mid-air or not resting on the build plate, and pieces that only touch at a single edge or face instead of overlapping with real material. When the render colors bodies distinctly (see the "Bodies: N" note on the sheet), any part in a different color that should be attached is a disconnection defect. Also flag walls too thin to print, self-intersections, and results cruder or more simplified than the reference.
 
-A model that merely COMPILES is not good enough — approve it only when the rendered views actually match the request.
+A model that merely COMPILES is not good enough — approve it only when the rendered views actually match the intended design.
 
 Then respond in EXACTLY one of these two ways:
 
-A) If ANY requested feature is missing, malformed, misplaced, disconnected, non-printable, or over-simplified, output the COMPLETE corrected OpenSCAD script and nothing else — no prose, no explanation, no markdown, no code fences. Rewrite the whole model so every defect is fixed, following these rules:
+A) If the model fails to match the reference/request — any part missing, extra, malformed, misproportioned, misplaced, disconnected, floating, non-printable, or over-simplified — output the COMPLETE corrected OpenSCAD script and nothing else — no prose, no explanation, no markdown, no code fences. Rewrite the whole model so every defect is fixed, following these rules:
    - Raw OpenSCAD only: a single, complete, standalone script.
    - Declare every editable value as a descriptive snake_case top-of-file variable with an OpenSCAD Customizer trailing comment (e.g. wall_thickness = 2; // [1:0.5:8]). Never abbreviate names to single letters.
    - Keep the geometry watertight and manifold, and make it either ONE fully connected solid (each feature sunk into its parent by real overlapping material and combined with union()) OR a kit of separate pieces that each rest flat on the build plate — never leave a floating part or one that only touches at a point.
@@ -839,7 +843,7 @@ B) If EVERY requested feature is verified present, correct, connected, and print
 
 // Instruction accompanying the render in the single self-inspection user turn.
 const SELF_INSPECTION_USER_INSTRUCTION =
-  'Below is the labeled 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) of the model your current code produces. Inspect every view against the request above using the method in your instructions. If anything is missing, wrong, disconnected, non-printable, or over-simplified, reply with the complete corrected OpenSCAD script only. If every requested feature is verified correct, reply with LOOKS_GOOD: and one short sentence. Remember: compiling is not enough — approve only if the views actually match the request.';
+  'Compare the CURRENT CAD 7-view render (ISO, FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) against the REFERENCE PHOTO when one is shown above (primary) and the request text (secondary), using the method in your instructions. This is a semantic shape/structure comparison, not pixel matching. If any part is missing, extra, wrong, misproportioned, disconnected, floating, non-printable, or over-simplified relative to the intended design, reply with the complete corrected OpenSCAD script only. If it faithfully matches, reply with LOOKS_GOOD: and one short sentence. Remember: compiling is not enough — approve only if the render actually matches the intended design.';
 
 // Chunked base64 for the inspection PNG — avoids blowing the call stack that a
 // single String.fromCharCode(...bytes) spread would hit on large buffers.
@@ -906,6 +910,50 @@ async function getBranchUserText(
   return collectText(messages);
 }
 
+// Derive the reference photo for the self-inspection round from the SAME
+// conversation branch the server already reads for the request text: the most
+// recent user-uploaded image at or before the generation request. Reuses the
+// round-0 image plumbing (content.images IDs → owner-scoped images bucket →
+// base64 data URL via getBase64Images), so nothing is client-forgeable beyond
+// what round 0 already trusts, and no storage copies or migration are needed.
+// Returns null for text-only branches (no user image), so inspection falls back
+// to today's render-only behavior.
+async function getBranchReferenceImage(
+  supabaseClient: ContinuationSupabaseClient,
+  conversationId: string,
+  userId: string,
+  assistantMessageId: string,
+): Promise<string | null> {
+  const { data: messages } = await supabaseClient
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .overrideTypes<Array<{ content: Content; role: 'user' | 'assistant' }>>();
+  if (!messages || messages.length === 0) return null;
+  let path: Message[];
+  try {
+    path = new Tree<Message>(messages).getPath(assistantMessageId);
+  } catch (error) {
+    console.error('[parametric-chat] branch image resolve failed', error);
+    path = messages as Message[];
+  }
+  // Walk backward to the most recent user message that carries an uploaded
+  // image, then use the LAST image on it as the reference photo.
+  for (let i = path.length - 1; i >= 0; i--) {
+    const msg = path[i];
+    if (msg.role !== 'user') continue;
+    const imageIds = msg.content?.images;
+    if (!imageIds || imageIds.length === 0) continue;
+    const imageId = imageIds[imageIds.length - 1];
+    const [image] = await getBase64Images(supabaseClient, 'images', [
+      `${userId}/${conversationId}/${imageId}`,
+    ]);
+    if (image) return image.data;
+  }
+  return null;
+}
+
 // Shared code-gen for repair + revision rounds. Mirrors the round-0 provider
 // candidate loop (Google direct → OpenRouter) but carries NO token billing —
 // continuations must never charge — and logs usage under the assistant message
@@ -921,7 +969,7 @@ async function generateContinuationCode(params: {
   // Remaining budget + prompt shape at call start. The affordable output cap is
   // RECOMPUTED per provider leg (remaining minus what earlier legs charged) so a
   // fallback from google→OpenRouter can never spend the same budget twice.
-  budget: { remainingUsd: number; promptChars: number; hasImage: boolean };
+  budget: { remainingUsd: number; promptChars: number; imageCount: number };
   // System prompt for this call (default: the strict code-gen prompt). The
   // self-inspection round passes PARAMETRIC_SELF_INSPECTION_PROMPT.
   systemPrompt?: string;
@@ -967,7 +1015,7 @@ async function generateContinuationCode(params: {
       model: providerCandidate.usageModel,
       remainingUsd: budget.remainingUsd - costUsd,
       promptChars: budget.promptChars,
-      hasImage: budget.hasImage,
+      imageCount: budget.imageCount,
     });
     if (legOutputCap === null) break;
     rawCode = '';
@@ -1634,13 +1682,13 @@ async function handleContinuation(
       // afforded, so the caller finalizes instead of spending.
       const affordableOutputCap = (
         promptChars: number,
-        hasImage = false,
+        imageCount = 0,
       ): number | null =>
         affordableContinuationOutputCap({
           model,
           remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
           promptChars,
-          hasImage,
+          imageCount,
         });
 
       try {
@@ -1698,7 +1746,7 @@ async function handleContinuation(
               budget: {
                 remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
                 promptChars,
-                hasImage: false,
+                imageCount: 0,
               },
             });
             roundCostUsd += gen.costUsd;
@@ -1736,17 +1784,35 @@ async function handleContinuation(
           const imageDataUrl = modelSupportsVision(model)
             ? await loadInspectionImage(service, computedPath)
             : null;
-          // userText appears once (the leading user turn); the instruction is
-          // static. Image input cost is added separately via hasImage below.
+          // PHOTO-FIRST review: derive the reference photo from the same branch
+          // round 0 read (most recent user image at/before this generation).
+          // Null for text-only branches → render-only review, exactly as before.
+          const referencePhoto = modelSupportsVision(model)
+            ? await getBranchReferenceImage(
+                service,
+                conversationId,
+                userId,
+                assistantMessageId,
+              )
+            : null;
+          // The self-inspection request text keeps the TAIL (newest instructions
+          // and corrections matter more to a review than the opening prose).
+          const inspectionUserText = clampTextTail(
+            rawUserText,
+            MAX_PROMPT_USER_TEXT_CHARS,
+          );
+          // The render is REQUIRED for self-inspection; the reference photo is
+          // added when present, so the leg carries 1 or 2 images.
+          const inspectionImageCount = referencePhoto ? 2 : 1;
+          // Text-only prompt chars; image input cost is added separately via the
+          // image count below.
           const inspectPromptChars =
-            userText.length +
+            inspectionUserText.length +
             baseCode.length +
             SELF_INSPECTION_USER_INSTRUCTION.length +
             PARAMETRIC_SELF_INSPECTION_PROMPT.length;
-          // The render is REQUIRED for self-inspection, so the call always
-          // carries the image; the budget must cover an image-bearing leg.
           const inspectBudgetCap = imageDataUrl
-            ? affordableOutputCap(inspectPromptChars, true)
+            ? affordableOutputCap(inspectPromptChars, inspectionImageCount)
             : null;
           if (!imageDataUrl || inspectBudgetCap === null) {
             nextStatus = 'final';
@@ -1759,21 +1825,18 @@ async function handleContinuation(
               ...content,
               loop: mirror('reviewing', loopState.round, loopState.repairs),
             });
-            // ONE user turn: request text → current code → a single content array
-            // with the inspection instruction + the render image. buildGoogleContents
-            // converts the image_url data-URL to Google inlineData, so this shape
+            // Photo-first labeled turns: REQUEST TEXT (secondary) → CURRENT
+            // OPENSCAD → a review turn with REFERENCE PHOTO (primary, when
+            // present) + CURRENT CAD render + the instruction. buildGoogleContents
+            // converts each image_url data-URL to Google inlineData, so the shape
             // works for BOTH the OpenRouter and google-direct provider legs.
-            const codeMessages: OpenAIMessage[] = [
-              { role: 'user', content: userText || 'Generate the model.' },
-              { role: 'assistant', content: baseCode },
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: SELF_INSPECTION_USER_INSTRUCTION },
-                  { type: 'image_url', image_url: { url: imageDataUrl } },
-                ],
-              },
-            ];
+            const codeMessages: OpenAIMessage[] = buildInspectionMessages({
+              requestText: inspectionUserText,
+              baseCode,
+              renderImageDataUrl: imageDataUrl,
+              referencePhotoDataUrl: referencePhoto,
+              instruction: SELF_INSPECTION_USER_INSTRUCTION,
+            });
             const gen = await generateContinuationCode({
               model,
               codeMessages,
@@ -1788,7 +1851,7 @@ async function handleContinuation(
               budget: {
                 remainingUsd: COST_CEILING_USD - (startingSpend + roundCostUsd),
                 promptChars: inspectPromptChars,
-                hasImage: true,
+                imageCount: inspectionImageCount,
               },
               systemPrompt: PARAMETRIC_SELF_INSPECTION_PROMPT,
               operation: 'parametric-inspect',

@@ -1,6 +1,8 @@
 import {
   AmbientLight,
   Box3,
+  BufferAttribute,
+  Color,
   DirectionalLight,
   Mesh,
   MeshStandardMaterial,
@@ -10,6 +12,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { analyze } from './meshTopology';
 
 // A labeled multi-view render of a compiled model, used by the premium visual
 // inspection loop as the image the reviewer LLM judges. Written from scratch
@@ -40,6 +43,25 @@ const VIEWS: ViewSpec[] = [
 
 const BG = '#f3f4f6';
 
+// The largest body keeps the original neutral grey; extra (disconnected) bodies
+// get distinct saturated colors so a floating part is obvious to the reviewer.
+const BODY_GREY = 0x9aa4b2;
+const EXTRA_BODY_COLORS = [
+  0xef4444, // red
+  0x3b82f6, // blue
+  0x22c55e, // green
+  0xf59e0b, // amber
+  0xa855f7, // purple
+  0x14b8a6, // teal
+  0xec4899, // pink
+];
+
+function hexToCss(hex: number): string {
+  return `#${hex.toString(16).padStart(6, '0')}`;
+}
+
+type BodyLegendEntry = { label: string; css: string };
+
 function formatDim(n: number): string {
   return Number.isFinite(n) ? (Math.round(n * 10) / 10).toString() : '?';
 }
@@ -67,8 +89,49 @@ export async function renderInspectionSheet(stl: Blob): Promise<Blob> {
   const radius =
     geometry.boundingSphere?.radius || Math.max(...size.toArray(), 1);
 
+  // Count distinct solid bodies so disconnected parts can be colored apart.
+  // Never throws (falls back to one body); adds no model calls.
+  const topology = analyze(geometry);
+  const multiBody = topology.bodyCount > 1;
+
+  // Assign colors by body size: largest body → neutral grey (current look),
+  // each additional body → a distinct saturated color, cycled if needed.
+  const bodyOrder = [...topology.bodyTriangleCounts.keys()].sort(
+    (a, b) => topology.bodyTriangleCounts[b] - topology.bodyTriangleCounts[a],
+  );
+  const colorForBody = new Array<number>(topology.bodyCount);
+  const legend: BodyLegendEntry[] = [];
+  bodyOrder.forEach((bodyIndex, rank) => {
+    const hex =
+      rank === 0
+        ? BODY_GREY
+        : EXTRA_BODY_COLORS[(rank - 1) % EXTRA_BODY_COLORS.length];
+    colorForBody[bodyIndex] = hex;
+    legend.push({ label: `${rank + 1}`, css: hexToCss(hex) });
+  });
+
+  // With more than one body, drive color from a per-vertex color attribute and
+  // keep the material white (it multiplies vertex colors). A single body keeps
+  // the original solid-grey material untouched.
+  if (multiBody) {
+    const vertexCount = geometry.getAttribute('position').count;
+    const colors = new Float32Array(vertexCount * 3);
+    const colorObjs = colorForBody.map((hex) => new Color(hex));
+    for (let t = 0; t < topology.triangleBodies.length; t++) {
+      const c = colorObjs[topology.triangleBodies[t]];
+      for (let k = 0; k < 3; k++) {
+        const vi = (t * 3 + k) * 3;
+        colors[vi] = c.r;
+        colors[vi + 1] = c.g;
+        colors[vi + 2] = c.b;
+      }
+    }
+    geometry.setAttribute('color', new BufferAttribute(colors, 3));
+  }
+
   const material = new MeshStandardMaterial({
-    color: 0x9aa4b2,
+    color: multiBody ? 0xffffff : BODY_GREY,
+    vertexColors: multiBody,
     metalness: 0.1,
     roughness: 0.75,
   });
@@ -142,10 +205,10 @@ export async function renderInspectionSheet(stl: Blob): Promise<Blob> {
       drawLabel(ctx, view.name, x, y);
     }
 
-    // Final cell: title + overall dimensions.
+    // Final cell: title + overall dimensions + body count.
     const tx = (VIEWS.length % COLS) * CELL_W;
     const ty = Math.floor(VIEWS.length / COLS) * CELL_H;
-    drawInfoCell(ctx, tx, ty, size);
+    drawInfoCell(ctx, tx, ty, size, topology.bodyCount, legend);
   } finally {
     // Release everything. forceContextLoss frees the underlying WebGL context
     // eagerly instead of waiting for GC — important because browsers cap the
@@ -187,7 +250,10 @@ function drawInfoCell(
   x: number,
   y: number,
   size: Vector3,
+  bodyCount: number,
+  legend: BodyLegendEntry[],
 ): void {
+  const cx = x + CELL_W / 2;
   ctx.save();
   ctx.fillStyle = '#111827';
   ctx.fillRect(x, y, CELL_W, CELL_H);
@@ -195,12 +261,38 @@ function drawInfoCell(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = '600 22px system-ui, sans-serif';
-  ctx.fillText('Model', x + CELL_W / 2, y + CELL_H / 2 - 26);
+  ctx.fillText('Model', cx, y + CELL_H / 2 - 44);
   ctx.font = '500 18px system-ui, sans-serif';
   const dims = `${formatDim(size.x)} × ${formatDim(size.y)} × ${formatDim(size.z)} mm`;
-  ctx.fillText(dims, x + CELL_W / 2, y + CELL_H / 2 + 8);
+  ctx.fillText(dims, cx, y + CELL_H / 2 - 10);
   ctx.font = '400 13px system-ui, sans-serif';
   ctx.fillStyle = '#9ca3af';
-  ctx.fillText('W × D × H', x + CELL_W / 2, y + CELL_H / 2 + 34);
+  ctx.fillText('W × D × H', cx, y + CELL_H / 2 + 14);
+
+  // Body count — 1 for a clean single/kit-welded solid, >1 flags separate
+  // (possibly disconnected) bodies, which the render colors distinctly.
+  ctx.font = '600 15px system-ui, sans-serif';
+  ctx.fillStyle = bodyCount > 1 ? '#fca5a5' : '#9ca3af';
+  ctx.fillText(`Bodies: ${bodyCount}`, cx, y + CELL_H / 2 + 44);
+
+  // Tiny legend when the bodies are colored apart: a swatch + index per body.
+  if (bodyCount > 1) {
+    const swatch = 12;
+    const gap = 6;
+    const spacing = 34;
+    const entries = legend.slice(0, 8);
+    const totalW = entries.length * spacing - (spacing - (swatch + gap + 10));
+    let lx = cx - totalW / 2;
+    const ly = y + CELL_H / 2 + 74;
+    ctx.textAlign = 'left';
+    ctx.font = '500 13px system-ui, sans-serif';
+    for (const entry of entries) {
+      ctx.fillStyle = entry.css;
+      ctx.fillRect(lx, ly - swatch / 2, swatch, swatch);
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillText(entry.label, lx + swatch + gap, ly);
+      lx += spacing;
+    }
+  }
   ctx.restore();
 }

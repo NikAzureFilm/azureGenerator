@@ -17,7 +17,9 @@ import {
   affordableContinuationOutputCap,
   buildGoogleCodeGenConfig,
   buildGoogleContents,
+  buildInspectionMessages,
   clampText,
+  clampTextTail,
   effectiveOutputCap,
   MAX_GOOGLE_PROMPT_CHARS,
   MIN_AFFORDABLE_OUTPUT_TOKENS,
@@ -75,10 +77,7 @@ test('initialLoopState derives inspection rounds from the roster', () => {
 
 test('finalizeLoop produces a terminal status', () => {
   assert.equal(finalizeLoop(initialLoopState(FABLE)).status, 'final');
-  assert.equal(
-    finalizeLoop(initialLoopState(GPT), 'failed').status,
-    'failed',
-  );
+  assert.equal(finalizeLoop(initialLoopState(GPT), 'failed').status, 'failed');
 });
 
 test('COST_CEILING_USD is $0.60', () => {
@@ -560,7 +559,7 @@ test('affordableContinuationOutputCap subtracts input cost from the output budge
       model: 'anthropic/claude-fable-5',
       remainingUsd: 0.6,
       promptChars: 4000,
-      hasImage: false,
+      imageCount: 0,
     }),
     9439,
   );
@@ -573,7 +572,7 @@ test('affordableContinuationOutputCap returns null when input + min output excee
       model: 'anthropic/claude-fable-5',
       remainingUsd: 0.1,
       promptChars: 4000,
-      hasImage: false,
+      imageCount: 0,
     }),
     null,
   );
@@ -588,7 +587,7 @@ test('affordableContinuationOutputCap enforces the floor AFTER the 0.8 fraction'
       model: 'anthropic/claude-fable-5',
       remainingUsd: 0.11,
       promptChars: 4000,
-      hasImage: false,
+      imageCount: 0,
     }),
     null,
   );
@@ -598,7 +597,7 @@ test('affordableContinuationOutputCap enforces the floor AFTER the 0.8 fraction'
       model: 'google/gemini-3.5-flash',
       remainingUsd: 0.0208,
       promptChars: 4000,
-      hasImage: false,
+      imageCount: 0,
     }),
     null,
   );
@@ -608,26 +607,85 @@ test('affordableContinuationOutputCap enforces the floor AFTER the 0.8 fraction'
       model: 'anthropic/claude-fable-5',
       remainingUsd: 0.14,
       promptChars: 4000,
-      hasImage: false,
+      imageCount: 0,
     }) >= MIN_AFFORDABLE_OUTPUT_TOKENS,
   );
 });
 
-test('affordableContinuationOutputCap charges for an attached image', () => {
-  const withoutImage = affordableContinuationOutputCap({
-    model: 'anthropic/claude-fable-5',
-    remainingUsd: 0.6,
-    promptChars: 4000,
-    hasImage: false,
+test('affordableContinuationOutputCap input estimate rises strictly with image count', () => {
+  // Each attached image adds input tokens, so the affordable output cap shrinks
+  // strictly as the image count goes 0 → 1 → 2 (reference photo + render).
+  const cap = (imageCount) =>
+    affordableContinuationOutputCap({
+      model: 'anthropic/claude-fable-5',
+      remainingUsd: 0.6,
+      promptChars: 4000,
+      imageCount,
+    });
+  const zero = cap(0);
+  const one = cap(1);
+  const two = cap(2);
+  assert.ok(zero > one, 'one image must cost more than none');
+  assert.ok(one > two, 'two images must cost more than one');
+});
+
+test('clampTextTail keeps the end of over-long text', () => {
+  assert.equal(clampTextTail('abcdef', 10), 'abcdef');
+  assert.equal(clampTextTail('abcdef', 3), 'def');
+});
+
+test('buildInspectionMessages leads photo-first when a reference photo is present', () => {
+  const messages = buildInspectionMessages({
+    requestText: 'a toy car',
+    baseCode: 'cube(10);',
+    renderImageDataUrl: 'data:image/png;base64,RENDER',
+    referencePhotoDataUrl: 'data:image/png;base64,PHOTO',
+    instruction: 'INSTRUCTION',
   });
-  const withImage = affordableContinuationOutputCap({
-    model: 'anthropic/claude-fable-5',
-    remainingUsd: 0.6,
-    promptChars: 4000,
-    hasImage: true,
+  // Request text turn is labeled secondary; code turn is the assistant turn.
+  assert.match(messages[0].content, /^REQUEST TEXT \(secondary\):/);
+  assert.match(messages[0].content, /a toy car/);
+  assert.equal(messages[1].role, 'assistant');
+  assert.equal(messages[1].content, 'cube(10);');
+  // Review turn: REFERENCE PHOTO (primary) label + its image, then the render.
+  const review = messages[2].content;
+  assert.ok(Array.isArray(review));
+  const refLabel = review.findIndex(
+    (b) => b.type === 'text' && /REFERENCE PHOTO \(primary\)/.test(b.text),
+  );
+  assert.ok(refLabel >= 0, 'reference photo must be labeled primary');
+  assert.equal(
+    review[refLabel + 1].image_url.url,
+    'data:image/png;base64,PHOTO',
+  );
+  const urls = review
+    .filter((b) => b.type === 'image_url')
+    .map((b) => b.image_url.url);
+  assert.deepEqual(urls, [
+    'data:image/png;base64,PHOTO',
+    'data:image/png;base64,RENDER',
+  ]);
+});
+
+test('buildInspectionMessages is render-only (no reference part) without a photo', () => {
+  const messages = buildInspectionMessages({
+    requestText: 'a toy car',
+    baseCode: 'cube(10);',
+    renderImageDataUrl: 'data:image/png;base64,RENDER',
+    referencePhotoDataUrl: null,
+    instruction: 'INSTRUCTION',
   });
-  // The image adds input tokens, shrinking the affordable output cap.
-  assert.ok(withImage < withoutImage);
+  // No secondary label, no REFERENCE PHOTO part — behaves as before.
+  assert.equal(messages[0].content, 'a toy car');
+  const review = messages[2].content;
+  assert.ok(Array.isArray(review));
+  assert.ok(
+    !review.some((b) => b.type === 'text' && /REFERENCE PHOTO/.test(b.text)),
+  );
+  const urls = review
+    .filter((b) => b.type === 'image_url')
+    .map((b) => b.image_url.url);
+  assert.deepEqual(urls, ['data:image/png;base64,RENDER']);
 });
 
 test('effectiveOutputCap clamps only when a budget cap is given', () => {
