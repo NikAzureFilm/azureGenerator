@@ -72,6 +72,12 @@ assert.match(
   'agent concepts should not become lifestyle photographs',
 );
 
+assert.match(
+  AGENT_CONCEPT_IMAGE_PROMPT_ENFORCEMENT,
+  /faithful, vibrant, true-to-character colors and materials[\s\S]*never use gray, graphite, or monochrome CAD material/i,
+  'character/organic/decorative concepts should keep true-to-character colors, never gray CAD material',
+);
+
 const agentConceptPrompt = buildAgentConceptImagePrompt(
   'A 20 mm square desk cable clip with a 6 mm channel.',
 );
