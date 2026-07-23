@@ -15,6 +15,7 @@
 
 import Module from 'manifold-3d';
 import type { ManifoldToplevel, Manifold, Vec3 } from 'manifold-3d';
+import { FLEXI_DEFAULT_JOINT_STYLE } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
   FlexiToySettings,
@@ -24,6 +25,7 @@ import type {
   FlexiToyWarning,
   FlexiToyOutcome,
 } from './flexiToyTypes.ts';
+import { crossSectionExtentsAt } from './flexiToyPlan.ts';
 
 /** Non-superseded outcome the worker forwards to the main thread. */
 export type FlexiBuildOutcome = Exclude<
@@ -35,6 +37,21 @@ const SPHERE_SEGMENTS = 48;
 // Below this triangle count the ITK repair filter is not worth loading; the mesh
 // is small enough that a clean 'not-watertight' error is the right answer.
 const ITK_REPAIR_MIN_TRIANGLES = 200;
+
+// --- Rounded (dome-in-dish) cutter tunables (see flexi-changes-v3 spec). ---
+const CUTTER_REVOLVE_SEGMENTS = 64;
+// Arc sampling step (degrees) for the profile polygon.
+const CUTTER_ARC_STEP_DEG = 3;
+// Neck strength floor: neck half-angle ≥ asin(0.35) so the neck stays ≥ 0.35·r.
+const NECK_FLOOR_RAD = Math.asin(0.35);
+// Extra angular room past the mouth for the bowl before the brim flares out.
+const BOWL_MARGIN_RAD = (12 * Math.PI) / 180;
+// Overlap the shell θ-ranges by this so boolean seams never coincide (a shared
+// seam vertex reads as a zero-distance touch between the two segments).
+const SHELL_OVERLAP_RAD = (3 * Math.PI) / 180;
+// Brim outer radius as a multiple of the local body radius, so the plate exits
+// the skin (the visible groove) but not much further.
+const BRIM_PLATE_FACTOR = 1.25;
 
 let cachedWasm: Promise<ManifoldToplevel> | null = null;
 
@@ -92,66 +109,60 @@ export async function buildFlexiToy(
     }
 
     const clearance = settings.clearanceMm;
+    const jointStyle = settings.jointStyle ?? FLEXI_DEFAULT_JOINT_STYLE;
     const cutJoints = plan.joints.filter((joint) => !joint.fused);
-    const pieceManifolds: Manifold[] = [];
+
+    // Each output segment is a list of component manifolds (usually one; the
+    // rounded brim can split a fin sliver off into its interval's segment).
+    let segments: Manifold[][];
 
     if (cutJoints.length === 0) {
-      pieceManifolds.push(base.manifold);
-    } else {
-      const pieceCount = cutJoints.length + 1;
-      for (let p = 0; p < pieceCount; p += 1) {
-        const tailJoint = p > 0 ? cutJoints[p - 1] : null;
-        const headJoint = p < pieceCount - 1 ? cutJoints[p] : null;
-        let piece = base.manifold;
-
-        // Head cut: keep everything on the tail side of the ball's neck face.
-        // The face sits a bend-driven gap (faceGapMm) behind the socket depth so
-        // the printed groove is wide enough to actually flex.
-        if (headJoint) {
-          const faceOffset = headJoint.socketDepthMm + headJoint.faceGapMm;
-          const point = pointAlong(headJoint, -faceOffset);
-          const normal = negate(headJoint.axis);
-          piece = keep(piece.trimByPlane(normal, dot(normal, point)));
-        }
-        // Tail cut: keep everything on the head side of the socket face.
-        if (tailJoint) {
-          const point = pointAlong(tailJoint, -tailJoint.socketDepthMm);
-          const normal = tailJoint.axis as Vec3;
-          piece = keep(piece.trimByPlane(normal, dot(normal, point)));
-        }
-        // Carve the tail socket cavity (radius = ball + clearance).
-        if (tailJoint) {
-          const socket = makeSphere(
-            wasm,
-            keep,
-            tailJoint.center,
-            tailJoint.ballRadiusMm + clearance,
-          );
-          piece = keep(piece.subtract(socket));
-        }
-        // Add the head ball (belongs to this segment, protrudes forward).
-        if (headJoint) {
-          const ball = makeSphere(
-            wasm,
-            keep,
-            headJoint.center,
-            headJoint.ballRadiusMm,
-          );
-          piece = keep(piece.add(ball));
-        }
-
-        if (piece.isEmpty() || piece.status() !== 'NoError') {
-          return {
-            status: 'error',
-            code: 'compute-failed',
-            message: 'The flexi toy could not be built from this model.',
-          };
-        }
-        pieceManifolds.push(piece);
+      segments = [[base.manifold]];
+    } else if (jointStyle === 'classic') {
+      const pieces = buildClassicSegments(
+        wasm,
+        keep,
+        base.manifold,
+        cutJoints,
+        clearance,
+      );
+      if (!pieces) {
+        return {
+          status: 'error',
+          code: 'compute-failed',
+          message: 'The flexi toy could not be built from this model.',
+        };
       }
+      segments = pieces.map((piece) => [piece]);
+    } else {
+      const grouped = buildRoundedSegments(
+        wasm,
+        keep,
+        base.manifold,
+        cutJoints,
+        meshInput,
+        clearance,
+        settings.bendAngleDeg,
+      );
+      if (grouped === 'uncut') {
+        return {
+          status: 'error',
+          code: 'rounded-uncut',
+          message:
+            'The rounded joints could not fully separate this model (usually a strong off-axis feature crossing a cut). Try the Classic joint style.',
+        };
+      }
+      if (!grouped) {
+        return {
+          status: 'error',
+          code: 'compute-failed',
+          message: 'The flexi toy could not be built from this model.',
+        };
+      }
+      segments = grouped;
     }
 
-    const assembled = assemblePieces(pieceManifolds, meshInput);
+    const assembled = assemblePieces(segments, meshInput);
 
     const warnings: FlexiToyWarning[] = [...plan.warnings];
     if (base.repaired) {
@@ -169,7 +180,7 @@ export async function buildFlexiToy(
       indices: assembled.indices,
       colors: assembled.colors,
       segmentTriangleRanges: assembled.segmentTriangleRanges,
-      segmentCount: pieceManifolds.length,
+      segmentCount: segments.length,
       jointCount,
       fusedJointCount,
       lengthMm: plan.spineLengthMm,
@@ -275,7 +286,7 @@ type AssembledGeometry = {
 };
 
 function assemblePieces(
-  pieces: Manifold[],
+  segments: Manifold[][],
   meshInput: FlexiMeshInput,
 ): AssembledGeometry {
   const positions: number[] = [];
@@ -284,25 +295,29 @@ function assemblePieces(
   const colorGrid = buildColorGrid(meshInput);
 
   let minY = Infinity;
-  for (const piece of pieces) {
-    const mesh = piece.getMesh();
-    const numProp = mesh.numProp;
-    const vertexOffset = positions.length / 3;
-    const vertexCount = mesh.vertProperties.length / numProp;
-
-    for (let v = 0; v < vertexCount; v += 1) {
-      const x = mesh.vertProperties[v * numProp];
-      const y = mesh.vertProperties[v * numProp + 1];
-      const z = mesh.vertProperties[v * numProp + 2];
-      positions.push(x, y, z);
-      if (y < minY) minY = y;
-    }
-
+  for (const components of segments) {
+    // One triangle range per SEGMENT — its components are concatenated so the UI
+    // can tint a fin sliver together with the piece it belongs to.
     const start = indices.length;
-    for (let i = 0; i < mesh.triVerts.length; i += 1) {
-      indices.push(mesh.triVerts[i] + vertexOffset);
+    for (const component of components) {
+      const mesh = component.getMesh();
+      const numProp = mesh.numProp;
+      const vertexOffset = positions.length / 3;
+      const vertexCount = mesh.vertProperties.length / numProp;
+
+      for (let v = 0; v < vertexCount; v += 1) {
+        const x = mesh.vertProperties[v * numProp];
+        const y = mesh.vertProperties[v * numProp + 1];
+        const z = mesh.vertProperties[v * numProp + 2];
+        positions.push(x, y, z);
+        if (y < minY) minY = y;
+      }
+
+      for (let i = 0; i < mesh.triVerts.length; i += 1) {
+        indices.push(mesh.triVerts[i] + vertexOffset);
+      }
     }
-    segmentTriangleRanges.push({ start, count: mesh.triVerts.length });
+    segmentTriangleRanges.push({ start, count: indices.length - start });
   }
 
   // Floor-align: min-Y to 0.
@@ -334,6 +349,338 @@ function assemblePieces(
     colors,
     segmentTriangleRanges,
   };
+}
+
+// --- Classic segments (round-2 plane-trim + ball/socket) -------------------
+
+// Cut the body into segments with flat ring faces: trim each end plane, subtract
+// the tail socket cavity, add the head ball. Returns one manifold per segment,
+// or null on a degenerate/empty piece.
+function buildClassicSegments(
+  wasm: ManifoldToplevel,
+  keep: (manifold: Manifold) => Manifold,
+  body: Manifold,
+  cutJoints: FlexiJointPlan[],
+  clearance: number,
+): Manifold[] | null {
+  const pieceCount = cutJoints.length + 1;
+  const pieces: Manifold[] = [];
+  for (let p = 0; p < pieceCount; p += 1) {
+    const tailJoint = p > 0 ? cutJoints[p - 1] : null;
+    const headJoint = p < pieceCount - 1 ? cutJoints[p] : null;
+    let piece = body;
+
+    // Head cut: keep everything on the tail side of the ball's neck face. The
+    // face sits a bend-driven gap (faceGapMm) behind the socket depth so the
+    // printed groove is wide enough to actually flex.
+    if (headJoint) {
+      const faceOffset = headJoint.socketDepthMm + headJoint.faceGapMm;
+      const point = pointAlong(headJoint, -faceOffset);
+      const normal = negate(headJoint.axis);
+      piece = keep(piece.trimByPlane(normal, dot(normal, point)));
+    }
+    // Tail cut: keep everything on the head side of the socket face.
+    if (tailJoint) {
+      const point = pointAlong(tailJoint, -tailJoint.socketDepthMm);
+      const normal = tailJoint.axis as Vec3;
+      piece = keep(piece.trimByPlane(normal, dot(normal, point)));
+    }
+    // Carve the tail socket cavity (radius = ball + clearance).
+    if (tailJoint) {
+      const socket = makeSphere(
+        wasm,
+        keep,
+        tailJoint.center,
+        tailJoint.ballRadiusMm + clearance,
+      );
+      piece = keep(piece.subtract(socket));
+    }
+    // Add the head ball (belongs to this segment, protrudes forward).
+    if (headJoint) {
+      const ball = makeSphere(
+        wasm,
+        keep,
+        headJoint.center,
+        headJoint.ballRadiusMm,
+      );
+      piece = keep(piece.add(ball));
+    }
+
+    if (piece.isEmpty() || piece.status() !== 'NoError') {
+      return null;
+    }
+    pieces.push(piece);
+  }
+  return pieces;
+}
+
+// --- Rounded segments (revolve cutter + decompose) -------------------------
+
+// Subtract one concentric dome-in-dish cutter per live joint, decompose the
+// result into components, and group components into segment intervals by which
+// cut planes each centroid lies past. Returns segment component groups; 'uncut'
+// when a cut left an interval empty (a bridging feature the rounded style could
+// not sever — the caller surfaces 'rounded-uncut' so the UI can suggest
+// Classic); null on a genuine degenerate/boolean failure.
+function buildRoundedSegments(
+  wasm: ManifoldToplevel,
+  keep: (manifold: Manifold) => Manifold,
+  body: Manifold,
+  cutJoints: FlexiJointPlan[],
+  meshInput: FlexiMeshInput,
+  clearance: number,
+  bendAngleDeg: number,
+): Manifold[][] | 'uncut' | null {
+  // Sequential subtract, freeing each intermediate immediately so a 19-joint
+  // body doesn't pile up full-body copies (only the running cut is retained).
+  let cut = body;
+  for (const joint of cutJoints) {
+    // Brim radius from the WIDEST cross-section direction so the plate exits the
+    // skin even on a tall/eccentric section; containment (min direction) is
+    // enforced in planning.
+    const extents = crossSectionExtentsAt(
+      meshInput.positions,
+      joint.center,
+      joint.axis,
+    );
+    if (!(extents.maxMm > 0)) {
+      return null;
+    }
+    const cutter = buildRoundedCutter(
+      wasm,
+      joint,
+      clearance,
+      bendAngleDeg,
+      extents.maxMm,
+    );
+    if (!cutter) {
+      return null;
+    }
+    const next = cut.subtract(cutter);
+    cutter.delete();
+    if (cut !== body) cut.delete();
+    cut = next;
+    if (cut.status() !== 'NoError' || cut.isEmpty()) {
+      if (cut !== body) cut.delete();
+      return null;
+    }
+  }
+
+  const components = cut.decompose();
+  if (cut !== body) cut.delete();
+  for (const component of components) {
+    keep(component);
+  }
+  if (components.length === 0) {
+    return null;
+  }
+
+  // Assign each component to a segment interval by how many joint cut planes its
+  // centroid lies past (head-side). This is robust to a curved spine / tilted
+  // cuts (unlike bucketing an arc-length fraction, which compresses on bends).
+  const segmentCount = cutJoints.length + 1;
+  const groups: Manifold[][] = Array.from({ length: segmentCount }, () => []);
+
+  for (const component of components) {
+    const centroid = componentCentroid(component);
+    let segment = 0;
+    for (const joint of cutJoints) {
+      const dx = centroid[0] - joint.center[0];
+      const dy = centroid[1] - joint.center[1];
+      const dz = centroid[2] - joint.center[2];
+      if (dx * joint.axis[0] + dy * joint.axis[1] + dz * joint.axis[2] > 0) {
+        segment += 1;
+      }
+    }
+    groups[Math.min(segment, segmentCount - 1)].push(component);
+  }
+
+  // An empty interval means a cut failed to separate its segment from a
+  // neighbour — the rounded cutter did not sever this model.
+  if (groups.some((group) => group.length === 0)) {
+    return 'uncut';
+  }
+  return groups;
+}
+
+// Build the per-joint cutter solid (native axis Z), then orient it onto the
+// joint axis and translate to the joint centre. Null on an invalid cutter. The
+// returned manifold is owned by the caller (all shell/union intermediates are
+// freed here). `brimRadius` is the widest local half-extent so the plate exits
+// the skin even on an eccentric cross-section.
+function buildRoundedCutter(
+  wasm: ManifoldToplevel,
+  joint: FlexiJointPlan,
+  clearance: number,
+  bendAngleDeg: number,
+  brimRadius: number,
+): Manifold | null {
+  const r = joint.ballRadiusMm;
+  const h = joint.socketDepthMm;
+  const c = clearance;
+  const gb = joint.faceGapMm;
+  const rc = r + c;
+  // The outer "plate" is a LARGE concentric sphere (radius > the local skin so it
+  // exits as the visible groove). Being concentric with the joint, its gap is
+  // rotation-invariant — the segments never collide there, so travel is limited
+  // only by the neck reaching the socket mouth (a flat plate would collide on
+  // bend at ~2°, defeating the whole point).
+  const rPlate = BRIM_PLATE_FACTOR * brimRadius;
+  const bend = (bendAngleDeg * Math.PI) / 180;
+
+  // θ_mouth from the socket depth (same capture criterion as planning), α_neck
+  // floored for strength.
+  const thetaMouth = Math.acos(Math.min(1, Math.max(0, h / rc)));
+  const alpha = Math.max(NECK_FLOOR_RAD, thetaMouth - bend);
+  // The plate sweeps from the mouth out past the equator so the large sphere
+  // definitely crosses (and exits) the skin near θ = 90°.
+  const thetaHi = Math.min(
+    Math.PI - 0.05,
+    Math.PI * 0.5 + bend + BOWL_MARGIN_RAD,
+  );
+  if (!(thetaMouth > alpha) || !(thetaHi > thetaMouth + SHELL_OVERLAP_RAD)) {
+    return null;
+  }
+
+  // Three simple revolved shells whose θ-ranges are overlapped by SHELL_OVERLAP
+  // so boolean seams do not coincide (a shared seam vertex reads as a
+  // zero-distance touch). The mouth shell therefore opens a hair past θ_mouth —
+  // capture is pinned against θ_mouth + SHELL_OVERLAP in the plan tests. All
+  // three gap surfaces are spheres concentric with the joint centre.
+  const { CrossSection } = wasm;
+  const revolve = (polygon: number[][]): Manifold => {
+    const section = new CrossSection(polygon as [number, number][]);
+    const solid = section.revolve(CUTTER_REVOLVE_SEGMENTS);
+    section.delete();
+    return solid;
+  };
+  const parts = [
+    // Ball ↔ cup clearance gap around the captured ball.
+    revolve(shellWedge(r, rc, alpha, Math.PI)),
+    // Mouth: open swing room from the ball out to the plate for the neck.
+    revolve(shellWedge(r, rPlate + gb, alpha, thetaMouth + SHELL_OVERLAP_RAD)),
+    // Plate: the large concentric sphere gap that exits the skin.
+    revolve(
+      shellWedge(rPlate, rPlate + gb, thetaMouth - SHELL_OVERLAP_RAD, thetaHi),
+    ),
+  ];
+  let cutter = parts[0];
+  for (let i = 1; i < parts.length; i += 1) {
+    const unioned = cutter.add(parts[i]);
+    cutter.delete();
+    parts[i].delete();
+    cutter = unioned;
+  }
+  if (cutter.status() !== 'NoError' || cutter.isEmpty()) {
+    cutter.delete();
+    return null;
+  }
+
+  const oriented = cutter.transform(
+    orientationMatrix(joint.axis, joint.center),
+  );
+  cutter.delete();
+  return oriented;
+}
+
+// A simple closed CCW polygon for a spherical-shell wedge between radii Ra < Rb
+// over θ ∈ [t0, t1], sampled along both arcs. Point on radius R at angle θ from
+// the −s (tail) axis: (ρ, s) = (R·sinθ, −R·cosθ). Outer arc first keeps it CCW.
+function shellWedge(
+  ra: number,
+  rb: number,
+  t0: number,
+  t1: number,
+): number[][] {
+  return [...sphereArc(rb, t0, t1), ...sphereArc(ra, t1, t0)];
+}
+
+function sphereArc(radius: number, t0: number, t1: number): number[][] {
+  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const steps = Math.max(1, Math.ceil(Math.abs(t1 - t0) / stepRad));
+  const points: number[][] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = t0 + ((t1 - t0) * i) / steps;
+    points.push([radius * Math.sin(t), -radius * Math.cos(t)]);
+  }
+  return points;
+}
+
+// Column-major 4×4 that maps the revolve's native +Z axis onto `axis` (with an
+// arbitrary perpendicular basis — the cutter is rotationally symmetric) and
+// translates to `center`.
+function orientationMatrix(
+  axis: [number, number, number],
+  center: [number, number, number],
+): [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+] {
+  const z: Vec3 = normalizeVec(axis);
+  const reference: Vec3 = Math.abs(z[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const x = normalizeVec(crossVec(reference, z));
+  const y = crossVec(z, x);
+  return [
+    x[0],
+    x[1],
+    x[2],
+    0,
+    y[0],
+    y[1],
+    y[2],
+    0,
+    z[0],
+    z[1],
+    z[2],
+    0,
+    center[0],
+    center[1],
+    center[2],
+    1,
+  ];
+}
+
+function componentCentroid(component: Manifold): [number, number, number] {
+  const mesh = component.getMesh();
+  const numProp = mesh.numProp;
+  const vertexCount = mesh.vertProperties.length / numProp;
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  for (let v = 0; v < vertexCount; v += 1) {
+    sx += mesh.vertProperties[v * numProp];
+    sy += mesh.vertProperties[v * numProp + 1];
+    sz += mesh.vertProperties[v * numProp + 2];
+  }
+  const n = vertexCount || 1;
+  return [sx / n, sy / n, sz / n];
+}
+
+function normalizeVec(v: [number, number, number]): Vec3 {
+  const len = Math.hypot(v[0], v[1], v[2]);
+  return len > 1e-12 ? [v[0] / len, v[1] / len, v[2] / len] : [0, 0, 1];
+}
+
+function crossVec(a: Vec3, b: Vec3): Vec3 {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
 }
 
 // --- Geometry helpers ------------------------------------------------------

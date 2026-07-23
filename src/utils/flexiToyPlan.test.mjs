@@ -165,6 +165,7 @@ const DEFAULT_SETTINGS = {
   jointScale: 1.0,
   axisOverride: 'auto',
   bendAngleDeg: 12,
+  jointStyle: 'classic',
 };
 
 // Rotate a fixture around the z-axis so its spine tilts out of the x-axis (used
@@ -395,6 +396,7 @@ const coneSettings = {
   // reasons about the taper along x explicitly.
   axisOverride: 'x',
   bendAngleDeg: 12,
+  jointStyle: 'classic',
 };
 
 // (b) Demonstrate the OLD flaw: a single ±2mm slab at the cut plane
@@ -476,6 +478,7 @@ const gentlePlan = planFlexiToy(gentleCone, {
   jointScale: 1.0,
   axisOverride: 'x',
   bendAngleDeg: 12,
+  jointStyle: 'classic',
 });
 const gentleLive = gentlePlan.joints.filter((joint) => !joint.fused);
 assert.ok(
@@ -505,6 +508,7 @@ const shortFatPlan = planFlexiToy(shortFat, {
   jointScale: 1.4,
   axisOverride: 'x',
   bendAngleDeg: 12,
+  jointStyle: 'classic',
 });
 assert.ok(
   shortFatPlan.warnings.some((w) => w.code === 'joint-size-capped'),
@@ -722,5 +726,92 @@ assert.ok(
   !draggedThick.joints[0].fused,
   'the same station moved to a thick part becomes live',
 );
+
+// --- ROUNDED style: capture, travel, constant bowl gap --------------------
+
+const roundedCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+const NECK_FLOOR_RAD = Math.asin(0.35);
+const roundedPlanFor = (bendAngleDeg, jointScale = 1.0) =>
+  planFlexiToy(roundedCapsule, {
+    ...DEFAULT_SETTINGS,
+    jointStyle: 'rounded',
+    axisOverride: 'x',
+    clearanceMm: 0.4,
+    bendAngleDeg,
+    jointScale,
+  });
+
+const jointTravelDeg = (joint, bendAngleDeg) => {
+  const thetaMouth = Math.acos(
+    Math.min(1, joint.socketDepthMm / (joint.ballRadiusMm + 0.4)),
+  );
+  const alpha = Math.max(
+    NECK_FLOOR_RAD,
+    thetaMouth - (bendAngleDeg * Math.PI) / 180,
+  );
+  return ((thetaMouth - alpha) * 180) / Math.PI;
+};
+
+for (const bendAngleDeg of [5, 12, 25]) {
+  for (const jointScale of [0.6, 1.0, 1.4]) {
+    const plan = roundedPlanFor(bendAngleDeg, jointScale);
+    const live = plan.joints.filter((joint) => !joint.fused);
+    assert.ok(live.length >= 1, 'rounded style articulates');
+    for (const joint of live) {
+      const r = joint.ballRadiusMm;
+      const c = 0.4;
+      const h = joint.socketDepthMm;
+      assert.ok(
+        r >= FLEXI_MIN_BALL_RADIUS_MM - 1e-6,
+        `rounded ball >= floor (${r})`,
+      );
+      // Capture: the socket mouth stays inside the ball equator.
+      const mouth = socketMouthRadius(r, c, h);
+      assert.ok(
+        mouth < r - FLEXI_CAPTURE_MARGIN_MM + 1e-6,
+        'rounded capture margin holds',
+      );
+      assert.ok(mouth < r, 'rounded mouth radius below ball radius');
+      // The 3° seam overlap widens the mouth shell slightly past θ_mouth; the
+      // effective mouth must still stay captive (< r) across the envelope.
+      const thetaMouth = Math.acos(Math.min(1, h / (r + c)));
+      const seamMouth = (r + c) * Math.sin(thetaMouth + (3 * Math.PI) / 180);
+      assert.ok(
+        seamMouth < r,
+        `rounded seam-widened mouth stays captive (${seamMouth.toFixed(2)} < ${r.toFixed(2)})`,
+      );
+      // Face gap now carries the constant bowl gap (concentric design).
+      assert.ok(
+        Math.abs(joint.faceGapMm - Math.max(c, 0.55)) < 1e-9,
+        `rounded faceGapMm is the constant bowl gap (${joint.faceGapMm})`,
+      );
+      // Travel = θ_mouth − α_neck meets the requested bend until the neck floor.
+      const thetaMouthDeg =
+        (Math.acos(Math.min(1, h / (r + c))) * 180) / Math.PI;
+      const achievable = Math.min(
+        bendAngleDeg,
+        thetaMouthDeg - (NECK_FLOOR_RAD * 180) / Math.PI,
+      );
+      assert.ok(
+        jointTravelDeg(joint, bendAngleDeg) >= achievable - 1e-6,
+        'rounded travel meets the requested bend (until the neck floor)',
+      );
+      // The whole cup (r + c + wall) stays inside the local skin.
+      const m = measureHalfExtent(
+        roundedCapsule.positions,
+        joint.center,
+        joint.axis,
+      );
+      assert.ok(
+        m - (r + c + FLEXI_MIN_SOCKET_WALL_MM) >= -0.2,
+        `rounded cup fits inside the skin (m ${m}, cup ${r + c + FLEXI_MIN_SOCKET_WALL_MM})`,
+      );
+    }
+  }
+}
+
+// The actual achievable swing is proven geometrically in flexiToyBuild.test.mjs
+// (rotate a built segment by the claimed travel and check it does not collide
+// with its neighbour) rather than by re-deriving θ_mouth − α_neck here.
 
 console.log('flexiToyPlan.test.mjs: all assertions passed');

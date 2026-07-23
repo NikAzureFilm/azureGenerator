@@ -31,6 +31,7 @@ import { processUserModelForDownload } from '@/utils/meshPrintProcessUtils';
 import {
   FLEXI_CLEARANCE_PRESETS,
   FLEXI_DEFAULT_BEND_DEG,
+  FLEXI_DEFAULT_JOINT_STYLE,
   FLEXI_DEFAULT_LENGTH_MM,
   FLEXI_MAX_BEND_DEG,
   FLEXI_MAX_CLEARANCE_MM,
@@ -44,6 +45,7 @@ import {
   FLEXI_MIN_SEGMENTS,
   type FlexiAxisOverride,
   type FlexiClearancePreset,
+  type FlexiJointStyle,
   type FlexiMeshInput,
   type FlexiToyErrorCode,
   type FlexiToyPlan,
@@ -103,6 +105,10 @@ const FLEXI_ERROR_COPY: Record<
   'too-small': {
     title: 'This model is a little too small',
     body: 'There is not enough room to fit joints that actually move. Try increasing the toy length above.',
+  },
+  'rounded-uncut': {
+    title: "Rounded joints don't fit this shape",
+    body: 'A fin or limb is in the way of the rounded cuts. Switch Joint style to Classic — it handles shapes like this.',
   },
   'compute-failed': {
     title: 'Something went wrong',
@@ -521,6 +527,50 @@ function PillButton({
   );
 }
 
+function StyleCard({
+  selected,
+  title,
+  description,
+  onSelect,
+}: {
+  selected: boolean;
+  title: string;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        'flex flex-1 flex-col gap-1 rounded-lg border p-3 text-left transition-colors',
+        selected
+          ? 'border-adam-blue bg-adam-blue/10 ring-1 ring-adam-blue'
+          : 'border-adam-neutral-700 hover:border-adam-neutral-500',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            'flex h-4 w-4 items-center justify-center rounded-full border',
+            selected
+              ? 'border-adam-blue bg-adam-blue'
+              : 'border-adam-neutral-500',
+          )}
+        >
+          {selected ? (
+            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          ) : null}
+        </span>
+        <span className="text-sm font-medium">{title}</span>
+      </div>
+      <p className="text-xs text-adam-text-secondary">{description}</p>
+    </button>
+  );
+}
+
 function ControlLabel({ label, value }: { label: string; value?: ReactNode }) {
   return (
     <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -556,6 +606,9 @@ export function FlexiToyDialog({
   const [lengthInitialized, setLengthInitialized] = useState(false);
   const [jointScale, setJointScale] = useState(1);
   const [bendAngleDeg, setBendAngleDeg] = useState(FLEXI_DEFAULT_BEND_DEG);
+  const [jointStyle, setJointStyle] = useState<FlexiJointStyle>(
+    FLEXI_DEFAULT_JOINT_STYLE,
+  );
   const [axisOverride, setAxisOverride] = useState<FlexiAxisOverride>('auto');
   // User-dragged cut stations (arc-length fractions); null = even spacing.
   const [jointPositions, setJointPositions] = useState<number[] | null>(null);
@@ -616,6 +669,7 @@ export function FlexiToyDialog({
       targetLengthMm,
       jointScale,
       axisOverride,
+      jointStyle,
       bendAngleDeg,
     };
     // Only send dragged stations once the count is pinned to a number, per the
@@ -631,11 +685,12 @@ export function FlexiToyDialog({
     targetLengthMm,
     jointScale,
     axisOverride,
+    jointStyle,
     bendAngleDeg,
     jointPositions,
   ]);
 
-  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}|${settings.bendAngleDeg}|${
+  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}|${settings.jointStyle}|${settings.bendAngleDeg}|${
     settings.jointPositions
       ? settings.jointPositions.map((f) => f.toFixed(3)).join(',')
       : ''
@@ -654,6 +709,7 @@ export function FlexiToyDialog({
     setShowAdvancedFit(false);
     setJointScale(1);
     setBendAngleDeg(FLEXI_DEFAULT_BEND_DEG);
+    setJointStyle(FLEXI_DEFAULT_JOINT_STYLE);
     setAxisOverride('auto');
     setJointPositions(null);
     setShowOriginalColors(false);
@@ -981,6 +1037,15 @@ export function FlexiToyDialog({
               <p className="max-w-md text-xs text-adam-text-secondary">
                 {FLEXI_ERROR_COPY[errorInfo.code].body}
               </p>
+              {errorInfo.code === 'rounded-uncut' ? (
+                <Button
+                  size="sm"
+                  className="mt-1"
+                  onClick={() => setJointStyle('classic')}
+                >
+                  Switch to Classic
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1001,6 +1066,28 @@ export function FlexiToyDialog({
             ) : null}
           </div>
         ) : null}
+
+        <div>
+          <label className="mb-1 block text-sm font-medium">Joint style</label>
+          <div
+            role="radiogroup"
+            aria-label="Joint style"
+            className="flex flex-col gap-2 sm:flex-row"
+          >
+            <StyleCard
+              selected={jointStyle === 'rounded'}
+              title="Rounded"
+              description="Bends further — smooth, rounded grooves"
+              onSelect={() => setJointStyle('rounded')}
+            />
+            <StyleCard
+              selected={jointStyle === 'classic'}
+              title="Classic"
+              description="Flat ring gaps — classic lure look"
+              onSelect={() => setJointStyle('classic')}
+            />
+          </div>
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -1159,7 +1246,9 @@ export function FlexiToyDialog({
               onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
             />
             <p className="mt-1 text-xs text-adam-text-secondary/80">
-              How far each joint can bend.
+              {jointStyle === 'classic'
+                ? 'How wide the gaps are — classic joints bend less.'
+                : 'How far each joint can bend.'}
             </p>
           </div>
         </div>

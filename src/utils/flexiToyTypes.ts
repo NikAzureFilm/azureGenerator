@@ -41,6 +41,18 @@ export const FLEXI_CAPTURE_MARGIN_MM = 0.3;
 
 export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
 
+/**
+ * Articulation style:
+ * - 'rounded': concentric dome-in-dish cut surfaces (flexi-cutter style) — the
+ *   gap is invariant under joint rotation, so segments swing to the full
+ *   bendAngleDeg; the cut shows as a narrow rounded groove.
+ * - 'classic': flat ring cuts (fishing-lure look) — visible flat gaps between
+ *   segments; bend is limited by the faces meeting, so travel is smaller.
+ */
+export type FlexiJointStyle = 'rounded' | 'classic';
+
+export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'rounded';
+
 export type FlexiToySettings = {
   /** 'auto' → round(spineLength / 22) clamped to [4, FLEXI_MAX_SEGMENTS]. */
   segmentCount: number | 'auto';
@@ -51,11 +63,18 @@ export type FlexiToySettings = {
   /** Multiplier on the auto ball-radius sizing. */
   jointScale: number;
   axisOverride: FlexiAxisOverride;
+  /** Articulation style — see FlexiJointStyle. */
+  jointStyle: FlexiJointStyle;
   /**
-   * Target per-joint bend angle in degrees. Drives the printed face gap between
-   * segments: gap_i ≈ tan(bend) × local body radius, clamped to
-   * [clearanceMm, FLEXI_MAX_FACE_GAP_MM] and to the ball-connectivity budget
-   * ((1 − socketDepthFactor) × ballRadius − 0.2mm), so chunkier joints bend further.
+   * Target per-joint bend angle in degrees.
+   * - 'rounded': the actual target swing per joint — concentric mating faces
+   *   never collide, so travel is limited only by the neck hitting the socket
+   *   mouth (travel ≈ θ_mouth − α_neck), which this angle sets directly.
+   * - 'classic': drives the printed flat face gap between segments:
+   *   gap_i ≈ tan(bend) × local body radius, clamped to
+   *   [clearanceMm, FLEXI_MAX_FACE_GAP_MM] and to the ball-connectivity budget
+   *   ((1 − socketDepthFactor) × ballRadius − 0.2mm), so chunkier joints bend
+   *   further before the flat faces meet.
    */
   bendAngleDeg: number;
   /**
@@ -112,9 +131,11 @@ export type FlexiJointPlan = {
   /** Socket-side face plane sits at `center − socketDepthMm × axis`. */
   socketDepthMm: number;
   /**
-   * Printed gap between this joint's two segment faces (mm); the ball-side face
-   * sits at `center − (socketDepthMm + faceGapMm) × axis`. Derived from
-   * bendAngleDeg (see FlexiToySettings.bendAngleDeg).
+   * Printed gap between this joint's two segment faces (mm).
+   * - 'classic': the flat ring gap; the ball-side face sits at
+   *   `center − (socketDepthMm + faceGapMm) × axis`. Derived from bendAngleDeg.
+   * - 'rounded': the constant bowl gap g_b (= max(clearanceMm, 0.55mm)) between
+   *   the concentric shoulder and cup; travel is gap-independent by design.
    */
   faceGapMm: number;
   /** This joint's station along the spine as an arc-length fraction (0..1). */
@@ -151,6 +172,12 @@ export type FlexiToyResult = {
 export type FlexiToyErrorCode =
   | 'not-watertight'
   | 'too-small'
+  /**
+   * The rounded cutter failed to fully separate the segments (typically a
+   * pronounced off-axis feature bridging a cut). The classic style usually
+   * handles these models — the UI should point the user there.
+   */
+  | 'rounded-uncut'
   | 'compute-failed';
 
 export type FlexiToyOutcome =

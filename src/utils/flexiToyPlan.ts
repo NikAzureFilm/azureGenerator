@@ -19,6 +19,7 @@ import {
   FLEXI_MIN_SOCKET_WALL_MM,
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_FACE_GAP_MM,
+  FLEXI_DEFAULT_JOINT_STYLE,
 } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
@@ -27,6 +28,7 @@ import type {
   FlexiJointPlan,
   FlexiToyWarning,
   FlexiAxisOverride,
+  FlexiJointStyle,
 } from './flexiToyTypes.ts';
 
 type Vec3 = [number, number, number];
@@ -54,6 +56,11 @@ const CONTAINMENT_SAMPLES = 8;
 const SIZING_SHRINK_STEP_MM = 0.2;
 // Extra clear space required between two joints' spheres inside one short segment.
 const OVERLAP_MARGIN_MM = 0.5;
+// Rounded-style joint: cup wall thickness and the constant bowl (outer) gap. The
+// concentric dome-in-dish makes travel gap-independent, so the printed groove is
+// just this fixed gap; faceGapMm carries it (see FlexiJointPlan JSDoc).
+const ROUNDED_CUP_WALL_MM = FLEXI_MIN_SOCKET_WALL_MM;
+const ROUNDED_MIN_BOWL_GAP_MM = 0.55;
 // A cut is "vertical" when the spine tangent's horizontal (xz) magnitude is at
 // least this; below it the raw tangent is kept and a 'cuts-not-vertical' warning
 // is emitted for that plan.
@@ -148,6 +155,8 @@ export function planFlexiToy(
   const clearance = settings.clearanceMm;
   const jointScale = settings.jointScale;
   const bendAngleDeg = settings.bendAngleDeg;
+  // Defensive default so a stale client without jointStyle still plans.
+  const jointStyle = settings.jointStyle ?? FLEXI_DEFAULT_JOINT_STYLE;
 
   const axis = computeAxis(input.positions, settings.axisOverride);
   const spine = buildSpine(input.positions, axis);
@@ -168,6 +177,7 @@ export function planFlexiToy(
     clearance,
     jointScale,
     bendAngleDeg,
+    jointStyle,
   );
 
   let placed: PlacedJoints;
@@ -183,6 +193,7 @@ export function planFlexiToy(
       clearance,
       jointScale,
       bendAngleDeg,
+      jointStyle,
     );
   } else {
     if (settings.jointPositions && settings.jointPositions.length > 0) {
@@ -204,8 +215,13 @@ export function planFlexiToy(
         clearance,
         jointScale,
         bendAngleDeg,
+        jointStyle,
       );
-      const minSegmentLength = Math.max(8, 2.4 * maxLiveRadius(placed.joints));
+      const minSegmentLength = minSegmentLengthFor(
+        maxLiveRadius(placed.joints),
+        clearance,
+        jointStyle,
+      );
       const pitch = spine.lengthMm / segmentCount;
       if (pitch >= minSegmentLength || segmentCount <= minSegments) {
         break;
@@ -224,20 +240,24 @@ export function planFlexiToy(
     });
   }
 
-  // Overlap guard: when adjacent stations sit closer than a ball needs (short,
-  // fat body, or dragged cuts pinned close together), a segment's tail socket
-  // and head ball would collide. Cap every ball so adjacent joint spheres stay
-  // clear, re-checking capture (fusing where the cap drops below the printable
-  // floor), and warn.
+  // Overlap guard: when adjacent stations sit closer than a joint needs (short,
+  // fat body, or dragged cuts pinned close together), adjacent joint solids —
+  // tail socket / head ball (classic) or neighbouring cutters (rounded) — would
+  // collide. Cap every ball so adjacent joints stay clear, re-checking capture
+  // (fusing where the cap drops below the printable floor), and warn.
   const minAdjacentGap = minAdjacentStationGap(joints);
-  const minSegmentLength = Math.max(8, 2.4 * maxLiveRadius(joints));
+  const minSegmentLength = minSegmentLengthFor(
+    maxLiveRadius(joints),
+    clearance,
+    jointStyle,
+  );
   if (joints.length >= 2 && minAdjacentGap < minSegmentLength) {
-    const cap = jointOverlapCap(joints, minAdjacentGap, clearance);
+    const cap = jointOverlapCap(joints, minAdjacentGap, clearance, jointStyle);
     let capped = false;
     joints = joints.map((joint) => {
       if (joint.fused || joint.ballRadiusMm <= cap + 1e-9) return joint;
       capped = true;
-      return capJointBall(joint, cap, clearance);
+      return capJointBall(joint, cap, clearance, jointStyle);
     });
     if (capped) {
       warnings.push({
@@ -288,6 +308,25 @@ function maxLiveRadius(joints: FlexiJointPlan[]): number {
   );
 }
 
+// Minimum spine spacing a live joint needs so adjacent joints don't collide.
+// Rounded cutters reach out to the cup + bowl gap, so they need more room than
+// the classic ball-and-socket pair.
+function minSegmentLengthFor(
+  maxBallRadius: number,
+  clearance: number,
+  jointStyle: FlexiJointStyle,
+): number {
+  if (jointStyle === 'rounded') {
+    const reach =
+      maxBallRadius +
+      clearance +
+      ROUNDED_CUP_WALL_MM +
+      roundedBowlGap(clearance);
+    return 2 * reach + OVERLAP_MARGIN_MM;
+  }
+  return Math.max(8, 2.4 * maxBallRadius);
+}
+
 function minAdjacentStationGap(joints: FlexiJointPlan[]): number {
   let min = Infinity;
   for (let i = 1; i < joints.length; i += 1) {
@@ -306,6 +345,7 @@ function resolvePinnedStations(
   clearance: number,
   jointScale: number,
   bendAngleDeg: number,
+  jointStyle: FlexiJointStyle,
 ): { fractions: number[]; adjusted: boolean } | null {
   const requested = settings.jointPositions;
   if (!requested || requested.length === 0) {
@@ -326,6 +366,7 @@ function resolvePinnedStations(
     clearance,
     jointScale,
     bendAngleDeg,
+    jointStyle,
   );
 }
 
@@ -338,6 +379,7 @@ function sanitizeStations(
   clearance: number,
   jointScale: number,
   bendAngleDeg: number,
+  jointStyle: FlexiJointStyle,
 ): { fractions: number[]; adjusted: boolean } {
   const sortedOriginal = requested.slice().sort((a, b) => a - b);
   const clamped = sortedOriginal.map((fraction) =>
@@ -352,8 +394,13 @@ function sanitizeStations(
     clearance,
     jointScale,
     bendAngleDeg,
+    jointStyle,
   );
-  const minGapMm = Math.max(8, 2.4 * maxLiveRadius(probe.joints));
+  const minGapMm = minSegmentLengthFor(
+    maxLiveRadius(probe.joints),
+    clearance,
+    jointStyle,
+  );
   const minGapFraction = spine.lengthMm > 0 ? minGapMm / spine.lengthMm : 0.02;
   const fractions = spreadFractions(clamped, minGapFraction);
 
@@ -694,6 +741,7 @@ function placeAndSizeJoints(
   clearance: number,
   jointScale: number,
   bendAngleDeg: number,
+  jointStyle: FlexiJointStyle,
 ): PlacedJoints {
   const joints: FlexiJointPlan[] = [];
   let anyLiveTooVertical = false;
@@ -709,6 +757,7 @@ function placeAndSizeJoints(
       jointScale,
       bendAngleDeg,
       fraction,
+      jointStyle,
     );
     if (sample.tooVertical && !joint.fused) {
       anyLiveTooVertical = true;
@@ -716,6 +765,11 @@ function placeAndSizeJoints(
     joints.push(joint);
   }
   return { joints, anyLiveTooVertical };
+}
+
+/** Constant bowl (outer) gap for the rounded style. */
+function roundedBowlGap(clearanceMm: number): number {
+  return Math.max(clearanceMm, ROUNDED_MIN_BOWL_GAP_MM);
 }
 
 function evenFractions(segmentCount: number): number[] {
@@ -794,6 +848,7 @@ function sizeJoint(
   jointScale: number,
   bendAngleDeg: number,
   spineFraction: number,
+  jointStyle: FlexiJointStyle,
 ): FlexiJointPlan {
   const fused = (ballRadiusMm = 0): FlexiJointPlan => ({
     center,
@@ -805,6 +860,10 @@ function sizeJoint(
     fused: true,
   });
 
+  // Rounded style must keep the whole socket CUP (radius r+c+w) inside the skin;
+  // classic keeps the ball's clearance shell (r+c) inside with a socket wall.
+  const rounded = jointStyle === 'rounded';
+
   const profile = buildCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
   if (!(rho0 > 0)) {
@@ -812,16 +871,27 @@ function sizeJoint(
   }
 
   // Start at the requested size (grown to the min printable ball, capped by the
-  // on-axis clearance + wall budget), then shrink until the socket sphere is
+  // on-axis clearance + wall budget), then shrink until the socket cavity is
   // contained along its whole axial reach — this is what stops a tapering body
-  // from being pierced by the socket cavity.
+  // from being pierced by the socket.
   let ballRadiusMm = clamp(
     jointScale * BALL_SIZE_FACTOR * rho0,
     FLEXI_MIN_BALL_RADIUS_MM,
     rho0 - clearance - FLEXI_MIN_SOCKET_WALL_MM,
   );
   while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
-    if (socketContainedAlongReach(profile, ballRadiusMm, clearance)) {
+    const contained = rounded
+      ? socketContainedAlongReach(
+          profile,
+          ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
+          0,
+        )
+      : socketContainedAlongReach(
+          profile,
+          ballRadiusMm + clearance,
+          FLEXI_MIN_SOCKET_WALL_MM,
+        );
+    if (contained) {
       const socketDepthMm = captureDepth(ballRadiusMm, clearance);
       // Capture only gets harder as the ball shrinks (clearance grows relative
       // to the ball), so a contained-but-uncaptive ball can never be rescued by
@@ -829,13 +899,16 @@ function sizeJoint(
       if (socketDepthMm === null) {
         return fused(ballRadiusMm);
       }
-      const faceGapMm = computeFaceGap(
-        bendAngleDeg,
-        rho0,
-        ballRadiusMm,
-        socketDepthMm,
-        clearance,
-      );
+      const faceGapMm =
+        jointStyle === 'rounded'
+          ? roundedBowlGap(clearance)
+          : computeFaceGap(
+              bendAngleDeg,
+              rho0,
+              ballRadiusMm,
+              socketDepthMm,
+              clearance,
+            );
       return {
         center,
         axis,
@@ -849,6 +922,33 @@ function sizeJoint(
     ballRadiusMm -= SIZING_SHRINK_STEP_MM;
   }
   return fused();
+}
+
+/**
+ * Local cross-section extents of the mesh at a joint station: `minMm` is the
+ * thinnest-direction half-extent (used for socket containment), `maxMm` is the
+ * widest-direction half-extent (used to size the rounded brim so it exits the
+ * skin even on a tall/eccentric cross-section). Exported for the rounded build;
+ * kept out of the frozen plan contract. NB: the build re-measures with its own
+ * frame, so these can differ from the planner's sizing pass by a small amount
+ * (different in-plane basis angles) — harmless, both bound the same body.
+ */
+export function crossSectionExtentsAt(
+  positions: Float32Array,
+  center: [number, number, number],
+  axis: [number, number, number],
+): { minMm: number; maxMm: number } {
+  const frame = buildAxisFrame(axis as Vec3);
+  const profile = buildCrossSectionProfile(
+    positions,
+    center as Vec3,
+    axis as Vec3,
+    frame,
+  );
+  return {
+    minMm: reduceCrossSectionAt(profile, 0, minOfArray),
+    maxMm: reduceCrossSectionAt(profile, 0, maxOfArray),
+  };
 }
 
 // Printed gap between a joint's two segment faces. It scales with the local body
@@ -878,6 +978,7 @@ function capJointBall(
   joint: FlexiJointPlan,
   cap: number,
   clearance: number,
+  jointStyle: FlexiJointStyle,
 ): FlexiJointPlan {
   const fused: FlexiJointPlan = {
     center: joint.center,
@@ -895,29 +996,37 @@ function capJointBall(
   if (socketDepthMm === null) {
     return fused;
   }
-  // Shrinking the ball tightens the connectivity budget; the face gap can only
-  // shrink to match (its bend-driven value is unchanged, so min() is exact).
-  const connectivityBudget = cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM;
+  // Rounded keeps its constant bowl gap; classic's flat gap shrinks with the
+  // ball (its bend-driven value is unchanged, so min() with the connectivity
+  // budget is exact).
+  const faceGapMm =
+    jointStyle === 'rounded'
+      ? roundedBowlGap(clearance)
+      : Math.min(
+          joint.faceGapMm,
+          cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM,
+        );
   return {
     center: joint.center,
     axis: joint.axis,
     ballRadiusMm: cap,
     socketDepthMm,
-    faceGapMm: Math.min(joint.faceGapMm, connectivityBudget),
+    faceGapMm,
     spineFraction: joint.spineFraction,
     fused: false,
   };
 }
 
-// Largest ball radius (≤ pitch/2.4) that keeps every pair of adjacent joint
-// spheres — including the tail-socket / head-ball pair inside one segment —
-// clear of each other by OVERLAP_MARGIN_MM. Uses the smallest gap between
-// consecutive joint stations, so live-adjacent joints (which are at least that
-// far apart) are always satisfied.
+// Largest ball radius that keeps adjacent joint solids clear along the spine.
+// Classic: the tail-socket / head-ball pair inside a segment (reach ~ ball +
+// clearance). Rounded: neighbouring cutters reach out to cup + bowl gap. Uses
+// the smallest gap between consecutive stations, so live-adjacent joints (at
+// least that far apart) are always satisfied.
 function jointOverlapCap(
   joints: FlexiJointPlan[],
   pitch: number,
   clearance: number,
+  jointStyle: FlexiJointStyle,
 ): number {
   let minStationGap = Infinity;
   for (let i = 1; i < joints.length; i += 1) {
@@ -926,9 +1035,19 @@ function jointOverlapCap(
       length(sub(joints[i].center, joints[i - 1].center)),
     );
   }
-  const distanceCap = Number.isFinite(minStationGap)
-    ? (minStationGap - clearance - OVERLAP_MARGIN_MM) / 2
-    : Infinity;
+  if (!Number.isFinite(minStationGap)) {
+    return Infinity;
+  }
+  if (jointStyle === 'rounded') {
+    // 2·(ball + clearance + wall + bowlGap) + margin ≤ gap.
+    return (
+      (minStationGap - OVERLAP_MARGIN_MM) / 2 -
+      clearance -
+      ROUNDED_CUP_WALL_MM -
+      roundedBowlGap(clearance)
+    );
+  }
+  const distanceCap = (minStationGap - clearance - OVERLAP_MARGIN_MM) / 2;
   return Math.min(pitch / 2.4, distanceCap);
 }
 
@@ -966,20 +1085,21 @@ export function socketMouthRadius(
   return inner > 0 ? Math.sqrt(inner) : 0;
 }
 
-// The socket sphere (radius r+c, centred on the joint) must stay a wall
-// thickness inside the body across its whole axial reach ±(r+c), not just at the
-// cut plane — a socket carved through the skin of a tapering body would print a
-// hole and let the ball escape.
+// The socket cavity (a sphere of radius `reachRadius` centred on the joint) must
+// stay `wallMm` inside the body across its whole axial reach ±reachRadius, not
+// just at the cut plane — a socket carved through the skin of a tapering body
+// would print a hole and let the ball escape. Classic uses reach r+c plus a
+// socket wall; rounded uses reach r+c+w (the cup outer) which itself must sit
+// inside the skin (bowl/brim beyond it exit the skin by design).
 function socketContainedAlongReach(
   profile: CrossSectionProfile,
-  ballRadiusMm: number,
-  clearanceMm: number,
+  reachRadius: number,
+  wallMm: number,
 ): boolean {
-  const reach = ballRadiusMm + clearanceMm;
   for (let j = 0; j <= CONTAINMENT_SAMPLES; j += 1) {
-    const d = -reach + (2 * reach * j) / CONTAINMENT_SAMPLES;
+    const d = -reachRadius + (2 * reachRadius * j) / CONTAINMENT_SAMPLES;
     const needed =
-      Math.sqrt(Math.max(0, reach * reach - d * d)) + FLEXI_MIN_SOCKET_WALL_MM;
+      Math.sqrt(Math.max(0, reachRadius * reachRadius - d * d)) + wallMm;
     if (needed > crossSectionAt(profile, d) + 1e-6) {
       return false;
     }
@@ -1040,6 +1160,15 @@ function buildCrossSectionProfile(
 // coarse mesh cannot leave a mid-body slab spuriously empty; empty even at the
 // widest ⇒ 0 (past the end of the body).
 function crossSectionAt(profile: CrossSectionProfile, d: number): number {
+  return reduceCrossSectionAt(profile, d, minOfArray);
+}
+
+// The per-direction max-projections of the cross-section slab at offset d,
+// widening the slab until it holds enough points (empty at the widest ⇒ null).
+function crossSectionDirMaxAt(
+  profile: CrossSectionProfile,
+  d: number,
+): Float64Array | null {
   const { bins } = profile;
   let lastDirMax: Float64Array | null = null;
   let lastCount = 0;
@@ -1058,9 +1187,18 @@ function crossSectionAt(profile: CrossSectionProfile, d: number): number {
     }
     lastDirMax = dirMax;
     lastCount = count;
-    if (count >= MIN_SLAB_POINTS) return minOfArray(dirMax);
+    if (count >= MIN_SLAB_POINTS) return dirMax;
   }
-  return lastCount > 0 && lastDirMax ? minOfArray(lastDirMax) : 0;
+  return lastCount > 0 ? lastDirMax : null;
+}
+
+function reduceCrossSectionAt(
+  profile: CrossSectionProfile,
+  d: number,
+  reducer: (values: Float64Array) => number,
+): number {
+  const dirMax = crossSectionDirMaxAt(profile, d);
+  return dirMax ? reducer(dirMax) : 0;
 }
 
 function minOfArray(values: Float64Array): number {
@@ -1069,6 +1207,14 @@ function minOfArray(values: Float64Array): number {
     if (values[i] < min) min = values[i];
   }
   return Number.isFinite(min) ? min : 0;
+}
+
+function maxOfArray(values: Float64Array): number {
+  let max = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    if (values[i] > max) max = values[i];
+  }
+  return max;
 }
 
 function clamp(value: number, min: number, max: number): number {

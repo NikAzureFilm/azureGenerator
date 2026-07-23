@@ -14,8 +14,10 @@ import {
   planFlexiToy,
 } from '@/utils/flexiToyPlan';
 import { loadManifold, buildFlexiToy } from '@/utils/flexiToyBuild';
+import { FLEXI_DEFAULT_JOINT_STYLE } from '@/utils/flexiToyTypes';
 import type {
   FlexiMeshInput,
+  FlexiToySettings,
   FlexiWorkerRequest,
   FlexiWorkerResponse,
 } from '@/utils/flexiToyTypes';
@@ -25,7 +27,12 @@ self.onmessage = async (event: MessageEvent<FlexiWorkerRequest>) => {
   if (!message || message.type !== 'compute') {
     return;
   }
-  const { requestId, input, settings } = message;
+  const { requestId, input } = message;
+  // Defensive default so a stale client without jointStyle still computes.
+  const settings: FlexiToySettings = {
+    ...message.settings,
+    jointStyle: message.settings.jointStyle ?? FLEXI_DEFAULT_JOINT_STYLE,
+  };
 
   let response: FlexiWorkerResponse;
   try {

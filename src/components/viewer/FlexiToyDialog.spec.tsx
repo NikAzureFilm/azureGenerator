@@ -173,6 +173,9 @@ describe('FlexiToyDialog', () => {
     renderDialog();
     await settle();
 
+    expect(screen.getByText('Joint style')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Rounded/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Classic/ })).toBeInTheDocument();
     expect(screen.getByText('Segments')).toBeInTheDocument();
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
     expect(screen.getByText('Toy length')).toBeInTheDocument();
@@ -194,7 +197,35 @@ describe('FlexiToyDialog', () => {
 
     expect(computeFlexiToy).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ bendAngleDeg: 12, clearanceMm: 0.55 }),
+      expect.objectContaining({
+        bendAngleDeg: 12,
+        clearanceMm: 0.55,
+        jointStyle: 'rounded',
+      }),
+    );
+  });
+
+  it('switches joint style with one recompute and keeps dragged positions', async () => {
+    renderDialog();
+    await settle();
+
+    // Pin explicit stations via a drag first.
+    const ring = document.querySelector('[name="flexi-ring-0"]');
+    fireEvent.pointerDown(ring as Element);
+    fireEvent.pointerUp(ring as Element);
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Classic/ }));
+    await settle();
+
+    // Exactly one recompute, now in the classic style, and the dragged
+    // positions survive the style switch (stations keep their meaning).
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointStyle).toBe('classic');
+    expect(settingsArg.jointPositions).toHaveLength(
+      fakeResult.plan.joints.length,
     );
   });
 
@@ -325,5 +356,35 @@ describe('FlexiToyDialog', () => {
       screen.getByText("This model can't be made flexi"),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '.3MF' })).toBeDisabled();
+  });
+
+  it('offers a Classic recovery path when the rounded cut fails', async () => {
+    // First compute fails with the rounded-specific error; later computes (after
+    // the user switches style) fall back to the default ok mock.
+    (computeFlexiToy as Mock).mockResolvedValueOnce({
+      status: 'error',
+      code: 'rounded-uncut',
+      message: 'off-axis feature',
+    });
+
+    renderDialog();
+    await settle();
+
+    expect(
+      screen.getByText("Rounded joints don't fit this shape"),
+    ).toBeInTheDocument();
+
+    const recover = screen.getByRole('button', { name: 'Switch to Classic' });
+    (computeFlexiToy as Mock).mockClear();
+    fireEvent.click(recover);
+    await settle();
+
+    // Style switched to classic and the recompute (now succeeding) cleared it.
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointStyle).toBe('classic');
+    expect(
+      screen.queryByText("Rounded joints don't fit this shape"),
+    ).not.toBeInTheDocument();
   });
 });
