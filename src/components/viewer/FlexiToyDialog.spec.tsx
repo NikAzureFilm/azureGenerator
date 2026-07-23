@@ -10,7 +10,11 @@ import {
   type Mock,
 } from 'vitest';
 import { GLTF } from 'three-stdlib';
-import type { FlexiMeshInput, FlexiToyResult } from '@/utils/flexiToyTypes';
+import type {
+  FlexiJointPlan,
+  FlexiMeshInput,
+  FlexiToyResult,
+} from '@/utils/flexiToyTypes';
 import { FlexiToyDialog } from './FlexiToyDialog';
 import { computeFlexiToy, sceneToFlexiMeshInput } from '@/utils/flexiToyClient';
 import {
@@ -19,13 +23,18 @@ import {
 } from '@/utils/flexiToyExport';
 import { processUserModelForDownload } from '@/utils/meshPrintProcessUtils';
 
-// The r3f Canvas is stubbed so the preview subtree never mounts a WebGL
-// context in jsdom; every UI assertion below is about the surrounding chrome.
-vi.mock('@react-three/fiber', () => ({ Canvas: () => null }));
+// The r3f Canvas renders its children into plain DOM (no WebGL context in
+// jsdom): the mesh + cut-ring subtree mounts so the ring handles are queryable,
+// while OrbitControls/Environment are inert.
+vi.mock('@react-three/fiber', () => ({
+  Canvas: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="flexi-canvas">{children}</div>
+  ),
+}));
 vi.mock('@react-three/drei', () => ({
   Environment: () => null,
   OrbitControls: () => null,
-  Stage: () => null,
+  Stage: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('@/utils/flexiToyClient', () => ({
@@ -66,6 +75,18 @@ if (!window.matchMedia) {
   })) as unknown as typeof window.matchMedia;
 }
 
+function joint(spineFraction: number, fused: boolean): FlexiJointPlan {
+  return {
+    center: [spineFraction * 20, 0, 0],
+    axis: [1, 0, 0],
+    ballRadiusMm: 4,
+    socketDepthMm: 2,
+    faceGapMm: fused ? 0 : 1,
+    spineFraction,
+    fused,
+  };
+}
+
 const fakeInput: FlexiMeshInput = {
   positions: new Float32Array([0, 0, 0, 100, 0, 0, 0, 20, 0]),
   indices: new Uint32Array([0, 1, 2]),
@@ -73,20 +94,31 @@ const fakeInput: FlexiMeshInput = {
 };
 
 const fakeResult: FlexiToyResult = {
-  positions: new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0]),
+  positions: new Float32Array([0, 0, 0, 20, 0, 0, 10, 10, 0]),
   indices: new Uint32Array([0, 1, 2]),
   colors: new Float32Array([1, 0, 0, 1, 0, 0, 1, 0, 0]),
   segmentTriangleRanges: [{ start: 0, count: 3 }],
-  segmentCount: 6,
-  jointCount: 4,
+  // Realistic: [live, fused, live] → 2 live joints → BODY count = live + 1 = 3
+  // (the fused station merges two pieces). plan.joints.length stays 3.
+  segmentCount: 3,
+  jointCount: 2,
   fusedJointCount: 1,
   lengthMm: 148,
-  plan: { joints: [], spine: [], spineLengthMm: 148, warnings: [] },
+  plan: {
+    joints: [joint(0.25, false), joint(0.5, true), joint(0.75, false)],
+    spine: [
+      [0, 0, 0],
+      [10, 0, 0],
+      [20, 0, 0],
+    ],
+    spineLengthMm: 20,
+    warnings: [],
+  },
   warnings: [
     {
       code: 'joint-fused-too-thin',
       message: '1 joint is too thin to move — it stays rigid.',
-      jointIndex: 2,
+      jointIndex: 1,
     },
   ],
 };
@@ -145,6 +177,7 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
     expect(screen.getByText('Toy length')).toBeInTheDocument();
     expect(screen.getByText('Joint size')).toBeInTheDocument();
+    expect(screen.getByText('Flexibility')).toBeInTheDocument();
     expect(screen.getByText('Spine axis')).toBeInTheDocument();
 
     expect(screen.getByRole('radio', { name: 'Tight' })).toBeInTheDocument();
@@ -153,6 +186,16 @@ describe('FlexiToyDialog', () => {
 
     expect(screen.getByRole('button', { name: '.STL' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '.3MF' })).toBeInTheDocument();
+  });
+
+  it('sends the flexibility angle and loose default in the compute settings', async () => {
+    renderDialog();
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ bendAngleDeg: 12, clearanceMm: 0.55 }),
+    );
   });
 
   it('collapses rapid setting changes into a single compute after the debounce', async () => {
@@ -173,6 +216,48 @@ describe('FlexiToyDialog', () => {
     await settle();
 
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders one draggable cut ring per joint in the plan', async () => {
+    renderDialog();
+    await settle();
+
+    // The dialog content is portaled to document.body, so query the document.
+    const rings = document.querySelectorAll('[name^="flexi-ring-"]');
+    expect(rings).toHaveLength(fakeResult.plan.joints.length);
+  });
+
+  it('pins positions on ring drag and the reset button restores even spacing', async () => {
+    renderDialog();
+    await settle();
+
+    // A drag (down then up) commits the current stations as explicit positions.
+    const ring = document.querySelector('[name="flexi-ring-0"]');
+    expect(ring).not.toBeNull();
+    fireEvent.pointerDown(ring as Element);
+    fireEvent.pointerUp(ring as Element);
+    await settle();
+
+    // Positions are now explicit → the recompute must carry jointPositions with
+    // a PINNED NUMERIC count satisfying the contract invariant
+    // (jointPositions.length === segmentCount − 1). With 1 fused joint this only
+    // holds if the pin came from fractions.length + 1, not result.segmentCount.
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(typeof settingsArg.segmentCount).toBe('number');
+    expect(settingsArg.jointPositions).toHaveLength(
+      settingsArg.segmentCount - 1,
+    );
+    expect(settingsArg.jointPositions).toHaveLength(
+      fakeResult.plan.joints.length,
+    );
+    const resetButton = screen.getByRole('button', { name: 'Even spacing' });
+
+    fireEvent.click(resetButton);
+    await settle();
+
+    expect(
+      screen.queryByRole('button', { name: 'Even spacing' }),
+    ).not.toBeInTheDocument();
   });
 
   it('renders warnings returned by the core as amber helper text', async () => {
@@ -216,7 +301,7 @@ describe('FlexiToyDialog', () => {
       code: 'not-watertight',
       message: 'open mesh',
     });
-    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Tight' }));
     await settle();
 
     expect(

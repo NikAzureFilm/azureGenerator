@@ -9,15 +9,16 @@
  *
  * - STL: binary, written directly from the arrays in three.js (y-up) space,
  *   matching the app's existing STLExporter orientation. No re-repair/re-scale.
- * - 3MF: build the ThreeMfColoredMesh here (quantised palette) and package it
- *   with `createThreeMfBlobFromColoredMesh`, which takes precomputed data and
- *   does not re-repair. The packaging helper converts y-up→z-up internally, so
- *   we pass three.js-space coordinates.
+ * - 3MF: a single neutral color for the whole object (no per-triangle quantised
+ *   colors — the user asked for no colors baked inside the print). Packaged with
+ *   `createThreeMfBlobFromColoredMesh`, which takes precomputed data and does not
+ *   re-repair. The packaging helper converts y-up→z-up internally, so we pass
+ *   three.js-space coordinates. The live PREVIEW still uses the baked per-vertex
+ *   colors carried on the result — only the exported 3MF is single-color.
  */
 
 import * as THREE from 'three';
 import {
-  quantizeTriangleColors,
   createThreeMfBlobFromColoredMesh,
   clampThreeMfColorCount,
   type ThreeMfColoredMesh,
@@ -25,7 +26,9 @@ import {
 } from './threeMfExport.ts';
 import type { FlexiToyResult } from './flexiToyTypes.ts';
 
-const THREE_MF_COLOR_COUNT = 8;
+// Neutral light-grey printed for the whole object. Padded to the packaging
+// palette floor if needed, but every triangle references slot 0.
+const FLEXI_3MF_COLOR = '#D8D8D8';
 
 /** Binary STL blob written directly from the result arrays (three.js y-up, mm). */
 export function flexiResultToStlBlob(result: FlexiToyResult): Blob {
@@ -80,14 +83,14 @@ export function flexiResultToStlBlob(result: FlexiToyResult): Blob {
 }
 
 /**
- * 3MF blob for the result, with a quantised palette baked from the carried
- * per-vertex colours. Segments stay separate — no body fusion.
+ * Single-color 3MF blob for the result (no interior colors). Segments stay
+ * separate — no body fusion.
  */
 export function flexiResultToThreeMfBlob(
   result: FlexiToyResult,
   filename: string,
 ): Promise<Blob> {
-  const { positions, indices, colors } = result;
+  const { positions, indices } = result;
   const vertexCount = Math.floor(positions.length / 3);
   const triangleCount = Math.floor(indices.length / 3);
 
@@ -100,72 +103,26 @@ export function flexiResultToThreeMfBlob(
     ];
   }
 
-  // Per-triangle average colour + area weight → quantised palette.
-  const triangleColors: THREE.Color[] = new Array(triangleCount);
-  const samples: { color: THREE.Color; weight: number }[] = new Array(
-    triangleCount,
-  );
-  const va = new THREE.Vector3();
-  const vb = new THREE.Vector3();
-  const vc = new THREE.Vector3();
-  for (let t = 0; t < triangleCount; t += 1) {
-    const ia = indices[t * 3];
-    const ib = indices[t * 3 + 1];
-    const ic = indices[t * 3 + 2];
-    const color = new THREE.Color(
-      (colors[ia * 3] + colors[ib * 3] + colors[ic * 3]) / 3,
-      (colors[ia * 3 + 1] + colors[ib * 3 + 1] + colors[ic * 3 + 1]) / 3,
-      (colors[ia * 3 + 2] + colors[ib * 3 + 2] + colors[ic * 3 + 2]) / 3,
-    );
-    triangleColors[t] = color;
-    va.set(positions[ia * 3], positions[ia * 3 + 1], positions[ia * 3 + 2]);
-    vb.set(positions[ib * 3], positions[ib * 3 + 1], positions[ib * 3 + 2]);
-    vc.set(positions[ic * 3], positions[ic * 3 + 1], positions[ic * 3 + 2]);
-    const area = vb.clone().sub(va).cross(vc.clone().sub(va)).length() * 0.5;
-    samples[t] = { color, weight: area };
-  }
-
-  const palette = quantizeTriangleColors(
-    samples,
-    clampThreeMfColorCount(THREE_MF_COLOR_COUNT),
-  );
-  const paletteHex = palette.map(
-    (color) => `#${color.getHexString().toUpperCase()}`,
-  );
-
+  // Every triangle references the single neutral slot; no quantization.
   const triangles: ThreeMfTriangle[] = new Array(triangleCount);
   for (let t = 0; t < triangleCount; t += 1) {
     triangles[t] = {
       v1: indices[t * 3],
       v2: indices[t * 3 + 1],
       v3: indices[t * 3 + 2],
-      colorIndex: nearestPaletteIndex(triangleColors[t], palette),
+      colorIndex: 0,
     };
   }
+
+  // Pad the palette to the packaging floor if it requires ≥1 (it clamps to 1),
+  // but keep all triangles on slot 0 so nothing colors the interior.
+  const paletteLength = Math.max(1, clampThreeMfColorCount(1));
+  const palette: string[] = new Array(paletteLength).fill(FLEXI_3MF_COLOR);
 
   const coloredMesh: ThreeMfColoredMesh = {
     vertices,
     triangles,
-    palette: paletteHex,
+    palette,
   };
   return createThreeMfBlobFromColoredMesh({ coloredMesh, filename });
-}
-
-function nearestPaletteIndex(
-  color: THREE.Color,
-  palette: THREE.Color[],
-): number {
-  let best = 0;
-  let bestDistance = Infinity;
-  for (let i = 0; i < palette.length; i += 1) {
-    const dr = color.r - palette[i].r;
-    const dg = color.g - palette[i].g;
-    const db = color.b - palette[i].b;
-    const distance = dr * dr + dg * dg + db * db;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = i;
-    }
-  }
-  return best;
 }

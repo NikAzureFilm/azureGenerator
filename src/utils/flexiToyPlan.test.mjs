@@ -11,6 +11,7 @@ import {
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_SEGMENTS,
+  FLEXI_MAX_FACE_GAP_MM,
 } from './flexiToyTypes.ts';
 
 // --- Synthetic fixtures (generated in-test) --------------------------------
@@ -163,7 +164,24 @@ const DEFAULT_SETTINGS = {
   targetLengthMm: 150,
   jointScale: 1.0,
   axisOverride: 'auto',
+  bendAngleDeg: 12,
 };
+
+// Rotate a fixture around the z-axis so its spine tilts out of the x-axis (used
+// to exercise the vertical-cut projection).
+function rotateAroundZ(input, angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const positions = new Float32Array(input.positions.length);
+  for (let i = 0; i < input.positions.length; i += 3) {
+    const x = input.positions[i];
+    const y = input.positions[i + 1];
+    positions[i] = x * c - y * s;
+    positions[i + 1] = x * s + y * c;
+    positions[i + 2] = input.positions[i + 2];
+  }
+  return { positions, indices: input.indices, colors: input.colors };
+}
 
 // Independent min cross-section half-extent measurement (mirrors the planner's
 // approach) so the wall invariant can be checked against the mesh directly.
@@ -376,6 +394,7 @@ const coneSettings = {
   // Pin the axis: on this equal base/length cone PCA is ambiguous, and the test
   // reasons about the taper along x explicitly.
   axisOverride: 'x',
+  bendAngleDeg: 12,
 };
 
 // (b) Demonstrate the OLD flaw: a single ±2mm slab at the cut plane
@@ -456,6 +475,7 @@ const gentlePlan = planFlexiToy(gentleCone, {
   targetLengthMm: 150,
   jointScale: 1.0,
   axisOverride: 'x',
+  bendAngleDeg: 12,
 });
 const gentleLive = gentlePlan.joints.filter((joint) => !joint.fused);
 assert.ok(
@@ -484,6 +504,7 @@ const shortFatPlan = planFlexiToy(shortFat, {
   targetLengthMm: 80,
   jointScale: 1.4,
   axisOverride: 'x',
+  bendAngleDeg: 12,
 });
 assert.ok(
   shortFatPlan.warnings.some((w) => w.code === 'joint-size-capped'),
@@ -501,5 +522,205 @@ for (let i = 1; i < shortFatLive.length; i += 1) {
     `adjacent live joints do not overlap (dist ${distance(previous.center, current.center)} >= ${required})`,
   );
 }
+
+// --- A: vertical cuts ------------------------------------------------------
+
+// A gently tilted spine (30° up): the tangent has a real y-component, but the
+// cut axis must be its horizontal projection, so axis.y ≈ 0.
+const tiltedCapsule = rotateAroundZ(
+  makeSpindle({ length: 150, maxRadius: 14 }),
+  Math.PI / 6,
+);
+const tiltedPlan = planFlexiToy(tiltedCapsule, {
+  ...DEFAULT_SETTINGS,
+  axisOverride: 'auto',
+});
+const tiltedLive = tiltedPlan.joints.filter((joint) => !joint.fused);
+assert.ok(tiltedLive.length >= 2, 'tilted spine still articulates');
+for (const joint of tiltedLive) {
+  assert.ok(
+    Math.abs(joint.axis[1]) < 1e-6,
+    `cut axis is vertical (axis.y≈0), got ${joint.axis[1]}`,
+  );
+  const magnitude = Math.hypot(joint.axis[0], joint.axis[1], joint.axis[2]);
+  assert.ok(Math.abs(magnitude - 1) < 1e-6, 'cut axis is unit length');
+}
+assert.ok(
+  !tiltedPlan.warnings.some((w) => w.code === 'cuts-not-vertical'),
+  'a gently tilted spine does not warn',
+);
+
+// A body whose spine runs straight up (y axis): projection is unstable, so the
+// raw tangent is kept and 'cuts-not-vertical' is emitted once.
+const verticalBody = makeSpindle({ length: 150, maxRadius: 14, axis: 'y' });
+const verticalPlan = planFlexiToy(verticalBody, {
+  ...DEFAULT_SETTINGS,
+  axisOverride: 'y',
+});
+const verticalLive = verticalPlan.joints.filter((joint) => !joint.fused);
+assert.ok(verticalLive.length >= 1, 'vertical body still articulates');
+assert.ok(
+  verticalPlan.warnings.some((w) => w.code === 'cuts-not-vertical'),
+  'a steeply vertical spine warns',
+);
+assert.equal(
+  verticalPlan.warnings.filter((w) => w.code === 'cuts-not-vertical').length,
+  1,
+  'cuts-not-vertical is emitted once, not per joint',
+);
+for (const joint of verticalLive) {
+  assert.ok(
+    Math.abs(joint.axis[1]) > 0.9,
+    'raw vertical axis kept when the projection is unstable',
+  );
+}
+
+// --- B: bend-angle-driven face gaps ----------------------------------------
+
+const bendCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+for (const bendAngleDeg of [5, 12, 25]) {
+  for (const jointScale of [0.6, 1.0, 1.4]) {
+    const plan = planFlexiToy(bendCapsule, {
+      ...DEFAULT_SETTINGS,
+      axisOverride: 'x',
+      bendAngleDeg,
+      jointScale,
+    });
+    for (const joint of plan.joints) {
+      if (joint.fused) {
+        assert.equal(joint.faceGapMm, 0, 'fused joint has zero face gap');
+        continue;
+      }
+      const r = joint.ballRadiusMm;
+      const h = joint.socketDepthMm;
+      const g = joint.faceGapMm;
+      assert.ok(g > 0, 'face gap is positive');
+      assert.ok(
+        g <= FLEXI_MAX_FACE_GAP_MM + 1e-9,
+        'face gap under the ceiling',
+      );
+      assert.ok(
+        g <= r - h - 0.2 + 1e-9,
+        'face gap within the ball-connectivity budget',
+      );
+      // MANDATORY connectivity invariant: the ball still bridges the gap into
+      // its own segment.
+      assert.ok(
+        r > h + g + 0.15,
+        `ball bridges the face gap (r ${r} > h+g ${h + g} @ bend ${bendAngleDeg}, scale ${jointScale})`,
+      );
+    }
+  }
+}
+
+// The gap is genuinely bend-driven: a wider bend opens a wider groove (until the
+// connectivity budget caps it), so the max live gap grows from 5° to 25°.
+const maxGapAt = (bendAngleDeg) => {
+  const plan = planFlexiToy(bendCapsule, {
+    ...DEFAULT_SETTINGS,
+    axisOverride: 'x',
+    bendAngleDeg,
+  });
+  return plan.joints.reduce(
+    (max, joint) => (joint.fused ? max : Math.max(max, joint.faceGapMm)),
+    0,
+  );
+};
+assert.ok(
+  maxGapAt(25) > maxGapAt(5) + 0.2,
+  'a bigger bend angle opens a visibly wider face gap',
+);
+
+// --- C: explicit joint positions (draggable cuts) --------------------------
+
+const positionCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+
+// Out-of-order + out-of-range + too-close input is sanitized into a strictly
+// increasing, in-range, well-spaced set, and warns that it moved a cut.
+const messyPositions = [0.8, 0.1, 0.82, 1.5, -0.2]; // 5 stations → segmentCount 6
+const sanitizedPlan = planFlexiToy(positionCapsule, {
+  ...DEFAULT_SETTINGS,
+  segmentCount: 6,
+  axisOverride: 'x',
+  jointPositions: messyPositions,
+});
+assert.equal(
+  sanitizedPlan.joints.length,
+  5,
+  'pinned positions keep the segment count (6 → 5 joints), no reduction',
+);
+const sanitizedFractions = sanitizedPlan.joints.map((j) => j.spineFraction);
+for (let i = 1; i < sanitizedFractions.length; i += 1) {
+  assert.ok(
+    sanitizedFractions[i] > sanitizedFractions[i - 1],
+    'sanitized stations are strictly increasing',
+  );
+}
+for (const fraction of sanitizedFractions) {
+  assert.ok(
+    fraction >= 0.02 - 1e-9 && fraction <= 0.98 + 1e-9,
+    `station clamped into range (got ${fraction})`,
+  );
+}
+assert.ok(
+  sanitizedPlan.warnings.some((w) => w.code === 'joint-positions-adjusted'),
+  'sanitized positions emit joint-positions-adjusted',
+);
+
+// No jointPositions → even spacing, and spineFraction is echoed as i/N.
+const evenPlan = planFlexiToy(positionCapsule, {
+  ...DEFAULT_SETTINGS,
+  segmentCount: 6,
+  axisOverride: 'x',
+});
+const evenN = evenPlan.joints.length + 1;
+evenPlan.joints.forEach((joint, i) => {
+  assert.ok(
+    Math.abs(joint.spineFraction - (i + 1) / evenN) < 1e-9,
+    'even spacing echoes i/N in spineFraction',
+  );
+});
+
+// Malformed jointPositions (wrong length) → ignored, even spacing + warning.
+const malformedPlan = planFlexiToy(positionCapsule, {
+  ...DEFAULT_SETTINGS,
+  segmentCount: 6,
+  axisOverride: 'x',
+  jointPositions: [0.3, 0.6], // length 2 ≠ segmentCount − 1 = 5
+});
+assert.ok(
+  malformedPlan.warnings.some((w) => w.code === 'joint-positions-adjusted'),
+  'malformed positions warn',
+);
+const malformedN = malformedPlan.joints.length + 1;
+malformedPlan.joints.forEach((joint, i) => {
+  assert.ok(
+    Math.abs(joint.spineFraction - (i + 1) / malformedN) < 1e-9,
+    'malformed positions fall back to even spacing',
+  );
+});
+
+// A station dragged onto a thin part fuses; the same count with the station on a
+// thick part is live.
+const taperForDrag = makeCone({ length: 150, baseRadius: 32 });
+const draggedThin = planFlexiToy(taperForDrag, {
+  ...DEFAULT_SETTINGS,
+  segmentCount: 2,
+  axisOverride: 'x',
+  jointPositions: [0.9], // near the apex → thin
+});
+const draggedThick = planFlexiToy(taperForDrag, {
+  ...DEFAULT_SETTINGS,
+  segmentCount: 2,
+  axisOverride: 'x',
+  jointPositions: [0.3], // near the base → thick
+});
+assert.equal(draggedThin.joints.length, 1, 'one pinned station → one joint');
+assert.equal(draggedThick.joints.length, 1, 'one pinned station → one joint');
+assert.ok(draggedThin.joints[0].fused, 'a station on a thin part fuses');
+assert.ok(
+  !draggedThick.joints[0].fused,
+  'the same station moved to a thick part becomes live',
+);
 
 console.log('flexiToyPlan.test.mjs: all assertions passed');

@@ -6,6 +6,8 @@ import {
   socketMouthRadius,
 } from './flexiToyPlan.ts';
 import { buildFlexiToy, loadManifold } from './flexiToyBuild.ts';
+import { flexiResultToThreeMfBlob } from './flexiToyExport.ts';
+import { BlobReader, TextWriter, ZipReader } from '@zip.js/zip.js';
 
 // --- Synthetic fixtures ----------------------------------------------------
 
@@ -223,6 +225,7 @@ const settings = {
   targetLengthMm: 150,
   jointScale: 1.0,
   axisOverride: 'auto',
+  bendAngleDeg: 12,
 };
 
 // Capsule, N=5 → exactly 5 disconnected bodies.
@@ -356,5 +359,50 @@ const twoBodyOutcome = await buildFlexiToy(
   settings,
 );
 assert.equal(twoBodyOutcome.status, 'ok', 'two-body input still succeeds');
+
+// --- Part D: single-color 3MF export (no interior colors) ------------------
+
+// Give the capsule result deliberately varied vertex colors; the 3MF must still
+// be a single neutral color with every triangle on slot 0 (preview keeps colors,
+// export does not).
+const coloredResult = {
+  ...result,
+  colors: (() => {
+    const c = new Float32Array(result.colors.length);
+    for (let v = 0; v < c.length / 3; v += 1) {
+      c[v * 3] = (v % 3) / 2;
+      c[v * 3 + 1] = ((v + 1) % 3) / 2;
+      c[v * 3 + 2] = ((v + 2) % 3) / 2;
+    }
+    return c;
+  })(),
+};
+const threeMfBlob = await flexiResultToThreeMfBlob(coloredResult, 'flexi-toy');
+assert.equal(threeMfBlob.type, 'model/3mf', '3MF blob has the right MIME type');
+
+const zipReader = new ZipReader(new BlobReader(threeMfBlob));
+const zipEntries = await zipReader.getEntries();
+const objectEntry = zipEntries.find(
+  (entry) => entry.filename === '3D/Objects/Object_1_1.model',
+);
+assert.ok(objectEntry, 'packaged object model is present');
+const objectXml = await objectEntry.getData(new TextWriter());
+
+// Exactly one material color, and it is the neutral grey.
+const baseColors = [
+  ...objectXml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g),
+].map((m) => m[1].toUpperCase());
+assert.deepEqual(baseColors, ['#D8D8D8'], 'single neutral palette color');
+
+// Every triangle references color slot 0.
+const colorIndexes = [
+  ...objectXml.matchAll(/<triangle\b[^>]*\bp1="(\d+)"/g),
+].map((m) => Number(m[1]));
+assert.ok(colorIndexes.length > 0, '3MF has triangles');
+assert.ok(
+  colorIndexes.every((index) => index === 0),
+  'every triangle is on the single color slot 0',
+);
+await zipReader.close();
 
 console.log('flexiToyBuild.test.mjs: all assertions passed');

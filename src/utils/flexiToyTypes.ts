@@ -28,6 +28,11 @@ export const FLEXI_MAX_LENGTH_MM = 400;
 export const FLEXI_DEFAULT_LENGTH_MM = 150;
 export const FLEXI_MIN_JOINT_SCALE = 0.6;
 export const FLEXI_MAX_JOINT_SCALE = 1.4;
+export const FLEXI_MIN_BEND_DEG = 5;
+export const FLEXI_MAX_BEND_DEG = 25;
+export const FLEXI_DEFAULT_BEND_DEG = 12;
+/** Hard ceiling on the printed face gap between segments (mm). */
+export const FLEXI_MAX_FACE_GAP_MM = 4;
 
 /** Hard geometric floors (mm) — planning fuses a joint rather than violate these. */
 export const FLEXI_MIN_BALL_RADIUS_MM = 2.5;
@@ -46,6 +51,23 @@ export type FlexiToySettings = {
   /** Multiplier on the auto ball-radius sizing. */
   jointScale: number;
   axisOverride: FlexiAxisOverride;
+  /**
+   * Target per-joint bend angle in degrees. Drives the printed face gap between
+   * segments: gap_i ≈ tan(bend) × local body radius, clamped to
+   * [clearanceMm, FLEXI_MAX_FACE_GAP_MM] and to the ball-connectivity budget
+   * ((1 − socketDepthFactor) × ballRadius − 0.2mm), so chunkier joints bend further.
+   */
+  bendAngleDeg: number;
+  /**
+   * Optional user-dragged cut stations as strictly increasing arc-length
+   * fractions (0..1 exclusive), length segmentCount − 1. When present they
+   * override even spacing; the planner clamps to valid spacing/order and echoes
+   * the final positions in FlexiJointPlan.spineFraction (with a
+   * 'joint-positions-adjusted' warning when it had to move one). When absent,
+   * stations are evenly spaced. The UI pins segmentCount to a number (not
+   * 'auto') whenever it supplies this.
+   */
+  jointPositions?: number[];
 };
 
 /** Mesh handed from the main thread to the core (transferable typed arrays, mm units). */
@@ -63,6 +85,8 @@ export type FlexiWarningCode =
   | 'segment-count-reduced'
   | 'joint-size-capped'
   | 'spine-fallback-straight'
+  | 'cuts-not-vertical'
+  | 'joint-positions-adjusted'
   | 'mesh-repaired';
 
 export type FlexiToyWarning = {
@@ -75,12 +99,26 @@ export type FlexiToyWarning = {
 export type FlexiJointPlan = {
   /** Joint pivot on the spine (mm, three.js y-up space of the scaled model). */
   center: [number, number, number];
-  /** Unit tangent, tail → head. */
+  /**
+   * Unit cut normal, tail → head. VERTICAL-CUT RULE: this is the spine tangent
+   * projected to the horizontal plane (y = 0) and normalized, so cut faces are
+   * perpendicular to the print bed; when the tangent is too vertical
+   * (horizontal magnitude < 0.3) the raw tangent is used and a
+   * 'cuts-not-vertical' warning is emitted.
+   */
   axis: [number, number, number];
   /** Ball radius (mm). */
   ballRadiusMm: number;
   /** Socket-side face plane sits at `center − socketDepthMm × axis`. */
   socketDepthMm: number;
+  /**
+   * Printed gap between this joint's two segment faces (mm); the ball-side face
+   * sits at `center − (socketDepthMm + faceGapMm) × axis`. Derived from
+   * bendAngleDeg (see FlexiToySettings.bendAngleDeg).
+   */
+  faceGapMm: number;
+  /** This joint's station along the spine as an arc-length fraction (0..1). */
+  spineFraction: number;
   /** True → no cut at this station; the body stays rigid here. */
   fused: boolean;
 };

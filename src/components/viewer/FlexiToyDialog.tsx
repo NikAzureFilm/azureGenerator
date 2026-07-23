@@ -5,10 +5,11 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import * as THREE from 'three';
 import { GLTF } from 'three-stdlib';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import { Environment, OrbitControls, Stage } from '@react-three/drei';
 import { AlertTriangle, Download, Loader2, Worm } from 'lucide-react';
 import posthog from 'posthog-js';
@@ -29,11 +30,14 @@ import { useToast } from '@/hooks/use-toast';
 import { processUserModelForDownload } from '@/utils/meshPrintProcessUtils';
 import {
   FLEXI_CLEARANCE_PRESETS,
+  FLEXI_DEFAULT_BEND_DEG,
   FLEXI_DEFAULT_LENGTH_MM,
+  FLEXI_MAX_BEND_DEG,
   FLEXI_MAX_CLEARANCE_MM,
   FLEXI_MAX_JOINT_SCALE,
   FLEXI_MAX_LENGTH_MM,
   FLEXI_MAX_SEGMENTS,
+  FLEXI_MIN_BEND_DEG,
   FLEXI_MIN_CLEARANCE_MM,
   FLEXI_MIN_JOINT_SCALE,
   FLEXI_MIN_LENGTH_MM,
@@ -42,6 +46,7 @@ import {
   type FlexiClearancePreset,
   type FlexiMeshInput,
   type FlexiToyErrorCode,
+  type FlexiToyPlan,
   type FlexiToyResult,
   type FlexiToySettings,
 } from '@/utils/flexiToyTypes';
@@ -56,6 +61,16 @@ const RECOMPUTE_DEBOUNCE_MS = 350;
 // Each cached result holds full-toy typed arrays, so keep only the most
 // recently used handful (insertion-order LRU over the Map).
 const FLEXI_RESULT_CACHE_LIMIT = 12;
+
+// Cut-ring palette: blue = a live articulating joint, amber = a fused (rigid)
+// station; the *_HOVER variants light up under the cursor / while dragging.
+const RING_BLUE = '#3B82F6';
+const RING_BLUE_HOVER = '#7DB0FF';
+const RING_AMBER = '#F59E0B';
+const RING_AMBER_HOVER = '#FCD34D';
+
+// Sample cap for the per-joint body-radius scan so huge meshes stay cheap.
+const RING_RADIUS_SAMPLE_CAP = 20000;
 
 const CLEARANCE_PRESET_ORDER: FlexiClearancePreset[] = [
   'tight',
@@ -216,6 +231,266 @@ function FlexiToyPreview({
   );
 }
 
+// Arc-length parameterisation of the spine polyline so a 0..1 fraction maps to
+// a 3D point and (by nearest-sample search) a ray maps back to a fraction.
+function useSpineArc(spine: FlexiToyPlan['spine']) {
+  return useMemo(() => {
+    const pts = spine.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    const cum = [0];
+    for (let i = 1; i < pts.length; i += 1) {
+      cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+    }
+    const total = cum[cum.length - 1] || 1;
+
+    const fractionToPoint = (f: number): THREE.Vector3 => {
+      if (pts.length === 0) return new THREE.Vector3();
+      if (pts.length === 1) return pts[0].clone();
+      const target = clamp01(f) * total;
+      let i = 1;
+      while (i < cum.length && cum[i] < target) i += 1;
+      const i0 = Math.max(0, i - 1);
+      const i1 = Math.min(i, pts.length - 1);
+      const segLen = cum[i1] - cum[i0] || 1;
+      const t = clamp01((target - cum[i0]) / segLen);
+      return pts[i0].clone().lerp(pts[i1], t);
+    };
+
+    return { fractionToPoint };
+  }, [spine]);
+}
+
+function FlexiCutRings({
+  plan,
+  positions,
+  groupRef,
+  onDragStateChange,
+  onCommit,
+}: {
+  plan: FlexiToyPlan;
+  positions: Float32Array;
+  groupRef: RefObject<THREE.Group | null>;
+  onDragStateChange: (dragging: boolean) => void;
+  onCommit: (fractions: number[]) => void;
+}) {
+  const { fractionToPoint } = useSpineArc(plan.spine);
+
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragFraction, setDragFraction] = useState<number | null>(null);
+  const dragFractionRef = useRef<number | null>(null);
+  // Mirror of draggingIndex readable from imperative handlers/listeners.
+  const draggingIndexRef = useRef<number | null>(null);
+
+  // Body silhouette radius at each cut station (max perpendicular distance of
+  // nearby vertices from the joint centre) so the ring hugs the body outline.
+  const ringRadii = useMemo(() => {
+    const vertexCount = positions.length / 3;
+    const step = Math.max(1, Math.floor(vertexCount / RING_RADIUS_SAMPLE_CAP));
+    const slabHalf = 3;
+    const v = new THREE.Vector3();
+    return plan.joints.map((joint) => {
+      const c = new THREE.Vector3(
+        joint.center[0],
+        joint.center[1],
+        joint.center[2],
+      );
+      const ax = new THREE.Vector3(
+        joint.axis[0],
+        joint.axis[1],
+        joint.axis[2],
+      ).normalize();
+      let maxPerp = 0;
+      for (let i = 0; i < vertexCount; i += step) {
+        v.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]).sub(
+          c,
+        );
+        const along = v.dot(ax);
+        if (Math.abs(along) > slabHalf) continue;
+        const perp = Math.sqrt(Math.max(0, v.lengthSq() - along * along));
+        if (perp > maxPerp) maxPerp = perp;
+      }
+      const base =
+        maxPerp > 0 ? maxPerp : Math.max(joint.ballRadiusMm * 1.8, 4);
+      return base * 1.12 + 0.8;
+    });
+  }, [plan.joints, positions]);
+
+  useEffect(
+    () => () => {
+      document.body.style.cursor = 'auto';
+    },
+    [],
+  );
+
+  const zAxis = useMemo(() => new THREE.Vector3(0, 0, 1), []);
+
+  // Single commit/teardown path, safe to call more than once (the ref guard
+  // makes the second call a no-op). Used by the ring's own pointerup AND by the
+  // window fallback below, so a release anywhere still ends the drag.
+  const commitDrag = useCallback(() => {
+    const index = draggingIndexRef.current;
+    if (index === null) return;
+    draggingIndexRef.current = null;
+    const fractions = plan.joints.map((joint) => joint.spineFraction);
+    fractions[index] = dragFractionRef.current ?? fractions[index];
+    dragFractionRef.current = null;
+    setDraggingIndex(null);
+    setDragFraction(null);
+    onDragStateChange(false);
+    document.body.style.cursor = 'auto';
+    onCommit(fractions);
+  }, [plan.joints, onCommit, onDragStateChange]);
+
+  // r3f only dispatches onPointerUp when the ray is still over the (moving)
+  // ring, so a release off the ring would otherwise leave the drag stuck with
+  // OrbitControls disabled. A window listener guarantees the drag always ends.
+  useEffect(() => {
+    if (draggingIndex === null) return;
+    const handle = () => commitDrag();
+    window.addEventListener('pointerup', handle);
+    window.addEventListener('pointercancel', handle);
+    return () => {
+      window.removeEventListener('pointerup', handle);
+      window.removeEventListener('pointercancel', handle);
+    };
+  }, [draggingIndex, commitDrag]);
+
+  const beginDrag = (index: number, e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    try {
+      (
+        e.target as unknown as { setPointerCapture?: (id: number) => void }
+      ).setPointerCapture?.(e.pointerId);
+    } catch {
+      // Pointer capture is best-effort; ignore environments that reject it.
+    }
+    const start = plan.joints[index].spineFraction;
+    dragFractionRef.current = start;
+    draggingIndexRef.current = index;
+    setDragFraction(start);
+    setDraggingIndex(index);
+    onDragStateChange(true);
+    document.body.style.cursor = 'grabbing';
+  };
+
+  const moveDrag = (index: number, e: ThreeEvent<PointerEvent>) => {
+    if (draggingIndex !== index || !groupRef.current) return;
+    e.stopPropagation();
+    // The ray is in world space; bring it into the (Stage-transformed) group's
+    // local space so it lines up with the spine polyline coordinates.
+    const inverse = new THREE.Matrix4()
+      .copy(groupRef.current.matrixWorld)
+      .invert();
+    const localRay = e.ray.clone().applyMatrix4(inverse);
+
+    const SAMPLES = 240;
+    let best = Infinity;
+    let bestF = plan.joints[index].spineFraction;
+    for (let k = 0; k <= SAMPLES; k += 1) {
+      const f = k / SAMPLES;
+      const d = localRay.distanceToPoint(fractionToPoint(f));
+      if (d < best) {
+        best = d;
+        bestF = f;
+      }
+    }
+
+    // Keep the dragged cut ordered strictly between its neighbours.
+    const margin = 0.01;
+    const lower =
+      (index > 0 ? plan.joints[index - 1].spineFraction : 0) + margin;
+    const upper =
+      (index < plan.joints.length - 1
+        ? plan.joints[index + 1].spineFraction
+        : 1) - margin;
+    const clamped = clamp(bestF, Math.max(0.02, lower), Math.min(0.98, upper));
+    dragFractionRef.current = clamped;
+    setDragFraction(clamped);
+  };
+
+  const endDrag = (index: number, e: ThreeEvent<PointerEvent>) => {
+    if (draggingIndexRef.current !== index) return;
+    e.stopPropagation();
+    try {
+      (
+        e.target as unknown as { releasePointerCapture?: (id: number) => void }
+      ).releasePointerCapture?.(e.pointerId);
+    } catch {
+      // Best-effort release; ignore environments that reject it.
+    }
+    commitDrag();
+  };
+
+  return (
+    <group ref={groupRef}>
+      {plan.joints.map((joint, index) => {
+        const isDragged = draggingIndex === index;
+        const center =
+          isDragged && dragFraction !== null
+            ? fractionToPoint(dragFraction)
+            : new THREE.Vector3(
+                joint.center[0],
+                joint.center[1],
+                joint.center[2],
+              );
+        const axis = new THREE.Vector3(
+          joint.axis[0],
+          joint.axis[1],
+          joint.axis[2],
+        );
+        if (axis.lengthSq() === 0) axis.set(1, 0, 0);
+        axis.normalize();
+        const quaternion = new THREE.Quaternion().setFromUnitVectors(
+          zAxis,
+          axis,
+        );
+        const radius = ringRadii[index] ?? 6;
+        const tube = clamp(radius * 0.05, 0.5, 1.6);
+        const highlighted = isDragged || hoverIndex === index;
+        const color = joint.fused
+          ? highlighted
+            ? RING_AMBER_HOVER
+            : RING_AMBER
+          : highlighted
+            ? RING_BLUE_HOVER
+            : RING_BLUE;
+
+        return (
+          <mesh
+            key={index}
+            name={`flexi-ring-${index}`}
+            position={center}
+            quaternion={quaternion}
+            onPointerOver={(e) => {
+              e.stopPropagation();
+              setHoverIndex(index);
+              if (draggingIndex === null) document.body.style.cursor = 'grab';
+            }}
+            onPointerOut={() => {
+              if (draggingIndex === null) {
+                setHoverIndex(null);
+                document.body.style.cursor = 'auto';
+              }
+            }}
+            onPointerDown={(e) => beginDrag(index, e)}
+            onPointerMove={(e) => moveDrag(index, e)}
+            onPointerUp={(e) => endDrag(index, e)}
+          >
+            <torusGeometry args={[radius, tube, 10, 44]} />
+            <meshStandardMaterial
+              color={color}
+              emissive={color}
+              emissiveIntensity={highlighted ? 0.5 : 0.18}
+              roughness={0.35}
+              metalness={0.1}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
 function PillButton({
   active,
   onClick,
@@ -272,16 +547,22 @@ export function FlexiToyDialog({
 
   const [segmentMode, setSegmentMode] = useState<'auto' | 'custom'>('auto');
   const [segmentCountCustom, setSegmentCountCustom] = useState(8);
+  // Loose is the default fit — flexi toys read best with visibly free joints.
   const [clearanceMm, setClearanceMm] = useState<number>(
-    FLEXI_CLEARANCE_PRESETS.standard,
+    FLEXI_CLEARANCE_PRESETS.loose,
   );
   const [showAdvancedFit, setShowAdvancedFit] = useState(false);
   const [targetLengthMm, setTargetLengthMm] = useState(FLEXI_DEFAULT_LENGTH_MM);
   const [lengthInitialized, setLengthInitialized] = useState(false);
   const [jointScale, setJointScale] = useState(1);
+  const [bendAngleDeg, setBendAngleDeg] = useState(FLEXI_DEFAULT_BEND_DEG);
   const [axisOverride, setAxisOverride] = useState<FlexiAxisOverride>('auto');
+  // User-dragged cut stations (arc-length fractions); null = even spacing.
+  const [jointPositions, setJointPositions] = useState<number[] | null>(null);
 
   const [showOriginalColors, setShowOriginalColors] = useState(false);
+  const [isRingDragging, setIsRingDragging] = useState(false);
+  const ringGroupRef = useRef<THREE.Group | null>(null);
   const [result, setResult] = useState<FlexiToyResult | null>(null);
   const [isComputing, setIsComputing] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
@@ -328,25 +609,37 @@ export function FlexiToyDialog({
     [],
   );
 
-  const settings = useMemo<FlexiToySettings>(
-    () => ({
+  const settings = useMemo<FlexiToySettings>(() => {
+    const base: FlexiToySettings = {
       segmentCount: segmentMode === 'auto' ? 'auto' : segmentCountCustom,
       clearanceMm,
       targetLengthMm,
       jointScale,
       axisOverride,
-    }),
-    [
-      segmentMode,
-      segmentCountCustom,
-      clearanceMm,
-      targetLengthMm,
-      jointScale,
-      axisOverride,
-    ],
-  );
+      bendAngleDeg,
+    };
+    // Only send dragged stations once the count is pinned to a number, per the
+    // contract (jointPositions length must equal segmentCount − 1).
+    if (jointPositions && segmentMode === 'custom') {
+      return { ...base, jointPositions };
+    }
+    return base;
+  }, [
+    segmentMode,
+    segmentCountCustom,
+    clearanceMm,
+    targetLengthMm,
+    jointScale,
+    axisOverride,
+    bendAngleDeg,
+    jointPositions,
+  ]);
 
-  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}`;
+  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}|${settings.bendAngleDeg}|${
+    settings.jointPositions
+      ? settings.jointPositions.map((f) => f.toFixed(3)).join(',')
+      : ''
+  }`;
 
   // Fresh session each time the dialog opens: reset the controls, derive the
   // suggested toy length from the model, then unblock the compute effect.
@@ -357,11 +650,14 @@ export function FlexiToyDialog({
 
     setSegmentMode('auto');
     setSegmentCountCustom(8);
-    setClearanceMm(FLEXI_CLEARANCE_PRESETS.standard);
+    setClearanceMm(FLEXI_CLEARANCE_PRESETS.loose);
     setShowAdvancedFit(false);
     setJointScale(1);
+    setBendAngleDeg(FLEXI_DEFAULT_BEND_DEG);
     setAxisOverride('auto');
+    setJointPositions(null);
     setShowOriginalColors(false);
+    setIsRingDragging(false);
     setErrorInfo(null);
 
     if (meshInputRef.current?.forGltf !== gltf) {
@@ -500,14 +796,63 @@ export function FlexiToyDialog({
 
   const totalJoints = result ? result.jointCount + result.fusedJointCount : 0;
 
+  // Changing where/how many cuts there are invalidates any dragged stations
+  // (their count and spine placement no longer apply), so these clear them.
+  const changeLength = (value: number) => {
+    setTargetLengthMm(value);
+    setJointPositions(null);
+  };
+
   const handleLengthInput = (raw: string) => {
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) {
       return;
     }
-    setTargetLengthMm(
+    changeLength(
       clamp(Math.round(parsed), FLEXI_MIN_LENGTH_MM, FLEXI_MAX_LENGTH_MM),
     );
+  };
+
+  const changeAxis = (value: FlexiAxisOverride) => {
+    setAxisOverride(value);
+    setJointPositions(null);
+  };
+
+  const useAutoSegments = () => {
+    setSegmentMode('auto');
+    setJointPositions(null);
+  };
+
+  const useCustomSegments = () => {
+    setSegmentCountCustom((count) =>
+      clamp(
+        result?.segmentCount ?? count,
+        FLEXI_MIN_SEGMENTS,
+        FLEXI_MAX_SEGMENTS,
+      ),
+    );
+    setSegmentMode('custom');
+  };
+
+  const changeSegmentCount = (value: number) => {
+    setSegmentCountCustom(value);
+    setJointPositions(null);
+  };
+
+  // On drag release: pin the count (so the fractions array has a fixed length)
+  // and store the dragged stations; the debounce then recomputes with them.
+  // Pin from the committed array itself — the contract requires
+  // jointPositions.length === segmentCount − 1, and stations = planned pieces −
+  // 1 = fractions.length. (result.segmentCount is the BODY count, which is
+  // smaller whenever a joint is fused, so it must not be used here.)
+  const handleRingCommit = (fractions: number[]) => {
+    if (segmentMode === 'auto') {
+      setSegmentCountCustom(
+        clamp(fractions.length + 1, FLEXI_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS),
+      );
+      setSegmentMode('custom');
+    }
+    setJointPositions(fractions);
   };
 
   const handleDownload = async (format: 'stl' | '3mf') => {
@@ -589,10 +934,18 @@ export function FlexiToyDialog({
                   result={result}
                   showOriginalColors={showOriginalColors}
                 />
+                <FlexiCutRings
+                  plan={result.plan}
+                  positions={result.positions}
+                  groupRef={ringGroupRef}
+                  onDragStateChange={setIsRingDragging}
+                  onCommit={handleRingCommit}
+                />
               </Stage>
               <OrbitControls
                 makeDefault
                 enablePan
+                enabled={!isRingDragging}
                 mouseButtons={{
                   LEFT: THREE.MOUSE.ROTATE,
                   MIDDLE: THREE.MOUSE.PAN,
@@ -632,6 +985,23 @@ export function FlexiToyDialog({
           ) : null}
         </div>
 
+        {result && !errorInfo ? (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-adam-text-secondary/70">
+              Drag a ring to move that cut.
+            </span>
+            {jointPositions ? (
+              <button
+                type="button"
+                onClick={() => setJointPositions(null)}
+                className="text-xs text-adam-blue hover:underline"
+              >
+                Even spacing
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <ControlLabel label="Segments" />
@@ -642,22 +1012,13 @@ export function FlexiToyDialog({
             >
               <PillButton
                 active={segmentMode === 'auto'}
-                onClick={() => setSegmentMode('auto')}
+                onClick={useAutoSegments}
               >
                 Auto
               </PillButton>
               <PillButton
                 active={segmentMode === 'custom'}
-                onClick={() => {
-                  setSegmentCountCustom((count) =>
-                    clamp(
-                      result?.segmentCount ?? count,
-                      FLEXI_MIN_SEGMENTS,
-                      FLEXI_MAX_SEGMENTS,
-                    ),
-                  );
-                  setSegmentMode('custom');
-                }}
+                onClick={useCustomSegments}
               >
                 Custom
               </PillButton>
@@ -675,7 +1036,7 @@ export function FlexiToyDialog({
                 max={FLEXI_MAX_SEGMENTS}
                 step={1}
                 defaultValue={[8]}
-                onValueChange={([value]) => setSegmentCountCustom(value)}
+                onValueChange={([value]) => changeSegmentCount(value)}
               />
             ) : (
               <p className="mt-2 text-xs text-adam-text-secondary/80">
@@ -741,7 +1102,7 @@ export function FlexiToyDialog({
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <div className="mb-1 flex items-baseline justify-between gap-2">
               <label className="text-sm font-medium">Toy length</label>
@@ -763,7 +1124,7 @@ export function FlexiToyDialog({
               max={FLEXI_MAX_LENGTH_MM}
               step={5}
               defaultValue={[FLEXI_DEFAULT_LENGTH_MM]}
-              onValueChange={([value]) => setTargetLengthMm(value)}
+              onValueChange={([value]) => changeLength(value)}
             />
           </div>
 
@@ -786,6 +1147,21 @@ export function FlexiToyDialog({
               Chunkier or slimmer joints.
             </p>
           </div>
+
+          <div>
+            <ControlLabel label="Flexibility" value={`${bendAngleDeg}°`} />
+            <Slider
+              value={[bendAngleDeg]}
+              min={FLEXI_MIN_BEND_DEG}
+              max={FLEXI_MAX_BEND_DEG}
+              step={1}
+              defaultValue={[FLEXI_DEFAULT_BEND_DEG]}
+              onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
+            />
+            <p className="mt-1 text-xs text-adam-text-secondary/80">
+              How far each joint can bend.
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -799,7 +1175,7 @@ export function FlexiToyDialog({
               <PillButton
                 key={option.value}
                 active={axisOverride === option.value}
-                onClick={() => setAxisOverride(option.value)}
+                onClick={() => changeAxis(option.value)}
                 className="px-2 py-0.5"
               >
                 {option.label}

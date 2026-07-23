@@ -40,3 +40,4 @@ __pycache__/
 shared/internal-pricing.local.*
 supabase/functions/admin-pricing/internal-pricing.local.*
 benchmarks/results/
+.env*.local

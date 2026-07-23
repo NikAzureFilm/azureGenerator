@@ -105,8 +105,10 @@ export async function buildFlexiToy(
         let piece = base.manifold;
 
         // Head cut: keep everything on the tail side of the ball's neck face.
+        // The face sits a bend-driven gap (faceGapMm) behind the socket depth so
+        // the printed groove is wide enough to actually flex.
         if (headJoint) {
-          const faceOffset = headJoint.socketDepthMm + clearance;
+          const faceOffset = headJoint.socketDepthMm + headJoint.faceGapMm;
           const point = pointAlong(headJoint, -faceOffset);
           const normal = negate(headJoint.axis);
           piece = keep(piece.trimByPlane(normal, dot(normal, point)));

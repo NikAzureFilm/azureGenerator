@@ -18,6 +18,7 @@ import {
   FLEXI_MIN_BALL_RADIUS_MM,
   FLEXI_MIN_SOCKET_WALL_MM,
   FLEXI_CAPTURE_MARGIN_MM,
+  FLEXI_MAX_FACE_GAP_MM,
 } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
@@ -53,6 +54,19 @@ const CONTAINMENT_SAMPLES = 8;
 const SIZING_SHRINK_STEP_MM = 0.2;
 // Extra clear space required between two joints' spheres inside one short segment.
 const OVERLAP_MARGIN_MM = 0.5;
+// A cut is "vertical" when the spine tangent's horizontal (xz) magnitude is at
+// least this; below it the raw tangent is kept and a 'cuts-not-vertical' warning
+// is emitted for that plan.
+const HORIZONTAL_TANGENT_MIN = 0.3;
+// Weld/overlap margin kept between the ball and its own segment body so a wide
+// bend-driven face gap can never sever ball-to-segment connectivity.
+const BALL_CONNECTIVITY_MARGIN_MM = 0.2;
+// User-dragged cut stations are clamped into this open fraction range.
+const STATION_MIN_FRACTION = 0.02;
+const STATION_MAX_FRACTION = 0.98;
+// A dragged station that moves by more than this (fraction) during sanitization
+// triggers the 'joint-positions-adjusted' warning.
+const STATION_ADJUST_EPSILON = 1e-3;
 // Above this arc-length / straight-extent ratio the binned centroid spine is
 // wandering (curled or folded body); fall back to the straight PCA axis line.
 const SPINE_FALLBACK_ARC_RATIO = 1.6;
@@ -133,6 +147,7 @@ export function planFlexiToy(
   const warnings: FlexiToyWarning[] = [];
   const clearance = settings.clearanceMm;
   const jointScale = settings.jointScale;
+  const bendAngleDeg = settings.bendAngleDeg;
 
   const axis = computeAxis(input.positions, settings.axisOverride);
   const spine = buildSpine(input.positions, axis);
@@ -144,37 +159,63 @@ export function planFlexiToy(
     });
   }
 
-  const { initial, minSegments } = resolveSegmentCount(
-    settings.segmentCount,
-    spine.lengthMm,
+  // Stations are either pinned by the user (dragged cuts) or evenly spaced with
+  // the printable-pitch reduction loop.
+  const pinned = resolvePinnedStations(
+    settings,
+    spine,
+    input.positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
   );
 
-  let segmentCount = initial;
-  let joints: FlexiJointPlan[] = [];
+  let placed: PlacedJoints;
   let reduced = false;
-  // Reduce N while segments are shorter than the min printable pitch. Bounded:
-  // segmentCount only ever decreases, floored at minSegments.
-  for (;;) {
-    joints = placeAndSizeJoints(
-      segmentCount,
+  let positionsAdjusted = false;
+
+  if (pinned) {
+    positionsAdjusted = pinned.adjusted;
+    placed = placeAndSizeJoints(
+      pinned.fractions,
       spine,
       input.positions,
       clearance,
       jointScale,
+      bendAngleDeg,
     );
-    const maxBallRadius = joints.reduce(
-      (max, joint) => (joint.fused ? max : Math.max(max, joint.ballRadiusMm)),
-      0,
-    );
-    const minSegmentLength = Math.max(8, 2.4 * maxBallRadius);
-    const pitch = spine.lengthMm / segmentCount;
-    if (pitch >= minSegmentLength || segmentCount <= minSegments) {
-      break;
+  } else {
+    if (settings.jointPositions && settings.jointPositions.length > 0) {
+      // Present but malformed: fall back to even spacing and say so.
+      positionsAdjusted = true;
     }
-    segmentCount -= 1;
-    reduced = true;
+    const { initial, minSegments } = resolveSegmentCount(
+      settings.segmentCount,
+      spine.lengthMm,
+    );
+    let segmentCount = initial;
+    // Reduce N while segments are shorter than the min printable pitch. Bounded:
+    // segmentCount only ever decreases, floored at minSegments.
+    for (;;) {
+      placed = placeAndSizeJoints(
+        evenFractions(segmentCount),
+        spine,
+        input.positions,
+        clearance,
+        jointScale,
+        bendAngleDeg,
+      );
+      const minSegmentLength = Math.max(8, 2.4 * maxLiveRadius(placed.joints));
+      const pitch = spine.lengthMm / segmentCount;
+      if (pitch >= minSegmentLength || segmentCount <= minSegments) {
+        break;
+      }
+      segmentCount -= 1;
+      reduced = true;
+    }
   }
 
+  let joints = placed.joints;
   if (reduced) {
     warnings.push({
       code: 'segment-count-reduced',
@@ -183,19 +224,15 @@ export function planFlexiToy(
     });
   }
 
-  // Overlap guard: when the reduction loop bottoms out at the minimum segment
-  // count but the pitch is still shorter than a ball needs (short, fat body), a
-  // segment's tail socket and head ball would collide. Cap every ball so
-  // adjacent joint spheres stay clear, re-checking capture (fusing where the cap
-  // drops below the printable floor), and warn.
-  const finalPitch = joints.length > 0 ? spine.lengthMm / segmentCount : 0;
-  const maxBallRadius = joints.reduce(
-    (max, joint) => (joint.fused ? max : Math.max(max, joint.ballRadiusMm)),
-    0,
-  );
-  const minSegmentLength = Math.max(8, 2.4 * maxBallRadius);
-  if (joints.length >= 2 && finalPitch < minSegmentLength) {
-    const cap = jointOverlapCap(joints, finalPitch, clearance);
+  // Overlap guard: when adjacent stations sit closer than a ball needs (short,
+  // fat body, or dragged cuts pinned close together), a segment's tail socket
+  // and head ball would collide. Cap every ball so adjacent joint spheres stay
+  // clear, re-checking capture (fusing where the cap drops below the printable
+  // floor), and warn.
+  const minAdjacentGap = minAdjacentStationGap(joints);
+  const minSegmentLength = Math.max(8, 2.4 * maxLiveRadius(joints));
+  if (joints.length >= 2 && minAdjacentGap < minSegmentLength) {
+    const cap = jointOverlapCap(joints, minAdjacentGap, clearance);
     let capped = false;
     joints = joints.map((joint) => {
       if (joint.fused || joint.ballRadiusMm <= cap + 1e-9) return joint;
@@ -209,6 +246,20 @@ export function planFlexiToy(
           'Joints were made smaller so neighbouring joints in this short, chunky body do not fuse together.',
       });
     }
+  }
+
+  if (placed.anyLiveTooVertical) {
+    warnings.push({
+      code: 'cuts-not-vertical',
+      message:
+        'Part of this model runs straight up, so a cut there could not be made vertical.',
+    });
+  }
+  if (positionsAdjusted) {
+    warnings.push({
+      code: 'joint-positions-adjusted',
+      message: 'A cut was nudged to keep every piece printable.',
+    });
   }
 
   joints.forEach((joint, jointIndex) => {
@@ -228,6 +279,116 @@ export function planFlexiToy(
     spineLengthMm: spine.lengthMm,
     warnings,
   };
+}
+
+function maxLiveRadius(joints: FlexiJointPlan[]): number {
+  return joints.reduce(
+    (max, joint) => (joint.fused ? max : Math.max(max, joint.ballRadiusMm)),
+    0,
+  );
+}
+
+function minAdjacentStationGap(joints: FlexiJointPlan[]): number {
+  let min = Infinity;
+  for (let i = 1; i < joints.length; i += 1) {
+    min = Math.min(min, length(sub(joints[i].center, joints[i - 1].center)));
+  }
+  return min;
+}
+
+// Resolve user-dragged cut stations into sanitized arc-length fractions, or null
+// to fall back to even spacing (absent, or malformed — wrong length / non-finite
+// / count not pinned to a number).
+function resolvePinnedStations(
+  settings: FlexiToySettings,
+  spine: SpineData,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+  bendAngleDeg: number,
+): { fractions: number[]; adjusted: boolean } | null {
+  const requested = settings.jointPositions;
+  if (!requested || requested.length === 0) {
+    return null;
+  }
+  const count = settings.segmentCount;
+  const valid =
+    typeof count === 'number' &&
+    requested.length === count - 1 &&
+    requested.every((fraction) => Number.isFinite(fraction));
+  if (!valid) {
+    return null;
+  }
+  return sanitizeStations(
+    requested,
+    spine,
+    positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
+  );
+}
+
+// Deterministic station sanitization: clamp into range, sort, then spread to the
+// minimum printable inter-station gap. Reports whether any station's value moved.
+function sanitizeStations(
+  requested: number[],
+  spine: SpineData,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+  bendAngleDeg: number,
+): { fractions: number[]; adjusted: boolean } {
+  const sortedOriginal = requested.slice().sort((a, b) => a - b);
+  const clamped = sortedOriginal.map((fraction) =>
+    clamp(fraction, STATION_MIN_FRACTION, STATION_MAX_FRACTION),
+  );
+
+  // Size at the clamped stations to learn the min printable gap, then spread.
+  const probe = placeAndSizeJoints(
+    clamped,
+    spine,
+    positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
+  );
+  const minGapMm = Math.max(8, 2.4 * maxLiveRadius(probe.joints));
+  const minGapFraction = spine.lengthMm > 0 ? minGapMm / spine.lengthMm : 0.02;
+  const fractions = spreadFractions(clamped, minGapFraction);
+
+  const adjusted = fractions.some(
+    (fraction, i) =>
+      Math.abs(fraction - sortedOriginal[i]) > STATION_ADJUST_EPSILON,
+  );
+  return { fractions, adjusted };
+}
+
+// Spread sorted fractions to a minimum inter-station gap within the valid range,
+// deterministically and always strictly increasing (an infeasible requested gap
+// is reduced to the largest that still fits so no two stations coincide).
+function spreadFractions(sorted: number[], gap: number): number[] {
+  const n = sorted.length;
+  if (n <= 1) {
+    return sorted.map((fraction) =>
+      clamp(fraction, STATION_MIN_FRACTION, STATION_MAX_FRACTION),
+    );
+  }
+  const span = STATION_MAX_FRACTION - STATION_MIN_FRACTION;
+  const gapUsed = Math.max(0.005, Math.min(gap, span / (n - 1)));
+
+  const out = sorted.slice();
+  out[0] = Math.max(out[0], STATION_MIN_FRACTION);
+  for (let i = 1; i < n; i += 1) {
+    out[i] = Math.max(out[i], out[i - 1] + gapUsed);
+  }
+  out[n - 1] = Math.min(out[n - 1], STATION_MAX_FRACTION);
+  for (let i = n - 2; i >= 0; i -= 1) {
+    out[i] = Math.min(out[i], out[i + 1] - gapUsed);
+  }
+  return out.map((fraction) =>
+    clamp(fraction, STATION_MIN_FRACTION, STATION_MAX_FRACTION),
+  );
 }
 
 // --- Principal axis (PCA) --------------------------------------------------
@@ -524,75 +685,127 @@ function resolveSegmentCount(
   return { initial, minSegments: FLEXI_MIN_SEGMENTS };
 }
 
+type PlacedJoints = { joints: FlexiJointPlan[]; anyLiveTooVertical: boolean };
+
 function placeAndSizeJoints(
-  segmentCount: number,
+  fractions: number[],
   spine: SpineData,
   positions: Float32Array,
   clearance: number,
   jointScale: number,
-): FlexiJointPlan[] {
+  bendAngleDeg: number,
+): PlacedJoints {
   const joints: FlexiJointPlan[] = [];
-  for (let i = 1; i < segmentCount; i += 1) {
-    const s = (spine.lengthMm * i) / segmentCount;
+  let anyLiveTooVertical = false;
+  for (const fraction of fractions) {
+    const s = spine.lengthMm * fraction;
     const sample = sampleSpine(spine, s);
-    joints.push(
-      sizeJoint(
-        sample.center,
-        sample.tangent,
-        sample.frame,
-        positions,
-        clearance,
-        jointScale,
-      ),
+    const joint = sizeJoint(
+      sample.center,
+      sample.axis,
+      sample.frame,
+      positions,
+      clearance,
+      jointScale,
+      bendAngleDeg,
+      fraction,
     );
+    if (sample.tooVertical && !joint.fused) {
+      anyLiveTooVertical = true;
+    }
+    joints.push(joint);
   }
-  return joints;
+  return { joints, anyLiveTooVertical };
 }
 
-function sampleSpine(
-  spine: SpineData,
-  s: number,
-): { center: Vec3; tangent: Vec3; frame: SpineFrame } {
-  const { points, arc, frames, tangents } = spine;
-  if (points.length === 1) {
-    return { center: points[0], tangent: tangents[0], frame: frames[0] };
+function evenFractions(segmentCount: number): number[] {
+  const fractions: number[] = [];
+  for (let i = 1; i < segmentCount; i += 1) {
+    fractions.push(i / segmentCount);
   }
+  return fractions;
+}
+
+type SpineSample = {
+  center: Vec3;
+  /** Cut normal at this station: the spine tangent projected to horizontal. */
+  axis: Vec3;
+  frame: SpineFrame;
+  /** True when the tangent was too vertical to project (raw tangent kept). */
+  tooVertical: boolean;
+};
+
+function sampleSpine(spine: SpineData, s: number): SpineSample {
+  const { points, arc, tangents } = spine;
+  const rawTangent =
+    points.length === 1
+      ? tangents[0]
+      : (() => {
+          let i = 0;
+          while (i < arc.length - 2 && arc[i + 1] < s) {
+            i += 1;
+          }
+          return normalize(sub(points[i + 1], points[i]));
+        })();
+  const center = points.length === 1 ? points[0] : sampleCenter(points, arc, s);
+
+  // VERTICAL-CUT RULE: the cut normal is the tangent projected onto the
+  // horizontal (xz) plane so faces are perpendicular to the print bed. If the
+  // spine runs (near-)vertically here the projection is unstable, so keep the
+  // raw tangent and flag it.
+  const horizontalMagnitude = Math.hypot(rawTangent[0], rawTangent[2]);
+  const tooVertical = horizontalMagnitude < HORIZONTAL_TANGENT_MIN;
+  const axis = tooVertical
+    ? rawTangent
+    : normalize([rawTangent[0], 0, rawTangent[2]]);
+
+  return { center, axis, frame: buildAxisFrame(axis), tooVertical };
+}
+
+function sampleCenter(points: Vec3[], arc: number[], s: number): Vec3 {
   let i = 0;
   while (i < arc.length - 2 && arc[i + 1] < s) {
     i += 1;
   }
   const segmentLength = arc[i + 1] - arc[i];
   const alpha = segmentLength > 1e-9 ? (s - arc[i]) / segmentLength : 0;
-  const center = add(points[i], mul(sub(points[i + 1], points[i]), alpha));
-  const tangent = normalize(sub(points[i + 1], points[i]));
-  // Re-orthogonalise the transported frame against the local tangent.
-  const base = frames[i];
-  let e1 = sub(base.e1, mul(tangent, dot(base.e1, tangent)));
+  return add(points[i], mul(sub(points[i + 1], points[i]), alpha));
+}
+
+// Orthonormal cross-section frame perpendicular to a cut axis. For a horizontal
+// axis (vertical cut) this naturally puts one basis vector straight up.
+function buildAxisFrame(axis: Vec3): SpineFrame {
+  const ref: Vec3 = Math.abs(axis[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  let e1 = sub(ref, mul(axis, dot(ref, axis)));
   if (length(e1) < 1e-6) {
-    const ref: Vec3 = Math.abs(tangent[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-    e1 = sub(ref, mul(tangent, dot(ref, tangent)));
+    const alt: Vec3 = Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1];
+    e1 = sub(alt, mul(axis, dot(alt, axis)));
   }
   e1 = normalize(e1);
-  return { center, tangent, frame: { e1, e2: normalize(cross(tangent, e1)) } };
+  return { e1, e2: normalize(cross(axis, e1)) };
 }
 
 function sizeJoint(
   center: Vec3,
-  tangent: Vec3,
+  axis: Vec3,
   frame: SpineFrame,
   positions: Float32Array,
   clearance: number,
   jointScale: number,
+  bendAngleDeg: number,
+  spineFraction: number,
 ): FlexiJointPlan {
   const fused = (ballRadiusMm = 0): FlexiJointPlan => ({
     center,
-    axis: tangent,
+    axis,
     ballRadiusMm,
     socketDepthMm: 0,
+    faceGapMm: 0,
+    spineFraction,
     fused: true,
   });
 
-  const profile = buildCrossSectionProfile(positions, center, tangent, frame);
+  const profile = buildCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
   if (!(rho0 > 0)) {
     return fused();
@@ -613,13 +826,49 @@ function sizeJoint(
       // Capture only gets harder as the ball shrinks (clearance grows relative
       // to the ball), so a contained-but-uncaptive ball can never be rescued by
       // shrinking further — fuse instead.
-      return socketDepthMm === null
-        ? fused(ballRadiusMm)
-        : { center, axis: tangent, ballRadiusMm, socketDepthMm, fused: false };
+      if (socketDepthMm === null) {
+        return fused(ballRadiusMm);
+      }
+      const faceGapMm = computeFaceGap(
+        bendAngleDeg,
+        rho0,
+        ballRadiusMm,
+        socketDepthMm,
+        clearance,
+      );
+      return {
+        center,
+        axis,
+        ballRadiusMm,
+        socketDepthMm,
+        faceGapMm,
+        spineFraction,
+        fused: false,
+      };
     }
     ballRadiusMm -= SIZING_SHRINK_STEP_MM;
   }
   return fused();
+}
+
+// Printed gap between a joint's two segment faces. It scales with the local body
+// radius so the toy actually bends (a fixed clearance gap only bends ~2° on a
+// chunky body), clamped to the clearance floor, the hard ceiling, AND — most
+// importantly — the ball-connectivity budget: the ball (span ±r) must still
+// bridge the gap into its own segment, whose body ends at −(h + g), so
+// g ≤ r − h − margin. Never let the gap sever ball-to-segment connectivity.
+function computeFaceGap(
+  bendAngleDeg: number,
+  rho0: number,
+  ballRadiusMm: number,
+  socketDepthMm: number,
+  clearanceMm: number,
+): number {
+  const fromBend = Math.tan((bendAngleDeg * Math.PI) / 180) * rho0;
+  const clamped = clamp(fromBend, clearanceMm, FLEXI_MAX_FACE_GAP_MM);
+  const connectivityBudget =
+    ballRadiusMm - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM;
+  return Math.min(clamped, connectivityBudget);
 }
 
 // Re-size a joint's ball down to a hard cap (overlap guard), re-checking capture
@@ -635,6 +884,8 @@ function capJointBall(
     axis: joint.axis,
     ballRadiusMm: 0,
     socketDepthMm: 0,
+    faceGapMm: 0,
+    spineFraction: joint.spineFraction,
     fused: true,
   };
   if (cap < FLEXI_MIN_BALL_RADIUS_MM) {
@@ -644,11 +895,16 @@ function capJointBall(
   if (socketDepthMm === null) {
     return fused;
   }
+  // Shrinking the ball tightens the connectivity budget; the face gap can only
+  // shrink to match (its bend-driven value is unchanged, so min() is exact).
+  const connectivityBudget = cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM;
   return {
     center: joint.center,
     axis: joint.axis,
     ballRadiusMm: cap,
     socketDepthMm,
+    faceGapMm: Math.min(joint.faceGapMm, connectivityBudget),
+    spineFraction: joint.spineFraction,
     fused: false,
   };
 }
