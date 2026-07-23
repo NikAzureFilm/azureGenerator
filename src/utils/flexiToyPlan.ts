@@ -1,0 +1,820 @@
+/**
+ * Pure planning for the Flexi Toy Maker (no three.js, no manifold).
+ *
+ * Operates on the transferable typed arrays of a `FlexiMeshInput` and produces a
+ * deterministic `FlexiToyPlan`: principal spine, evenly spaced cut stations, and
+ * per-joint ball/socket sizing that honours the printable floors in
+ * `flexiToyTypes.ts`. The boolean build (`flexiToyBuild.ts`) consumes this plan.
+ *
+ * Coordinate space: this module plans in whatever mm space the positions it is
+ * given occupy. The caller (worker / build test) scales the mesh to the target
+ * length first via `computeFlexiScale` + `scaleFlexiPositions`, so the plan's
+ * joint sizing sees absolute millimetres.
+ */
+
+import {
+  FLEXI_MIN_SEGMENTS,
+  FLEXI_MAX_SEGMENTS,
+  FLEXI_MIN_BALL_RADIUS_MM,
+  FLEXI_MIN_SOCKET_WALL_MM,
+  FLEXI_CAPTURE_MARGIN_MM,
+} from './flexiToyTypes.ts';
+import type {
+  FlexiMeshInput,
+  FlexiToySettings,
+  FlexiToyPlan,
+  FlexiJointPlan,
+  FlexiToyWarning,
+  FlexiAxisOverride,
+} from './flexiToyTypes.ts';
+
+type Vec3 = [number, number, number];
+
+// Planning tunables (see spec §4.2–4.3). Kept module-local so the numbers live
+// next to the maths that reads them.
+const BIN_COUNT = 64;
+const SMOOTH_TAPS = 5;
+const CROSS_SECTION_DIRECTIONS = 16;
+const AUTO_SEGMENT_PITCH_MM = 22;
+const AUTO_MIN_SEGMENTS = 4;
+const BALL_SIZE_FACTOR = 0.55;
+const SOCKET_DEPTH_FACTOR = 0.65;
+const SOCKET_DEPTH_FACTOR_MAX = 0.75;
+// Cross-section profile: axial bin width, the widening slab half-widths used to
+// evaluate a cross-section (start thin, widen only when the slab is too sparse
+// to trust — coarse tessellation can otherwise leave a mid-body slab empty),
+// and the minimum point count that makes a slab trustworthy.
+const PROFILE_BIN_MM = 0.5;
+const SLAB_WIDEN_HALF_WIDTHS = [1, 2, 3];
+const MIN_SLAB_POINTS = 8;
+// Containment: number of axial samples across the ball's full reach ±(r+c), and
+// the ball-radius decrement used to shrink until the socket sphere is contained.
+const CONTAINMENT_SAMPLES = 8;
+const SIZING_SHRINK_STEP_MM = 0.2;
+// Extra clear space required between two joints' spheres inside one short segment.
+const OVERLAP_MARGIN_MM = 0.5;
+// Above this arc-length / straight-extent ratio the binned centroid spine is
+// wandering (curled or folded body); fall back to the straight PCA axis line.
+const SPINE_FALLBACK_ARC_RATIO = 1.6;
+const MIN_VALID_BINS = 3;
+
+// --- Small vector helpers (flat arrays, no deps). ---
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mul = (a: Vec3, s: number): Vec3 => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a: Vec3, b: Vec3): number =>
+  a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const length = (a: Vec3): number => Math.sqrt(dot(a, a));
+const normalize = (a: Vec3): Vec3 => {
+  const len = length(a);
+  return len > 1e-12 ? [a[0] / len, a[1] / len, a[2] / len] : [0, 0, 0];
+};
+
+type SpineFrame = { e1: Vec3; e2: Vec3 };
+
+type SpineData = {
+  /** Smoothed centroid polyline, tail → head. */
+  points: Vec3[];
+  /** Cumulative arc length, same length as points; arc[0] = 0. */
+  arc: number[];
+  lengthMm: number;
+  /** Unit tangent per point. */
+  tangents: Vec3[];
+  /** Parallel-transported cross-section frame per point. */
+  frames: SpineFrame[];
+  fellBackToStraight: boolean;
+};
+
+// --- Public API -----------------------------------------------------------
+
+/**
+ * Uniform scale that maps the input mesh so its spine measures
+ * `settings.targetLengthMm`. Callers scale the positions with this before
+ * planning/building so joint sizing operates in absolute millimetres.
+ */
+export function computeFlexiScale(
+  input: FlexiMeshInput,
+  settings: FlexiToySettings,
+): number {
+  const axis = computeAxis(input.positions, settings.axisOverride);
+  const spine = buildSpine(input.positions, axis);
+  if (!(spine.lengthMm > 1e-6) || !(settings.targetLengthMm > 0)) {
+    return 1;
+  }
+  const scale = settings.targetLengthMm / spine.lengthMm;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+/** Return a scaled copy of a flat xyz position array. */
+export function scaleFlexiPositions(
+  positions: Float32Array,
+  scale: number,
+): Float32Array {
+  const scaled = new Float32Array(positions.length);
+  for (let i = 0; i < positions.length; i += 1) {
+    scaled[i] = positions[i] * scale;
+  }
+  return scaled;
+}
+
+/**
+ * Plan the spine, cut stations and joint sizing for an (already scaled) mesh.
+ * Deterministic and pure.
+ */
+export function planFlexiToy(
+  input: FlexiMeshInput,
+  settings: FlexiToySettings,
+): FlexiToyPlan {
+  const warnings: FlexiToyWarning[] = [];
+  const clearance = settings.clearanceMm;
+  const jointScale = settings.jointScale;
+
+  const axis = computeAxis(input.positions, settings.axisOverride);
+  const spine = buildSpine(input.positions, axis);
+  if (spine.fellBackToStraight) {
+    warnings.push({
+      code: 'spine-fallback-straight',
+      message:
+        'This shape curves too much to follow; joints are placed along a straight axis instead.',
+    });
+  }
+
+  const { initial, minSegments } = resolveSegmentCount(
+    settings.segmentCount,
+    spine.lengthMm,
+  );
+
+  let segmentCount = initial;
+  let joints: FlexiJointPlan[] = [];
+  let reduced = false;
+  // Reduce N while segments are shorter than the min printable pitch. Bounded:
+  // segmentCount only ever decreases, floored at minSegments.
+  for (;;) {
+    joints = placeAndSizeJoints(
+      segmentCount,
+      spine,
+      input.positions,
+      clearance,
+      jointScale,
+    );
+    const maxBallRadius = joints.reduce(
+      (max, joint) => (joint.fused ? max : Math.max(max, joint.ballRadiusMm)),
+      0,
+    );
+    const minSegmentLength = Math.max(8, 2.4 * maxBallRadius);
+    const pitch = spine.lengthMm / segmentCount;
+    if (pitch >= minSegmentLength || segmentCount <= minSegments) {
+      break;
+    }
+    segmentCount -= 1;
+    reduced = true;
+  }
+
+  if (reduced) {
+    warnings.push({
+      code: 'segment-count-reduced',
+      message:
+        'Fewer segments were used so each piece stays long enough to print.',
+    });
+  }
+
+  // Overlap guard: when the reduction loop bottoms out at the minimum segment
+  // count but the pitch is still shorter than a ball needs (short, fat body), a
+  // segment's tail socket and head ball would collide. Cap every ball so
+  // adjacent joint spheres stay clear, re-checking capture (fusing where the cap
+  // drops below the printable floor), and warn.
+  const finalPitch = joints.length > 0 ? spine.lengthMm / segmentCount : 0;
+  const maxBallRadius = joints.reduce(
+    (max, joint) => (joint.fused ? max : Math.max(max, joint.ballRadiusMm)),
+    0,
+  );
+  const minSegmentLength = Math.max(8, 2.4 * maxBallRadius);
+  if (joints.length >= 2 && finalPitch < minSegmentLength) {
+    const cap = jointOverlapCap(joints, finalPitch, clearance);
+    let capped = false;
+    joints = joints.map((joint) => {
+      if (joint.fused || joint.ballRadiusMm <= cap + 1e-9) return joint;
+      capped = true;
+      return capJointBall(joint, cap, clearance);
+    });
+    if (capped) {
+      warnings.push({
+        code: 'joint-size-capped',
+        message:
+          'Joints were made smaller so neighbouring joints in this short, chunky body do not fuse together.',
+      });
+    }
+  }
+
+  joints.forEach((joint, jointIndex) => {
+    if (joint.fused) {
+      warnings.push({
+        code: 'joint-fused-too-thin',
+        message:
+          'This part is too thin to hold a joint, so it stays rigid there.',
+        jointIndex,
+      });
+    }
+  });
+
+  return {
+    joints,
+    spine: spine.points.map((point) => [point[0], point[1], point[2]]),
+    spineLengthMm: spine.lengthMm,
+    warnings,
+  };
+}
+
+// --- Principal axis (PCA) --------------------------------------------------
+
+function computeAxis(
+  positions: Float32Array,
+  override: FlexiAxisOverride,
+): Vec3 {
+  if (override === 'x') return [1, 0, 0];
+  if (override === 'y') return [0, 1, 0];
+  if (override === 'z') return [0, 0, 1];
+
+  const vertexCount = Math.floor(positions.length / 3);
+  if (vertexCount < 2) return [1, 0, 0];
+
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (let i = 0; i < vertexCount; i += 1) {
+    cx += positions[i * 3];
+    cy += positions[i * 3 + 1];
+    cz += positions[i * 3 + 2];
+  }
+  cx /= vertexCount;
+  cy /= vertexCount;
+  cz /= vertexCount;
+
+  let xx = 0;
+  let xy = 0;
+  let xz = 0;
+  let yy = 0;
+  let yz = 0;
+  let zz = 0;
+  for (let i = 0; i < vertexCount; i += 1) {
+    const dx = positions[i * 3] - cx;
+    const dy = positions[i * 3 + 1] - cy;
+    const dz = positions[i * 3 + 2] - cz;
+    xx += dx * dx;
+    xy += dx * dy;
+    xz += dx * dz;
+    yy += dy * dy;
+    yz += dy * dz;
+    zz += dz * dz;
+  }
+
+  const axis = dominantEigenvector([xx, xy, xz, xy, yy, yz, xz, yz, zz]);
+  // Deterministic orientation: make the largest-magnitude component positive.
+  const largest = Math.max(
+    Math.abs(axis[0]),
+    Math.abs(axis[1]),
+    Math.abs(axis[2]),
+  );
+  const sign =
+    (Math.abs(axis[0]) === largest && axis[0] < 0) ||
+    (Math.abs(axis[1]) === largest && axis[1] < 0) ||
+    (Math.abs(axis[2]) === largest && axis[2] < 0)
+      ? -1
+      : 1;
+  return normalize(mul(axis, sign));
+}
+
+// Largest-eigenvalue eigenvector of a symmetric 3x3 matrix (row-major length 9)
+// via cyclic Jacobi rotations. Deterministic, fixed iteration budget.
+function dominantEigenvector(matrix: number[]): Vec3 {
+  const a = matrix.slice();
+  const v = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+  const rotate = (p: number, q: number): void => {
+    const app = a[p * 3 + p];
+    const aqq = a[q * 3 + q];
+    const apq = a[p * 3 + q];
+    if (Math.abs(apq) < 1e-15) return;
+    const phi = 0.5 * Math.atan2(2 * apq, aqq - app);
+    const c = Math.cos(phi);
+    const s = Math.sin(phi);
+    for (let k = 0; k < 3; k += 1) {
+      const akp = a[k * 3 + p];
+      const akq = a[k * 3 + q];
+      a[k * 3 + p] = c * akp - s * akq;
+      a[k * 3 + q] = s * akp + c * akq;
+    }
+    for (let k = 0; k < 3; k += 1) {
+      const apk = a[p * 3 + k];
+      const aqk = a[q * 3 + k];
+      a[p * 3 + k] = c * apk - s * aqk;
+      a[q * 3 + k] = s * apk + c * aqk;
+    }
+    for (let k = 0; k < 3; k += 1) {
+      const vkp = v[k * 3 + p];
+      const vkq = v[k * 3 + q];
+      v[k * 3 + p] = c * vkp - s * vkq;
+      v[k * 3 + q] = s * vkp + c * vkq;
+    }
+  };
+
+  for (let sweep = 0; sweep < 12; sweep += 1) {
+    rotate(0, 1);
+    rotate(0, 2);
+    rotate(1, 2);
+  }
+
+  const eigenvalues = [a[0], a[4], a[8]];
+  let best = 0;
+  if (eigenvalues[1] > eigenvalues[best]) best = 1;
+  if (eigenvalues[2] > eigenvalues[best]) best = 2;
+  return [v[best], v[3 + best], v[6 + best]];
+}
+
+// --- Spine construction ----------------------------------------------------
+
+function buildSpine(positions: Float32Array, axis: Vec3): SpineData {
+  const vertexCount = Math.floor(positions.length / 3);
+  if (vertexCount < 2) {
+    return straightSpine([0, 0, 0], axis, 0, 1);
+  }
+
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (let i = 0; i < vertexCount; i += 1) {
+    cx += positions[i * 3];
+    cy += positions[i * 3 + 1];
+    cz += positions[i * 3 + 2];
+  }
+  const centroid: Vec3 = [cx / vertexCount, cy / vertexCount, cz / vertexCount];
+
+  let tMin = Infinity;
+  let tMax = -Infinity;
+  const t = new Float64Array(vertexCount);
+  for (let i = 0; i < vertexCount; i += 1) {
+    const rel: Vec3 = [
+      positions[i * 3] - centroid[0],
+      positions[i * 3 + 1] - centroid[1],
+      positions[i * 3 + 2] - centroid[2],
+    ];
+    const proj = dot(rel, axis);
+    t[i] = proj;
+    if (proj < tMin) tMin = proj;
+    if (proj > tMax) tMax = proj;
+  }
+  const straightExtent = tMax - tMin;
+  if (!(straightExtent > 1e-6)) {
+    return straightSpine(centroid, axis, tMin, tMax);
+  }
+
+  // Per-bin centroid polyline.
+  const binSum: Vec3[] = Array.from({ length: BIN_COUNT }, () => [0, 0, 0]);
+  const binCount = new Int32Array(BIN_COUNT);
+  const span = straightExtent / BIN_COUNT;
+  for (let i = 0; i < vertexCount; i += 1) {
+    let bin = Math.floor((t[i] - tMin) / span);
+    if (bin < 0) bin = 0;
+    if (bin >= BIN_COUNT) bin = BIN_COUNT - 1;
+    binSum[bin][0] += positions[i * 3];
+    binSum[bin][1] += positions[i * 3 + 1];
+    binSum[bin][2] += positions[i * 3 + 2];
+    binCount[bin] += 1;
+  }
+
+  const rawCentroids: Vec3[] = [];
+  for (let bin = 0; bin < BIN_COUNT; bin += 1) {
+    if (binCount[bin] > 0) {
+      rawCentroids.push([
+        binSum[bin][0] / binCount[bin],
+        binSum[bin][1] / binCount[bin],
+        binSum[bin][2] / binCount[bin],
+      ]);
+    }
+  }
+
+  if (rawCentroids.length < MIN_VALID_BINS) {
+    return straightSpine(centroid, axis, tMin, tMax);
+  }
+
+  const rawArcLength = polylineLength(rawCentroids);
+  if (rawArcLength > SPINE_FALLBACK_ARC_RATIO * straightExtent) {
+    return straightSpine(centroid, axis, tMin, tMax);
+  }
+
+  const smoothed = smoothPolyline(rawCentroids);
+  return finishSpine(smoothed, axis, false);
+}
+
+function straightSpine(
+  centroid: Vec3,
+  axis: Vec3,
+  tMin: number,
+  tMax: number,
+): SpineData {
+  const extent = Math.max(tMax - tMin, 1e-6);
+  const start = add(centroid, mul(axis, tMin));
+  const points: Vec3[] = [];
+  for (let i = 0; i < BIN_COUNT; i += 1) {
+    points.push(add(start, mul(axis, (extent * i) / (BIN_COUNT - 1))));
+  }
+  return finishSpine(points, axis, true);
+}
+
+function finishSpine(
+  points: Vec3[],
+  axisHint: Vec3,
+  fellBack: boolean,
+): SpineData {
+  const arc: number[] = [0];
+  for (let i = 1; i < points.length; i += 1) {
+    arc.push(arc[i - 1] + length(sub(points[i], points[i - 1])));
+  }
+  const lengthMm = arc[arc.length - 1];
+
+  const tangents: Vec3[] = points.map((_, i) => {
+    if (points.length < 2) return normalize(axisHint);
+    if (i === 0) return normalize(sub(points[1], points[0]));
+    if (i === points.length - 1) {
+      return normalize(sub(points[i], points[i - 1]));
+    }
+    return normalize(sub(points[i + 1], points[i - 1]));
+  });
+
+  // Parallel-transport a cross-section frame along the spine to keep it from
+  // twisting between stations.
+  const frames: SpineFrame[] = [];
+  const reference: Vec3 =
+    Math.abs(tangents[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  let e1 = normalize(
+    sub(reference, mul(tangents[0], dot(reference, tangents[0]))),
+  );
+  frames.push({ e1, e2: normalize(cross(tangents[0], e1)) });
+  for (let i = 1; i < points.length; i += 1) {
+    const projected = sub(e1, mul(tangents[i], dot(e1, tangents[i])));
+    e1 = normalize(projected);
+    if (length(e1) < 1e-6) {
+      const fallbackRef: Vec3 =
+        Math.abs(tangents[i][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      e1 = normalize(
+        sub(fallbackRef, mul(tangents[i], dot(fallbackRef, tangents[i]))),
+      );
+    }
+    frames.push({ e1, e2: normalize(cross(tangents[i], e1)) });
+  }
+
+  return {
+    points,
+    arc,
+    lengthMm,
+    tangents,
+    frames,
+    fellBackToStraight: fellBack,
+  };
+}
+
+function polylineLength(points: Vec3[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    total += length(sub(points[i], points[i - 1]));
+  }
+  return total;
+}
+
+function smoothPolyline(points: Vec3[]): Vec3[] {
+  const half = Math.floor(SMOOTH_TAPS / 2);
+  return points.map((_, i) => {
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    let n = 0;
+    for (let k = -half; k <= half; k += 1) {
+      const j = i + k;
+      if (j < 0 || j >= points.length) continue;
+      sx += points[j][0];
+      sy += points[j][1];
+      sz += points[j][2];
+      n += 1;
+    }
+    return [sx / n, sy / n, sz / n] as Vec3;
+  });
+}
+
+// --- Cut placement & joint sizing -----------------------------------------
+
+function resolveSegmentCount(
+  requested: number | 'auto',
+  spineLengthMm: number,
+): { initial: number; minSegments: number } {
+  if (requested === 'auto') {
+    const raw = Math.round(spineLengthMm / AUTO_SEGMENT_PITCH_MM);
+    const initial = clamp(raw, AUTO_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS);
+    return { initial, minSegments: AUTO_MIN_SEGMENTS };
+  }
+  const initial = clamp(
+    Math.round(requested),
+    FLEXI_MIN_SEGMENTS,
+    FLEXI_MAX_SEGMENTS,
+  );
+  return { initial, minSegments: FLEXI_MIN_SEGMENTS };
+}
+
+function placeAndSizeJoints(
+  segmentCount: number,
+  spine: SpineData,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+): FlexiJointPlan[] {
+  const joints: FlexiJointPlan[] = [];
+  for (let i = 1; i < segmentCount; i += 1) {
+    const s = (spine.lengthMm * i) / segmentCount;
+    const sample = sampleSpine(spine, s);
+    joints.push(
+      sizeJoint(
+        sample.center,
+        sample.tangent,
+        sample.frame,
+        positions,
+        clearance,
+        jointScale,
+      ),
+    );
+  }
+  return joints;
+}
+
+function sampleSpine(
+  spine: SpineData,
+  s: number,
+): { center: Vec3; tangent: Vec3; frame: SpineFrame } {
+  const { points, arc, frames, tangents } = spine;
+  if (points.length === 1) {
+    return { center: points[0], tangent: tangents[0], frame: frames[0] };
+  }
+  let i = 0;
+  while (i < arc.length - 2 && arc[i + 1] < s) {
+    i += 1;
+  }
+  const segmentLength = arc[i + 1] - arc[i];
+  const alpha = segmentLength > 1e-9 ? (s - arc[i]) / segmentLength : 0;
+  const center = add(points[i], mul(sub(points[i + 1], points[i]), alpha));
+  const tangent = normalize(sub(points[i + 1], points[i]));
+  // Re-orthogonalise the transported frame against the local tangent.
+  const base = frames[i];
+  let e1 = sub(base.e1, mul(tangent, dot(base.e1, tangent)));
+  if (length(e1) < 1e-6) {
+    const ref: Vec3 = Math.abs(tangent[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    e1 = sub(ref, mul(tangent, dot(ref, tangent)));
+  }
+  e1 = normalize(e1);
+  return { center, tangent, frame: { e1, e2: normalize(cross(tangent, e1)) } };
+}
+
+function sizeJoint(
+  center: Vec3,
+  tangent: Vec3,
+  frame: SpineFrame,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+): FlexiJointPlan {
+  const fused = (ballRadiusMm = 0): FlexiJointPlan => ({
+    center,
+    axis: tangent,
+    ballRadiusMm,
+    socketDepthMm: 0,
+    fused: true,
+  });
+
+  const profile = buildCrossSectionProfile(positions, center, tangent, frame);
+  const rho0 = crossSectionAt(profile, 0);
+  if (!(rho0 > 0)) {
+    return fused();
+  }
+
+  // Start at the requested size (grown to the min printable ball, capped by the
+  // on-axis clearance + wall budget), then shrink until the socket sphere is
+  // contained along its whole axial reach — this is what stops a tapering body
+  // from being pierced by the socket cavity.
+  let ballRadiusMm = clamp(
+    jointScale * BALL_SIZE_FACTOR * rho0,
+    FLEXI_MIN_BALL_RADIUS_MM,
+    rho0 - clearance - FLEXI_MIN_SOCKET_WALL_MM,
+  );
+  while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
+    if (socketContainedAlongReach(profile, ballRadiusMm, clearance)) {
+      const socketDepthMm = captureDepth(ballRadiusMm, clearance);
+      // Capture only gets harder as the ball shrinks (clearance grows relative
+      // to the ball), so a contained-but-uncaptive ball can never be rescued by
+      // shrinking further — fuse instead.
+      return socketDepthMm === null
+        ? fused(ballRadiusMm)
+        : { center, axis: tangent, ballRadiusMm, socketDepthMm, fused: false };
+    }
+    ballRadiusMm -= SIZING_SHRINK_STEP_MM;
+  }
+  return fused();
+}
+
+// Re-size a joint's ball down to a hard cap (overlap guard), re-checking capture
+// and fusing if the cap falls below the printable floor. Containment still holds
+// because a smaller socket sphere fits wherever a larger one did.
+function capJointBall(
+  joint: FlexiJointPlan,
+  cap: number,
+  clearance: number,
+): FlexiJointPlan {
+  const fused: FlexiJointPlan = {
+    center: joint.center,
+    axis: joint.axis,
+    ballRadiusMm: 0,
+    socketDepthMm: 0,
+    fused: true,
+  };
+  if (cap < FLEXI_MIN_BALL_RADIUS_MM) {
+    return fused;
+  }
+  const socketDepthMm = captureDepth(cap, clearance);
+  if (socketDepthMm === null) {
+    return fused;
+  }
+  return {
+    center: joint.center,
+    axis: joint.axis,
+    ballRadiusMm: cap,
+    socketDepthMm,
+    fused: false,
+  };
+}
+
+// Largest ball radius (≤ pitch/2.4) that keeps every pair of adjacent joint
+// spheres — including the tail-socket / head-ball pair inside one segment —
+// clear of each other by OVERLAP_MARGIN_MM. Uses the smallest gap between
+// consecutive joint stations, so live-adjacent joints (which are at least that
+// far apart) are always satisfied.
+function jointOverlapCap(
+  joints: FlexiJointPlan[],
+  pitch: number,
+  clearance: number,
+): number {
+  let minStationGap = Infinity;
+  for (let i = 1; i < joints.length; i += 1) {
+    minStationGap = Math.min(
+      minStationGap,
+      length(sub(joints[i].center, joints[i - 1].center)),
+    );
+  }
+  const distanceCap = Number.isFinite(minStationGap)
+    ? (minStationGap - clearance - OVERLAP_MARGIN_MM) / 2
+    : Infinity;
+  return Math.min(pitch / 2.4, distanceCap);
+}
+
+/** Socket face depth (h) that captures the ball, or null if none does. */
+function captureDepth(
+  ballRadiusMm: number,
+  clearanceMm: number,
+): number | null {
+  const captureLimit = ballRadiusMm - FLEXI_CAPTURE_MARGIN_MM;
+  for (const depthFactor of [SOCKET_DEPTH_FACTOR, SOCKET_DEPTH_FACTOR_MAX]) {
+    const socketDepthMm = depthFactor * ballRadiusMm;
+    if (
+      socketMouthRadius(ballRadiusMm, clearanceMm, socketDepthMm) <=
+      captureLimit
+    ) {
+      return socketDepthMm;
+    }
+  }
+  return null;
+}
+
+/**
+ * Socket mouth opening radius for a ball radius `r`, clearance `c` and socket
+ * face depth `h`: the socket cavity has radius `r + c` centred on the joint and
+ * its mouth is the circle where that sphere meets the face plane `h` behind the
+ * centre — `sqrt((r + c)^2 - h^2)`.
+ */
+export function socketMouthRadius(
+  ballRadiusMm: number,
+  clearanceMm: number,
+  socketDepthMm: number,
+): number {
+  const socketRadius = ballRadiusMm + clearanceMm;
+  const inner = socketRadius * socketRadius - socketDepthMm * socketDepthMm;
+  return inner > 0 ? Math.sqrt(inner) : 0;
+}
+
+// The socket sphere (radius r+c, centred on the joint) must stay a wall
+// thickness inside the body across its whole axial reach ±(r+c), not just at the
+// cut plane — a socket carved through the skin of a tapering body would print a
+// hole and let the ball escape.
+function socketContainedAlongReach(
+  profile: CrossSectionProfile,
+  ballRadiusMm: number,
+  clearanceMm: number,
+): boolean {
+  const reach = ballRadiusMm + clearanceMm;
+  for (let j = 0; j <= CONTAINMENT_SAMPLES; j += 1) {
+    const d = -reach + (2 * reach * j) / CONTAINMENT_SAMPLES;
+    const needed =
+      Math.sqrt(Math.max(0, reach * reach - d * d)) + FLEXI_MIN_SOCKET_WALL_MM;
+    if (needed > crossSectionAt(profile, d) + 1e-6) {
+      return false;
+    }
+  }
+  return true;
+}
+
+type CrossSectionProfile = {
+  // Axial bin index → per-direction max |projection| and the point count.
+  bins: Map<number, { dirMax: Float64Array; count: number }>;
+  cos: Float64Array;
+  sin: Float64Array;
+};
+
+// Bin every vertex by its axial offset from the joint, recording the maximum
+// |projection| onto each of a fan of cross-section directions. Cheap to query at
+// any offset afterwards (one pass over the vertices, O(V × directions)).
+function buildCrossSectionProfile(
+  positions: Float32Array,
+  center: Vec3,
+  tangent: Vec3,
+  frame: SpineFrame,
+): CrossSectionProfile {
+  const cos = new Float64Array(CROSS_SECTION_DIRECTIONS);
+  const sin = new Float64Array(CROSS_SECTION_DIRECTIONS);
+  for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
+    const angle = (Math.PI * k) / CROSS_SECTION_DIRECTIONS;
+    cos[k] = Math.cos(angle);
+    sin[k] = Math.sin(angle);
+  }
+
+  const bins = new Map<number, { dirMax: Float64Array; count: number }>();
+  const vertexCount = Math.floor(positions.length / 3);
+  for (let i = 0; i < vertexCount; i += 1) {
+    const relX = positions[i * 3] - center[0];
+    const relY = positions[i * 3 + 1] - center[1];
+    const relZ = positions[i * 3 + 2] - center[2];
+    const d = relX * tangent[0] + relY * tangent[1] + relZ * tangent[2];
+    const x = relX * frame.e1[0] + relY * frame.e1[1] + relZ * frame.e1[2];
+    const y = relX * frame.e2[0] + relY * frame.e2[1] + relZ * frame.e2[2];
+    const binIndex = Math.round(d / PROFILE_BIN_MM);
+    let bin = bins.get(binIndex);
+    if (!bin) {
+      bin = { dirMax: new Float64Array(CROSS_SECTION_DIRECTIONS), count: 0 };
+      bins.set(binIndex, bin);
+    }
+    for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
+      const projection = Math.abs(x * cos[k] + y * sin[k]);
+      if (projection > bin.dirMax[k]) bin.dirMax[k] = projection;
+    }
+    bin.count += 1;
+  }
+  return { bins, cos, sin };
+}
+
+// ρ(d): thinnest-direction half-extent of the cross-section in a slab centred at
+// axial offset d. The slab widens (1→2→3mm) until it holds enough points so a
+// coarse mesh cannot leave a mid-body slab spuriously empty; empty even at the
+// widest ⇒ 0 (past the end of the body).
+function crossSectionAt(profile: CrossSectionProfile, d: number): number {
+  const { bins } = profile;
+  let lastDirMax: Float64Array | null = null;
+  let lastCount = 0;
+  for (const halfWidth of SLAB_WIDEN_HALF_WIDTHS) {
+    const lo = Math.round((d - halfWidth) / PROFILE_BIN_MM);
+    const hi = Math.round((d + halfWidth) / PROFILE_BIN_MM);
+    const dirMax = new Float64Array(CROSS_SECTION_DIRECTIONS);
+    let count = 0;
+    for (let binIndex = lo; binIndex <= hi; binIndex += 1) {
+      const bin = bins.get(binIndex);
+      if (!bin) continue;
+      count += bin.count;
+      for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
+        if (bin.dirMax[k] > dirMax[k]) dirMax[k] = bin.dirMax[k];
+      }
+    }
+    lastDirMax = dirMax;
+    lastCount = count;
+    if (count >= MIN_SLAB_POINTS) return minOfArray(dirMax);
+  }
+  return lastCount > 0 && lastDirMax ? minOfArray(lastDirMax) : 0;
+}
+
+function minOfArray(values: Float64Array): number {
+  let min = Infinity;
+  for (let i = 0; i < values.length; i += 1) {
+    if (values[i] < min) min = values[i];
+  }
+  return Number.isFinite(min) ? min : 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}

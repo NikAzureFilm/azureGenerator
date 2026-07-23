@@ -9,8 +9,16 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-import { Layers, Loader2, Palette } from 'lucide-react';
-import { ReactNode, useCallback, useMemo, useRef, useState } from 'react';
+import { Layers, Loader2, Palette, Worm } from 'lucide-react';
+import {
+  lazy,
+  ReactNode,
+  Suspense,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import posthog from 'posthog-js';
 import {
   processUserModelForDownload,
@@ -37,6 +45,14 @@ import {
   type ThreeMfSemanticMaterialMap,
 } from '@/utils/threeMfExport';
 import { ThreeMfColorPrintDialog } from './ThreeMfColorPrintDialog';
+
+// Lazy so the manifold worker + flexi dialog stay out of the main bundle and
+// only load when a user actually opens the Flexi Toy Maker.
+const FlexiToyDialog = lazy(() =>
+  import('./FlexiToyDialog').then((module) => ({
+    default: module.FlexiToyDialog,
+  })),
+);
 
 // Default values for material controls
 const DEFAULT_BRIGHTNESS = 50;
@@ -120,6 +136,7 @@ export function DownloadMenu({
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isColorPrintDialogOpen, setIsColorPrintDialogOpen] = useState(false);
+  const [isFlexiDialogOpen, setIsFlexiDialogOpen] = useState(false);
   const [colorPrintMode, setColorPrintMode] = useState<
     'classic' | 'fullSpectrum'
   >('classic');
@@ -791,6 +808,15 @@ export function DownloadMenu({
     filename,
   ]);
 
+  const openFlexiToyDialog = useCallback(() => {
+    posthog.capture('flexi_toy_dialog_opened', {
+      meshId: meshData.id,
+      conversation_id: conversation.id,
+    });
+    setIsDropdownOpen(false);
+    setIsFlexiDialogOpen(true);
+  }, [conversation.id, meshData.id]);
+
   const openColorPrintDialog = useCallback(
     (mode: 'classic' | 'fullSpectrum') => {
       posthog.capture('3mf_color_print_dialog_open', {
@@ -885,6 +911,28 @@ export function DownloadMenu({
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {/* Flexi Toy sits beside the color-print export with the same accent
+              treatment — it is the other marquee "make something printable" flow. */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.preventDefault();
+              openFlexiToyDialog();
+            }}
+            className="cursor-pointer rounded border border-adam-blue/40 bg-adam-blue/5 text-adam-blue focus:bg-adam-blue/10 data-[state=open]:bg-adam-blue/10"
+          >
+            <Worm className="mr-2 h-4 w-4" />
+            <div className="flex flex-col">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                Flexi Toy
+                <span className="rounded bg-adam-blue/20 px-1 py-0.5 text-[9px] uppercase tracking-wide text-adam-blue">
+                  Beta
+                </span>
+              </span>
+              <span className="text-xs text-adam-blue/70">
+                Print-in-place articulated toy
+              </span>
+            </div>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
@@ -974,6 +1022,16 @@ export function DownloadMenu({
           download3MF(colorCount, { colorDetail, coloredMesh, fullSpectrum })
         }
       />
+      {isFlexiDialogOpen ? (
+        <Suspense fallback={null}>
+          <FlexiToyDialog
+            open={isFlexiDialogOpen}
+            onOpenChange={setIsFlexiDialogOpen}
+            gltf={gltf}
+            filenameBase={filename}
+          />
+        </Suspense>
+      ) : null}
       <div
         className="pointer-events-none fixed -left-[1000px] -top-[1000px] z-[-1]"
         style={{
