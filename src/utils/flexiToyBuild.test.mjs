@@ -598,19 +598,69 @@ assert.equal(
   'torus reports a clean rounded-uncut error',
 );
 
-// --- Part D: single-color 3MF export (no interior colors) ------------------
+// --- Part D: colored 3MF export (matches the preview colors) ---------------
 
-// Give the capsule result deliberately varied vertex colors; the 3MF must still
-// be a single neutral color with every triangle on slot 0 (preview keeps colors,
-// export does not).
+// Read the packaged object model out of a flexi 3MF blob.
+const readObjectModelXml = async (blob) => {
+  const reader = new ZipReader(new BlobReader(blob));
+  const entries = await reader.getEntries();
+  const entry = entries.find(
+    (item) => item.filename === '3D/Objects/Object_1_1.model',
+  );
+  assert.ok(entry, 'packaged object model is present');
+  const xml = await entry.getData(new TextWriter());
+  await reader.close();
+  return xml;
+};
+
+const paletteOf = (xml) =>
+  [...xml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g)].map(
+    (m) => m[1].toUpperCase(),
+  );
+const slotsOf = (xml) =>
+  [...xml.matchAll(/<triangle\b[^>]*\bp1="(\d+)"/g)].map((m) => Number(m[1]));
+const rgbOf = (hex) => [
+  parseInt(hex.slice(1, 3), 16),
+  parseInt(hex.slice(3, 5), 16),
+  parseInt(hex.slice(5, 7), 16),
+];
+
+// Paint the capsule result in two clearly distinct halves (red tail / blue head)
+// along its widest axis; the export must carry both into filament slots.
+const vertexCount = result.positions.length / 3;
+let widestAxis = 0;
+let widestSpan = -Infinity;
+for (let axis = 0; axis < 3; axis += 1) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let v = 0; v < vertexCount; v += 1) {
+    const value = result.positions[v * 3 + axis];
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  if (max - min > widestSpan) {
+    widestSpan = max - min;
+    widestAxis = axis;
+  }
+}
+let axisMin = Infinity;
+let axisMax = -Infinity;
+for (let v = 0; v < vertexCount; v += 1) {
+  const value = result.positions[v * 3 + widestAxis];
+  if (value < axisMin) axisMin = value;
+  if (value > axisMax) axisMax = value;
+}
+const axisMid = (axisMin + axisMax) / 2;
+
 const coloredResult = {
   ...result,
   colors: (() => {
     const c = new Float32Array(result.colors.length);
-    for (let v = 0; v < c.length / 3; v += 1) {
-      c[v * 3] = (v % 3) / 2;
-      c[v * 3 + 1] = ((v + 1) % 3) / 2;
-      c[v * 3 + 2] = ((v + 2) % 3) / 2;
+    for (let v = 0; v < vertexCount; v += 1) {
+      const head = result.positions[v * 3 + widestAxis] >= axisMid;
+      c[v * 3] = head ? 0 : 1;
+      c[v * 3 + 1] = 0;
+      c[v * 3 + 2] = head ? 1 : 0;
     }
     return c;
   })(),
@@ -618,29 +668,57 @@ const coloredResult = {
 const threeMfBlob = await flexiResultToThreeMfBlob(coloredResult, 'flexi-toy');
 assert.equal(threeMfBlob.type, 'model/3mf', '3MF blob has the right MIME type');
 
-const zipReader = new ZipReader(new BlobReader(threeMfBlob));
-const zipEntries = await zipReader.getEntries();
-const objectEntry = zipEntries.find(
-  (entry) => entry.filename === '3D/Objects/Object_1_1.model',
-);
-assert.ok(objectEntry, 'packaged object model is present');
-const objectXml = await objectEntry.getData(new TextWriter());
-
-// Exactly one material color, and it is the neutral grey.
-const baseColors = [
-  ...objectXml.matchAll(/\bdisplaycolor="(#[0-9A-Fa-f]{6})[0-9A-Fa-f]{2}"/g),
-].map((m) => m[1].toUpperCase());
-assert.deepEqual(baseColors, ['#D8D8D8'], 'single neutral palette color');
-
-// Every triangle references color slot 0.
-const colorIndexes = [
-  ...objectXml.matchAll(/<triangle\b[^>]*\bp1="(\d+)"/g),
-].map((m) => Number(m[1]));
-assert.ok(colorIndexes.length > 0, '3MF has triangles');
+const objectXml = await readObjectModelXml(threeMfBlob);
+const palette = paletteOf(objectXml);
 assert.ok(
-  colorIndexes.every((index) => index === 0),
-  'every triangle is on the single color slot 0',
+  palette.length >= 2 && palette.length <= 4,
+  `colored export quantizes to 2..4 filament slots (got ${palette.length})`,
 );
-await zipReader.close();
+assert.ok(
+  palette.some((hex) => {
+    const [r, g, b] = rgbOf(hex);
+    return r > 180 && g < 90 && b < 90;
+  }),
+  'the red half reaches the exported palette',
+);
+assert.ok(
+  palette.some((hex) => {
+    const [r, g, b] = rgbOf(hex);
+    return b > 180 && r < 90 && g < 90;
+  }),
+  'the blue half reaches the exported palette',
+);
+
+const colorIndexes = slotsOf(objectXml);
+assert.equal(
+  colorIndexes.length,
+  result.indices.length / 3,
+  'export keeps every triangle — no fusion struts were added',
+);
+assert.ok(
+  new Set(colorIndexes).size >= 2,
+  'triangles are spread across more than one filament slot',
+);
+assert.ok(
+  colorIndexes.every((index) => index < palette.length),
+  'every triangle references a real palette slot',
+);
+
+// A result with no usable color data still exports as one neutral grey slot.
+const uncoloredXml = await readObjectModelXml(
+  await flexiResultToThreeMfBlob(
+    { ...result, colors: new Float32Array(0) },
+    'flexi-toy',
+  ),
+);
+assert.deepEqual(
+  paletteOf(uncoloredXml),
+  ['#D8D8D8'],
+  'colorless result falls back to a single neutral palette color',
+);
+assert.ok(
+  slotsOf(uncoloredXml).every((index) => index === 0),
+  'colorless fallback puts every triangle on slot 0',
+);
 
 console.log('flexiToyBuild.test.mjs: all assertions passed');

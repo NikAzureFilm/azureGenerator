@@ -9,25 +9,29 @@
  *
  * - STL: binary, written directly from the arrays in three.js (y-up) space,
  *   matching the app's existing STLExporter orientation. No re-repair/re-scale.
- * - 3MF: a single neutral color for the whole object (no per-triangle quantised
- *   colors — the user asked for no colors baked inside the print). Packaged with
- *   `createThreeMfBlobFromColoredMesh`, which takes precomputed data and does not
- *   re-repair. The packaging helper converts y-up→z-up internally, so we pass
- *   three.js-space coordinates. The live PREVIEW still uses the baked per-vertex
- *   colors carried on the result — only the exported 3MF is single-color.
+ * - 3MF: the model's baked colors, quantised to filament slots exactly the way
+ *   the main 3MF export does, so the download matches what the preview shows.
+ *   Packaged with `createThreeMfBlobFromColoredMesh`, which takes precomputed
+ *   data and does not re-repair; the palette work runs through
+ *   `buildThreeMfColoredMeshFromTriangleColors`, the body-preserving sibling of
+ *   `computeThreeMfColoredMesh`. The packaging helper converts y-up→z-up
+ *   internally, so we pass three.js-space coordinates. A result with no usable
+ *   color data falls back to a single neutral grey.
  */
 
 import * as THREE from 'three';
 import {
+  buildThreeMfColoredMeshFromTriangleColors,
   createThreeMfBlobFromColoredMesh,
   clampThreeMfColorCount,
+  DEFAULT_THREE_MF_COLOR_COUNT,
   type ThreeMfColoredMesh,
   type ThreeMfTriangle,
 } from './threeMfExport.ts';
 import type { FlexiToyResult } from './flexiToyTypes.ts';
 
-// Neutral light-grey printed for the whole object. Padded to the packaging
-// palette floor if needed, but every triangle references slot 0.
+// Fallback for a result that carries no per-vertex colors: one neutral
+// light-grey slot with every triangle on it.
 const FLEXI_3MF_COLOR = '#D8D8D8';
 
 /** Binary STL blob written directly from the result arrays (three.js y-up, mm). */
@@ -83,14 +87,16 @@ export function flexiResultToStlBlob(result: FlexiToyResult): Blob {
 }
 
 /**
- * Single-color 3MF blob for the result (no interior colors). Segments stay
+ * Colored 3MF blob for the result: the baked per-vertex colors the preview
+ * shows, quantised to at most `colorCount` filament slots. Segments stay
  * separate — no body fusion.
  */
 export function flexiResultToThreeMfBlob(
   result: FlexiToyResult,
   filename: string,
+  colorCount: number = DEFAULT_THREE_MF_COLOR_COUNT,
 ): Promise<Blob> {
-  const { positions, indices } = result;
+  const { positions, indices, colors } = result;
   const vertexCount = Math.floor(positions.length / 3);
   const triangleCount = Math.floor(indices.length / 3);
 
@@ -103,7 +109,57 @@ export function flexiResultToThreeMfBlob(
     ];
   }
 
-  // Every triangle references the single neutral slot; no quantization.
+  const hasColors = Boolean(colors) && colors.length === vertexCount * 3;
+  const coloredMesh = hasColors
+    ? buildThreeMfColoredMeshFromTriangleColors({
+        vertices,
+        triangles: buildTriangleColors(indices, colors, triangleCount),
+        colorCount,
+      })
+    : buildNeutralColoredMesh(vertices, indices, triangleCount);
+
+  return createThreeMfBlobFromColoredMesh({ coloredMesh, filename });
+}
+
+/**
+ * One color per triangle, averaged from its three corners — the same value the
+ * preview shades that face with. Cut faces carry the colors manifold
+ * interpolated onto them during the boolean, so joints blend with their segment.
+ */
+function buildTriangleColors(
+  indices: Uint32Array,
+  colors: Float32Array,
+  triangleCount: number,
+): Array<Omit<ThreeMfTriangle, 'colorIndex'> & { color: THREE.Color }> {
+  const triangles: Array<
+    Omit<ThreeMfTriangle, 'colorIndex'> & { color: THREE.Color }
+  > = new Array(triangleCount);
+
+  for (let t = 0; t < triangleCount; t += 1) {
+    const v1 = indices[t * 3];
+    const v2 = indices[t * 3 + 1];
+    const v3 = indices[t * 3 + 2];
+    triangles[t] = {
+      v1,
+      v2,
+      v3,
+      color: new THREE.Color(
+        (colors[v1 * 3] + colors[v2 * 3] + colors[v3 * 3]) / 3,
+        (colors[v1 * 3 + 1] + colors[v2 * 3 + 1] + colors[v3 * 3 + 1]) / 3,
+        (colors[v1 * 3 + 2] + colors[v2 * 3 + 2] + colors[v3 * 3 + 2]) / 3,
+      ),
+    };
+  }
+
+  return triangles;
+}
+
+/** Fallback mesh for a result without usable colors: one neutral grey slot. */
+function buildNeutralColoredMesh(
+  vertices: [number, number, number][],
+  indices: Uint32Array,
+  triangleCount: number,
+): ThreeMfColoredMesh {
   const triangles: ThreeMfTriangle[] = new Array(triangleCount);
   for (let t = 0; t < triangleCount; t += 1) {
     triangles[t] = {
@@ -115,14 +171,11 @@ export function flexiResultToThreeMfBlob(
   }
 
   // Pad the palette to the packaging floor if it requires ≥1 (it clamps to 1),
-  // but keep all triangles on slot 0 so nothing colors the interior.
+  // but keep all triangles on slot 0.
   const paletteLength = Math.max(1, clampThreeMfColorCount(1));
-  const palette: string[] = new Array(paletteLength).fill(FLEXI_3MF_COLOR);
-
-  const coloredMesh: ThreeMfColoredMesh = {
+  return {
     vertices,
     triangles,
-    palette,
+    palette: new Array(paletteLength).fill(FLEXI_3MF_COLOR),
   };
-  return createThreeMfBlobFromColoredMesh({ coloredMesh, filename });
 }

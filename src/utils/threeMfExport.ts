@@ -851,6 +851,58 @@ export async function computeThreeMfColoredMesh({
   };
 }
 
+/**
+ * Build a colored mesh from geometry that ALREADY carries a color per triangle.
+ *
+ * Same palette pipeline as `computeThreeMfColoredMesh` (quantize → nearest slot
+ * → small-island smoothing → drop unused slots) but without scene extraction,
+ * printable repair, or `connectMeshComponents`. Callers whose geometry must keep
+ * its disconnected bodies — the Flexi Toy result, whose segments would be welded
+ * solid by the connector — use this instead of the scene path.
+ */
+export function buildThreeMfColoredMeshFromTriangleColors({
+  vertices,
+  triangles,
+  colorCount,
+  colorDetail = DEFAULT_THREE_MF_COLOR_DETAIL,
+}: {
+  vertices: VectorTuple[];
+  triangles: Array<
+    Omit<ThreeMfTriangle, 'colorIndex'> & { color: THREE.Color }
+  >;
+  colorCount: number;
+  colorDetail?: number;
+}): ThreeMfColoredMesh {
+  const detailSettings = getThreeMfColorDetailSettings(colorDetail);
+  const palette = quantizeTriangleColors(
+    triangles.map((triangle) => ({
+      color: triangle.color,
+      weight: getTriangleArea(vertices, triangle),
+    })),
+    clampThreeMfColorCount(colorCount),
+  );
+
+  const indexedTriangles = triangles.map((triangle) => ({
+    v1: triangle.v1,
+    v2: triangle.v2,
+    v3: triangle.v3,
+    colorIndex: findNearestPaletteIndex(triangle.color, palette),
+  }));
+  const smoothedTriangles = smoothTriangleColorIndexes(
+    indexedTriangles,
+    palette,
+    detailSettings,
+  );
+  const { palette: usedPalette, triangles: outputTriangles } =
+    removeUnusedPaletteEntries(palette, smoothedTriangles);
+
+  return {
+    vertices,
+    triangles: outputTriangles,
+    palette: usedPalette.map(colorToHex),
+  };
+}
+
 export async function createThreeMfBlobFromColoredMesh({
   coloredMesh,
   filename,
