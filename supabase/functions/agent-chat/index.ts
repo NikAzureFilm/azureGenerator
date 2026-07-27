@@ -148,7 +148,7 @@ async function formatAgentUserMessage(
 
     parts.push({
       type: 'text',
-      text: `Here are the image(s) with the following ID(s) respectively: ${message.content.images.join(', ')}`,
+      text: `The user attached the following reference image(s), with these ids respectively: ${message.content.images.join(', ')}. Pass an id as baseImageId to generate_concept_image to build the concept on that reference.`,
     });
     parts.push(
       ...base64Images.map((image) => ({
@@ -263,6 +263,12 @@ async function formatAgentAssistantMessage(
 
 const systemPrompt = `You are the AzureFilm Generator design agent. Your job is to have a short back-and-forth conversation with the user to figure out exactly what 3D object they want, visualize it with concept images, and decide which generation pipeline fits best. You do NOT generate the 3D model yourself — the user clicks a Generate button once a recommendation exists.
 
+The user can attach reference images (photos, sketches, screenshots, renders) to any message; each attachment is shown to you with its image id. When a message has attachments:
+- Look at them before anything else — they state the intent better than the text does. Say in one short sentence what you see, and never ask about something the image already answers.
+- Pass the attachment's image id as baseImageId to generate_concept_image so the concept keeps the subject, proportions, and distinctive markings of the reference instead of inventing a new object. Only start fresh (no baseImageId) when the user explicitly wants something different from what they attached.
+- The reference is the design target, not the art direction: the concept still has to come back as a printable single-piece 3D object render, even when the attachment is a photo, a scene, or flat artwork.
+- If a reference is unusable (too blurry, several objects, unclear which part matters), say so and ask which part to build with ask_user.
+
 Workflow:
 1. If the request is ambiguous, clarify first — but ALWAYS via the ask_user tool, never as plain text: pass the question plus 2-4 short likely answers as options (the user can also type their own). Ask at most 1-2 questions before showing something (size, style, purpose, must-have features). If the request is already clear, skip straight to an image.
 2. When the object must match real-world hardware, standards, or products (phone models, camera mounts, screw threads, brand items, dimensions you don't know), use web_search FIRST to get the facts right. Never invent dimensions of real products.
@@ -291,7 +297,7 @@ const tools = [
     function: {
       name: 'generate_concept_image',
       description:
-        'Generates a polished three-dimensional concept render of the object being designed and shows it to the user. Pass a detailed visual description of a single centered 3D-printable object; practical CAD parts should use a three-quarter engineering-product view. To refine a previously generated concept, pass its image id as baseImageId — the new image preserves the identity of the base and applies only the described changes. The generated image is shown back to you in this same turn so you can review it and redo a flawed result.',
+        'Generates a polished three-dimensional concept render of the object being designed and shows it to the user. Pass a detailed visual description of a single centered 3D-printable object; practical CAD parts should use a three-quarter engineering-product view. To refine a previously generated concept, or to build on an image the user attached, pass that image id as baseImageId — the new image preserves the identity of the base and applies only the described changes. The generated image is shown back to you in this same turn so you can review it and redo a flawed result.',
       parameters: {
         type: 'object',
         properties: {
@@ -303,7 +309,7 @@ const tools = [
           baseImageId: {
             type: 'string',
             description:
-              'Optional id of an earlier concept image to refine instead of starting fresh.',
+              'Optional id of an image already in this conversation to build on instead of starting fresh — either an earlier concept image or a reference image the user attached.',
           },
         },
         required: ['prompt'],

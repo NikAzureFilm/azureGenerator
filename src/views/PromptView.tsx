@@ -327,6 +327,10 @@ export function PromptView() {
                 {type === 'agent' ? (
                   <AgentComposer
                     onSubmit={handleGenerate}
+                    conversation={{
+                      id: newConversationId,
+                      user_id: user?.id ?? '',
+                    }}
                     disabled={limitReached}
                     onFocus={() => {
                       if (!user) {

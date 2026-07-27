@@ -117,14 +117,23 @@ export function AgentEditorView() {
     return undefined;
   }, [currentMessageBranch]);
 
+  // The image handed off to the generation pipeline: the agent's latest
+  // concept render, or — when it never rendered one — the newest reference
+  // image the user attached.
   const conceptImageId = useMemo(() => {
+    let userImageId: string | undefined;
     for (let index = currentMessageBranch.length - 1; index >= 0; index -= 1) {
       const message = currentMessageBranch[index];
-      if (message.role === 'assistant' && message.content.images?.length) {
-        return message.content.images[message.content.images.length - 1];
+      const images = message.content.images;
+      if (!images?.length) continue;
+      if (message.role === 'assistant') {
+        return images[images.length - 1];
+      }
+      if (!userImageId) {
+        userImageId = images[images.length - 1];
       }
     }
-    return undefined;
+    return userImageId;
   }, [currentMessageBranch]);
 
   const lastUserText = useMemo(() => {
@@ -418,10 +427,14 @@ export function AgentEditorView() {
         )}
         <AgentComposer
           onSubmit={sendMessage}
+          conversation={{
+            id: conversation.id,
+            user_id: conversation.user_id,
+          }}
           isLoading={isLoading}
           disabled={limitReached}
           stopGenerating={stopGenerating}
-          placeholder="Describe or refine your idea..."
+          placeholder="Describe or refine your idea, or attach a reference image..."
         />
       </div>
     </div>
