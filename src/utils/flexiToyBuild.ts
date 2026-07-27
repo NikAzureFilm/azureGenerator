@@ -15,7 +15,10 @@
 
 import Module from 'manifold-3d';
 import type { ManifoldToplevel, Manifold, Vec3 } from 'manifold-3d';
-import { FLEXI_DEFAULT_JOINT_STYLE } from './flexiToyTypes.ts';
+import {
+  FLEXI_DEFAULT_JOINT_STYLE,
+  FLEXI_MIN_SOCKET_WALL_MM,
+} from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
   FlexiToySettings,
@@ -25,7 +28,7 @@ import type {
   FlexiToyWarning,
   FlexiToyOutcome,
 } from './flexiToyTypes.ts';
-import { crossSectionExtentsAt } from './flexiToyPlan.ts';
+import { crossSectionExtentsSampler } from './flexiToyPlan.ts';
 
 /** Non-superseded outcome the worker forwards to the main thread. */
 export type FlexiBuildOutcome = Exclude<
@@ -39,19 +42,21 @@ const SPHERE_SEGMENTS = 48;
 const ITK_REPAIR_MIN_TRIANGLES = 200;
 
 // --- Rounded (dome-in-dish) cutter tunables (see flexi-changes-v3 spec). ---
-const CUTTER_REVOLVE_SEGMENTS = 64;
+const CUTTER_REVOLVE_SEGMENTS = 96;
 // Arc sampling step (degrees) for the profile polygon.
 const CUTTER_ARC_STEP_DEG = 3;
 // Neck strength floor: neck half-angle ≥ asin(0.35) so the neck stays ≥ 0.35·r.
 const NECK_FLOOR_RAD = Math.asin(0.35);
-// Extra angular room past the mouth for the bowl before the brim flares out.
-const BOWL_MARGIN_RAD = (12 * Math.PI) / 180;
 // Overlap the shell θ-ranges by this so boolean seams never coincide (a shared
 // seam vertex reads as a zero-distance touch between the two segments).
 const SHELL_OVERLAP_RAD = (3 * Math.PI) / 180;
-// Brim outer radius as a multiple of the local body radius, so the plate exits
-// the skin (the visible groove) but not much further.
-const BRIM_PLATE_FACTOR = 1.25;
+// The visible groove floor sits just inside the thinnest local half-extent, so
+// the skin band of the gap wedge stays centred on the cut plane in every
+// direction the body allows.
+const GROOVE_FLOOR_FACTOR = 0.92;
+// The gap wedge's outer radius clears the widest local half-extent by this
+// factor so the band always punches through the skin (fins included).
+const GROOVE_OUT_FACTOR = 1.15;
 
 let cachedWasm: Promise<ManifoldToplevel> | null = null;
 
@@ -510,25 +515,71 @@ function buildRoundedSegments(
   // body doesn't pile up full-body copies (only the running cut is retained).
   let cut = body;
   for (const joint of cutJoints) {
-    // Brim radius from the WIDEST cross-section direction so the plate exits the
-    // skin even on a tall/eccentric section; containment (min direction) is
-    // enforced in planning.
-    const extents = crossSectionExtentsAt(
+    // Groove floor from the THINNEST cross-section direction at the cut plane;
+    // wedge outer radius from the WIDEST direction over the wedge's whole
+    // axial band, so the gap punches through the skin (fins included) even on
+    // a tall/eccentric or locally bulging section. One profile pass per joint;
+    // band queries against it are just bin scans.
+    const measure = crossSectionExtentsSampler(
       meshInput.positions,
       joint.center,
       joint.axis,
     );
-    if (!(extents.maxMm > 0)) {
+    const planeExtents = measure();
+    if (!(planeExtents.maxMm > 0)) {
+      if (cut !== body) cut.delete();
       return null;
     }
-    const cutter = buildRoundedCutter(
-      wasm,
-      joint,
-      clearance,
-      bendAngleDeg,
-      extents.maxMm,
-    );
+    const angles = roundedGapAngles(joint, clearance, bendAngleDeg);
+    if (!angles) {
+      if (cut !== body) cut.delete();
+      return null;
+    }
+    // Never let a (truncated, tail-tilted) wedge reach into a neighbouring
+    // joint's cup: cap its tailward reach at the nearest station minus that
+    // joint's cup wall.
+    const index = cutJoints.indexOf(joint);
+    let maxTailReach = Infinity;
+    for (const other of [cutJoints[index - 1], cutJoints[index + 1]]) {
+      if (!other) continue;
+      const dx = other.center[0] - joint.center[0];
+      const dy = other.center[1] - joint.center[1];
+      const dz = other.center[2] - joint.center[2];
+      const distance = Math.hypot(dx, dy, dz);
+      const otherCup =
+        other.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
+      maxTailReach = Math.min(maxTailReach, distance - otherCup - 1);
+    }
+    // Solve the wedge, re-measure the body over the axial band that wedge
+    // actually sweeps, and iterate until the outer radius stabilises — a body
+    // flaring steeply next to the cut can otherwise outgrow a one-pass band
+    // and bury the groove under the flare.
+    let wedge = solveRoundedWedge(angles, joint, clearance, {
+      floorMm: planeExtents.minMm,
+      outMm: planeExtents.maxMm,
+      maxTailReachMm: maxTailReach,
+    });
+    for (let pass = 0; pass < 4; pass += 1) {
+      const bandHalfWidth =
+        wedge.r3 *
+          Math.max(
+            Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD),
+            Math.cos(wedge.thetaEnd),
+          ) +
+        2;
+      const bandExtents = measure(bandHalfWidth);
+      const next = solveRoundedWedge(angles, joint, clearance, {
+        floorMm: planeExtents.minMm,
+        outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+        maxTailReachMm: maxTailReach,
+      });
+      const settled = Math.abs(next.r3 - wedge.r3) < 0.25;
+      wedge = next;
+      if (settled) break;
+    }
+    const cutter = buildRoundedCutter(wasm, joint, clearance, angles, wedge);
     if (!cutter) {
+      if (cut !== body) cut.delete();
       return null;
     }
     const next = cut.subtract(cutter);
@@ -578,74 +629,247 @@ function buildRoundedSegments(
   return groups;
 }
 
+type RoundedGapAngles = {
+  /** Neck half-angle (tail face of the gap at the cup). */
+  alpha: number;
+  /** Socket mouth angle from the capture criterion. */
+  thetaMouth: number;
+  /** Per-radius angular gap between the two faces (travel + seam overlap). */
+  gapAngle: number;
+};
+
+// The rounded gap is bounded by two surfaces of revolution about the joint
+// axis. A rotation about the joint centre preserves each point's distance R to
+// the centre, so the segments clear a bend of β iff the ANGULAR gap between
+// the faces is ≥ β at every radius — the faces need not be global cones or
+// spheres. Travel is θ_mouth − α (neck meets the cup rim first), same as the
+// plan's contract.
+function roundedGapAngles(
+  joint: FlexiJointPlan,
+  clearance: number,
+  bendAngleDeg: number,
+): RoundedGapAngles | null {
+  const rc = joint.ballRadiusMm + clearance;
+  const bend = (bendAngleDeg * Math.PI) / 180;
+  const thetaMouth = Math.acos(
+    Math.min(1, Math.max(0, joint.socketDepthMm / rc)),
+  );
+  const alpha = Math.max(NECK_FLOOR_RAD, thetaMouth - bend);
+  if (!(thetaMouth > alpha)) {
+    return null;
+  }
+  return {
+    alpha,
+    thetaMouth,
+    gapAngle: thetaMouth - alpha + SHELL_OVERLAP_RAD,
+  };
+}
+
+type RoundedWedge = {
+  /** Cup outer wall radius — the rise starts here. */
+  r1: number;
+  /** Rise slope dθ/dR in rad/mm (0 = the mouth cone runs all the way out). */
+  slope: number;
+  /** Radius where the tail face reaches the cut-plane band (∞ if truncated). */
+  r2Knot: number;
+  /** Outer radius of the wedge (beyond the skin along its exit direction). */
+  r3: number;
+  /** Tail-face angle actually reached at r3. */
+  thetaEnd: number;
+};
+
+// Solve the gap-wedge profile radii for a joint. The two faces are the same
+// profile offset by gapAngle about the joint centre, so a steep rise slides
+// them along each other and the printed gap between the segments collapses:
+// normal separation ≈ R·g / √(1 + (R·θ′)²). The rise slope is capped so the
+// faces stay at least a clearance apart (worst at the rise's inner radius r1).
+// When the capped rise cannot reach the cut-plane band inside the body
+// (small/low-bend joints), the band is TRUNCATED: it climbs as far as the cap
+// allows and the outer radius is grown until the tilted band still punches
+// through the skin (skin distance along the exit direction ≈ out/sin(exit)) —
+// otherwise the gap would seal inside the body and the printed parts would
+// fuse. `maxTailReachMm` caps that growth so a truncated wedge can never carve
+// into a neighbouring joint's cup; if the cap wins, the cut may fail to sever
+// and the build surfaces the existing 'rounded-uncut' error instead.
+function solveRoundedWedge(
+  angles: RoundedGapAngles,
+  joint: FlexiJointPlan,
+  clearance: number,
+  extents: { floorMm: number; outMm: number; maxTailReachMm: number },
+): RoundedWedge {
+  const { alpha, gapAngle } = angles;
+  const half = gapAngle / 2;
+  const bandLo = Math.PI / 2 - half;
+  const riseTotal = Math.max(0, bandLo - alpha);
+  const r1 = joint.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
+  const outerBase = GROOVE_OUT_FACTOR * extents.outMm + joint.faceGapMm;
+  const slopeCap =
+    Math.sqrt(Math.max(0, ((r1 * gapAngle) / clearance) ** 2 - 1)) / r1;
+  const spanNeeded = slopeCap > 0 ? riseTotal / slopeCap : Infinity;
+  const floorR2 = Math.max(
+    r1 + 0.75,
+    GROOVE_FLOOR_FACTOR * extents.floorMm,
+    r1 + spanNeeded,
+  );
+
+  if (
+    riseTotal > 0 &&
+    Number.isFinite(spanNeeded) &&
+    floorR2 + 1 <= outerBase
+  ) {
+    // Full band: rise to the cut plane at the groove floor, exit near θ = 90°.
+    return {
+      r1,
+      slope: riseTotal / (floorR2 - r1),
+      r2Knot: floorR2,
+      r3: outerBase,
+      thetaEnd: bandLo,
+    };
+  }
+
+  // Truncated band: climb at the slope cap; fixed-point the outer radius so
+  // the tilted exit still clears the skin (required radius shrinks as r3 and
+  // therefore the exit angle grow — converges monotonically).
+  const slope = Number.isFinite(spanNeeded) ? slopeCap : 0;
+  const tailAt = (radius: number): number =>
+    Math.min(bandLo, alpha + slope * Math.max(0, radius - r1));
+  let r3 = outerBase;
+  for (let i = 0; i < 12; i += 1) {
+    const exit = Math.min(Math.PI / 2, tailAt(r3) + gapAngle);
+    r3 = Math.max(
+      r1 + 2,
+      outerBase,
+      (1.05 * extents.outMm) / Math.sin(exit) + joint.faceGapMm,
+    );
+  }
+  if (Number.isFinite(extents.maxTailReachMm)) {
+    r3 = Math.min(
+      r3,
+      Math.max(r1 + 2, extents.maxTailReachMm / Math.cos(alpha)),
+    );
+  }
+  return {
+    r1,
+    slope,
+    r2Knot: slope > 0 ? r1 + riseTotal / slope : Infinity,
+    r3,
+    thetaEnd: tailAt(r3),
+  };
+}
+
 // Build the per-joint cutter solid (native axis Z), then orient it onto the
 // joint axis and translate to the joint centre. Null on an invalid cutter. The
 // returned manifold is owned by the caller (all shell/union intermediates are
-// freed here). `brimRadius` is the widest local half-extent so the plate exits
-// the skin even on an eccentric cross-section.
+// freed here).
+//
+// Two revolved parts: the ball↔cup clearance shell, and a gap WEDGE between
+// two profile curves θ_tail(R) / θ_head(R) = θ_tail(R) + gapAngle. Near the
+// cup the wedge is the classic mouth cone (swing room for the neck, hidden
+// inside the body); from the cup wall the band rotates toward the cut plane
+// (as far as the wedge's solved slope allows) and runs out through the skin.
+// The visible groove is therefore centred on the cut ring, its width scales
+// with the local body radius times the travel angle (the physical minimum for
+// free bend), and it crosses the skin steeply — no grazing sphere, no
+// feathered lips. Per-radius angular gap is constant, so travel is exactly
+// the plan's θ_mouth − α everywhere.
 function buildRoundedCutter(
   wasm: ManifoldToplevel,
   joint: FlexiJointPlan,
   clearance: number,
-  bendAngleDeg: number,
-  brimRadius: number,
+  angles: RoundedGapAngles,
+  wedge: RoundedWedge,
 ): Manifold | null {
   const r = joint.ballRadiusMm;
-  const h = joint.socketDepthMm;
-  const c = clearance;
-  const gb = joint.faceGapMm;
-  const rc = r + c;
-  // The outer "plate" is a LARGE concentric sphere (radius > the local skin so it
-  // exits as the visible groove). Being concentric with the joint, its gap is
-  // rotation-invariant — the segments never collide there, so travel is limited
-  // only by the neck reaching the socket mouth (a flat plate would collide on
-  // bend at ~2°, defeating the whole point).
-  const rPlate = BRIM_PLATE_FACTOR * brimRadius;
-  const bend = (bendAngleDeg * Math.PI) / 180;
+  const rc = r + clearance;
+  const { alpha, gapAngle } = angles;
+  const { r1, slope, r2Knot, r3 } = wedge;
+  const bandLo = Math.PI / 2 - gapAngle / 2;
 
-  // θ_mouth from the socket depth (same capture criterion as planning), α_neck
-  // floored for strength.
-  const thetaMouth = Math.acos(Math.min(1, Math.max(0, h / rc)));
-  const alpha = Math.max(NECK_FLOOR_RAD, thetaMouth - bend);
-  // The plate sweeps from the mouth out past the equator so the large sphere
-  // definitely crosses (and exits) the skin near θ = 90°.
-  const thetaHi = Math.min(
-    Math.PI - 0.05,
-    Math.PI * 0.5 + bend + BOWL_MARGIN_RAD,
-  );
-  if (!(thetaMouth > alpha) || !(thetaHi > thetaMouth + SHELL_OVERLAP_RAD)) {
-    return null;
+  // Profile knots: ball surface → cup outer wall → band knee → outside.
+  const r0 = r;
+
+  // Tail-face angle by radius. The head face is tailAngle + gapAngle, which
+  // reproduces the old mouth opening θ_mouth + overlap at the cup rim exactly
+  // (capture is pinned against it in the plan tests).
+  const tailAngle = (radius: number): number => {
+    if (radius <= r1 || slope <= 0) return alpha;
+    return Math.min(bandLo, alpha + slope * (radius - r1));
+  };
+
+  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const point = (radius: number, theta: number): number[] => [
+    radius * Math.sin(theta),
+    -radius * Math.cos(theta),
+  ];
+
+  // Sample one face of the wedge from rFrom to rTo (either direction),
+  // splitting the rise span so angular steps stay ≤ CUTTER_ARC_STEP_DEG.
+  const facePoints = (
+    rFrom: number,
+    rTo: number,
+    offset: number,
+  ): number[][] => {
+    const knots = [r0, r1, r2Knot, r3].filter(
+      (k) =>
+        Number.isFinite(k) &&
+        k > Math.min(rFrom, rTo) &&
+        k < Math.max(rFrom, rTo),
+    );
+    const stops = [rFrom, ...knots, rTo];
+    if (rFrom > rTo) stops.sort((a, b) => b - a);
+    const points: number[][] = [];
+    for (let i = 0; i < stops.length - 1; i += 1) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      const sweep = Math.abs(tailAngle(b) - tailAngle(a));
+      const steps = Math.max(1, Math.ceil(sweep / stepRad));
+      for (let s2 = 0; s2 < steps; s2 += 1) {
+        const radius = a + ((b - a) * s2) / steps;
+        points.push(point(radius, tailAngle(radius) + offset));
+      }
+    }
+    points.push(point(rTo, tailAngle(rTo) + offset));
+    return points;
+  };
+
+  const arcPoints = (radius: number, t0: number, t1: number): number[][] => {
+    const steps = Math.max(1, Math.ceil(Math.abs(t1 - t0) / stepRad));
+    const points: number[][] = [];
+    for (let i = 1; i < steps; i += 1) {
+      points.push(point(radius, t0 + ((t1 - t0) * i) / steps));
+    }
+    return points;
+  };
+
+  // Closed wedge polygon: head face outward, outer cap, tail face inward,
+  // inner cap (along the ball surface, overlapping the cup shell radially).
+  const polygon: number[][] = [
+    ...facePoints(r0, r3, gapAngle),
+    ...arcPoints(r3, tailAngle(r3) + gapAngle, tailAngle(r3)),
+    ...facePoints(r3, r0, 0),
+    ...arcPoints(r0, alpha, alpha + gapAngle),
+  ];
+  let area = 0;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const [x1, y1] = polygon[i];
+    const [x2, y2] = polygon[(i + 1) % polygon.length];
+    area += x1 * y2 - x2 * y1;
   }
+  if (area < 0) polygon.reverse();
 
-  // Three simple revolved shells whose θ-ranges are overlapped by SHELL_OVERLAP
-  // so boolean seams do not coincide (a shared seam vertex reads as a
-  // zero-distance touch). The mouth shell therefore opens a hair past θ_mouth —
-  // capture is pinned against θ_mouth + SHELL_OVERLAP in the plan tests. All
-  // three gap surfaces are spheres concentric with the joint centre.
   const { CrossSection } = wasm;
-  const revolve = (polygon: number[][]): Manifold => {
-    const section = new CrossSection(polygon as [number, number][]);
+  const revolve = (poly: number[][]): Manifold => {
+    const section = new CrossSection(poly as [number, number][]);
     const solid = section.revolve(CUTTER_REVOLVE_SEGMENTS);
     section.delete();
     return solid;
   };
-  const parts = [
-    // Ball ↔ cup clearance gap around the captured ball.
-    revolve(shellWedge(r, rc, alpha, Math.PI)),
-    // Mouth: open swing room from the ball out to the plate for the neck.
-    revolve(shellWedge(r, rPlate + gb, alpha, thetaMouth + SHELL_OVERLAP_RAD)),
-    // Plate: the large concentric sphere gap that exits the skin.
-    revolve(
-      shellWedge(rPlate, rPlate + gb, thetaMouth - SHELL_OVERLAP_RAD, thetaHi),
-    ),
-  ];
-  let cutter = parts[0];
-  for (let i = 1; i < parts.length; i += 1) {
-    const unioned = cutter.add(parts[i]);
-    cutter.delete();
-    parts[i].delete();
-    cutter = unioned;
-  }
+  // Ball ↔ cup clearance gap around the captured ball, plus the gap wedge.
+  const cup = revolve(shellWedge(r, rc, alpha, Math.PI));
+  const wedgeSolid = revolve(polygon);
+  const cutter = cup.add(wedgeSolid);
+  cup.delete();
+  wedgeSolid.delete();
   if (cutter.status() !== 'NoError' || cutter.isEmpty()) {
     cutter.delete();
     return null;

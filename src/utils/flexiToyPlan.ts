@@ -926,18 +926,36 @@ function sizeJoint(
 
 /**
  * Local cross-section extents of the mesh at a joint station: `minMm` is the
- * thinnest-direction half-extent (used for socket containment), `maxMm` is the
- * widest-direction half-extent (used to size the rounded brim so it exits the
- * skin even on a tall/eccentric cross-section). Exported for the rounded build;
- * kept out of the frozen plan contract. NB: the build re-measures with its own
- * frame, so these can differ from the planner's sizing pass by a small amount
- * (different in-plane basis angles) — harmless, both bound the same body.
+ * thinnest-direction half-extent (used for socket containment and the rounded
+ * groove floor), `maxMm` is the widest-direction half-extent (used to size the
+ * rounded gap wedge so it exits the skin even on a tall/eccentric
+ * cross-section). `bandHalfWidthMm` widens the sampled slab to ±that many mm so
+ * the caller can bound the body over the wedge's whole axial reach, not just
+ * the cut plane. Exported for the rounded build; kept out of the frozen plan
+ * contract. NB: the build re-measures with its own frame, so these can differ
+ * from the planner's sizing pass by a small amount (different in-plane basis
+ * angles) — harmless, both bound the same body.
  */
 export function crossSectionExtentsAt(
   positions: Float32Array,
   center: [number, number, number],
   axis: [number, number, number],
+  bandHalfWidthMm?: number,
 ): { minMm: number; maxMm: number } {
+  return crossSectionExtentsSampler(positions, center, axis)(bandHalfWidthMm);
+}
+
+/**
+ * Same measurement as `crossSectionExtentsAt`, but the (expensive, one full
+ * pass over every vertex) profile is built once and the returned sampler can
+ * be queried at any number of band half-widths for the cost of a bin scan —
+ * the rounded build iterates its wedge radii to a fixed point per joint.
+ */
+export function crossSectionExtentsSampler(
+  positions: Float32Array,
+  center: [number, number, number],
+  axis: [number, number, number],
+): (bandHalfWidthMm?: number) => { minMm: number; maxMm: number } {
   const frame = buildAxisFrame(axis as Vec3);
   const profile = buildCrossSectionProfile(
     positions,
@@ -945,9 +963,15 @@ export function crossSectionExtentsAt(
     axis as Vec3,
     frame,
   );
-  return {
-    minMm: reduceCrossSectionAt(profile, 0, minOfArray),
-    maxMm: reduceCrossSectionAt(profile, 0, maxOfArray),
+  return (bandHalfWidthMm?: number) => {
+    const halfWidths =
+      bandHalfWidthMm !== undefined
+        ? [Math.max(bandHalfWidthMm, SLAB_WIDEN_HALF_WIDTHS[0])]
+        : undefined;
+    return {
+      minMm: reduceCrossSectionAt(profile, 0, minOfArray, halfWidths),
+      maxMm: reduceCrossSectionAt(profile, 0, maxOfArray, halfWidths),
+    };
   };
 }
 
@@ -1168,11 +1192,12 @@ function crossSectionAt(profile: CrossSectionProfile, d: number): number {
 function crossSectionDirMaxAt(
   profile: CrossSectionProfile,
   d: number,
+  halfWidths: number[] = SLAB_WIDEN_HALF_WIDTHS,
 ): Float64Array | null {
   const { bins } = profile;
   let lastDirMax: Float64Array | null = null;
   let lastCount = 0;
-  for (const halfWidth of SLAB_WIDEN_HALF_WIDTHS) {
+  for (const halfWidth of halfWidths) {
     const lo = Math.round((d - halfWidth) / PROFILE_BIN_MM);
     const hi = Math.round((d + halfWidth) / PROFILE_BIN_MM);
     const dirMax = new Float64Array(CROSS_SECTION_DIRECTIONS);
@@ -1196,8 +1221,9 @@ function reduceCrossSectionAt(
   profile: CrossSectionProfile,
   d: number,
   reducer: (values: Float64Array) => number,
+  halfWidths?: number[],
 ): number {
-  const dirMax = crossSectionDirMaxAt(profile, d);
+  const dirMax = crossSectionDirMaxAt(profile, d, halfWidths);
   return dirMax ? reducer(dirMax) : 0;
 }
 

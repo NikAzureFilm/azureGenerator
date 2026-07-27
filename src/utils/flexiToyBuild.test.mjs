@@ -580,6 +580,58 @@ assert.ok(
   'rounded eccentric: body count equals segment count',
 );
 
+// Truncated-band regression: a slim body at LOW bend with loose clearance makes
+// the rise slope cap bite (r1·gapAngle barely exceeds the clearance), so the
+// gap band cannot reach the cut plane inside the body. The wedge must still
+// punch through the skin along its tilted exit — before the fix this sealed
+// inside the body on export (segments looked cut but printed fused) — and the
+// printed gap between neighbours must stay at clearance scale.
+const slimSettings = {
+  ...baseSettings('rounded'),
+  segmentCount: 4,
+  clearanceMm: 0.55,
+  bendAngleDeg: 5,
+  targetLengthMm: 200,
+};
+const slimRaw = toInput(makeSpindle({ length: 200, maxRadius: 8, taper: 0.3 }));
+const slim = scaleForSettings(slimRaw, slimSettings);
+const slimPlan = planFlexiToy(slim, slimSettings);
+assert.ok(
+  slimPlan.joints.some((j) => !j.fused),
+  'slim low-bend: at least one live joint',
+);
+const slimOutcome = await buildFlexiToy(wasm, slim, slimPlan, slimSettings);
+assert.equal(
+  slimOutcome.status,
+  'ok',
+  `slim low-bend: builds ok (got ${slimOutcome.code ?? 'ok'})`,
+);
+assert.equal(
+  countBodies(slimOutcome.result.positions, slimOutcome.result.indices),
+  slimOutcome.result.segmentCount,
+  'slim low-bend: every cut fully severs (no skin bridge)',
+);
+{
+  const ranges = slimOutcome.result.segmentTriangleRanges;
+  const manifolds = ranges.map((range) =>
+    segmentManifold(
+      wasm,
+      slimOutcome.result.positions,
+      slimOutcome.result.indices,
+      range,
+    ),
+  );
+  const minSlimGap = 0.9 * Math.min(slimSettings.clearanceMm, 0.55);
+  for (let i = 1; i < manifolds.length; i += 1) {
+    const gap = manifolds[i - 1].minGap(manifolds[i], 5);
+    assert.ok(
+      gap >= minSlimGap,
+      `slim low-bend: adjacent segments ${i - 1}/${i} keep ${gap.toFixed(3)} ≥ ${minSlimGap.toFixed(3)}mm`,
+    );
+  }
+  for (const manifold of manifolds) manifold.delete();
+}
+
 // A closed loop (torus) cannot be severed by a single cut → clean rounded-uncut.
 const torusSettings = baseSettings('rounded');
 const torusRaw = makeTorus();
