@@ -79,3 +79,27 @@ assert.match(
   /\.from\('conversations'\)[\s\S]*\.upsert\(/,
   'prompt view should tolerate a pre-created conversation when sending the first message',
 );
+
+assert.match(
+  source,
+  /const \[localFlatBottom, setLocalFlatBottom\] = useState\(false\)/,
+  'the mesh composer should default the flat-bottom toggle to off',
+);
+
+assert.match(
+  source,
+  /const flatBottom = controlledFlatBottom \?\? localFlatBottom/,
+  'a parent-persisted flat-bottom choice should win over local state, so the option survives a reload and the design-agent handoff',
+);
+
+assert.match(
+  source,
+  /aria-label="Flat bottom"/,
+  'the mesh composer should render a flat-bottom checkbox',
+);
+
+assert.match(
+  source,
+  /\.\.\.\(flatBottom && \{ flatBottom \}\)/,
+  'the flat-bottom choice should ride on the submitted message content',
+);

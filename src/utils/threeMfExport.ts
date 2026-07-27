@@ -1535,11 +1535,14 @@ function applySemanticMaterialMap(
 async function repairSceneGeometryForThreeMfExport(
   geometry: SceneGeometry,
 ): Promise<RepairedSceneGeometry> {
-  const fallbackGeometry = repairSceneGeometryTopology(geometry);
   const manifoldGeometry =
     await repairSceneGeometryWithManifoldFilter(geometry);
+  // Only run the (expensive) local topology repair on the raw holey mesh when
+  // the manifold filter path is unavailable. When it succeeds we re-run the
+  // topology pass on its output below instead, so computing the raw fallback
+  // eagerly just to discard it doubled the repair work on the success path.
   if (!manifoldGeometry) {
-    return fallbackGeometry;
+    return repairSceneGeometryTopology(geometry);
   }
 
   return repairSceneGeometryTopology(manifoldGeometry);
@@ -1927,6 +1930,42 @@ function fillBoundaryTriangleLoops(
     return triangles;
   }
 
+  // Build two per-repair-pass edge indexes over the (loop-invariant) source
+  // triangles so each candidate loop does O(loop length) work instead of
+  // O(triangles):
+  //   - sourceEdgeTriangleIndexes: unordered edge key -> triangle indices, so
+  //     shouldFillBoundaryLoop can find a loop's incident triangles by lookup.
+  //   - sourceDirectedEdgesByKey: unordered edge key -> the source triangles'
+  //     directed edges, so orientCapTrianglesForSharedEdges can score cap flips
+  //     incrementally against a fixed source instead of rebuilding a full-mesh
+  //     edge map on every flip evaluation.
+  const sourceEdgeTriangleIndexes = new Map<string, number[]>();
+  const sourceDirectedEdgesByKey = new Map<
+    string,
+    Array<{ a: number; b: number }>
+  >();
+  triangles.forEach((triangle, triangleIndex) => {
+    for (const [a, b] of [
+      [triangle.v1, triangle.v2],
+      [triangle.v2, triangle.v3],
+      [triangle.v3, triangle.v1],
+    ]) {
+      const key = getEdgeKey(a, b);
+      const triangleIndexes = sourceEdgeTriangleIndexes.get(key);
+      if (triangleIndexes) {
+        triangleIndexes.push(triangleIndex);
+      } else {
+        sourceEdgeTriangleIndexes.set(key, [triangleIndex]);
+      }
+      const directedEdges = sourceDirectedEdgesByKey.get(key);
+      if (directedEdges) {
+        directedEdges.push({ a, b });
+      } else {
+        sourceDirectedEdgesByKey.set(key, [{ a, b }]);
+      }
+    }
+  });
+
   const usedTriangleKeys = new Set(
     triangles.map((triangle) => getUnorderedTriangleVertexKey(triangle)),
   );
@@ -1960,6 +1999,7 @@ function fillBoundaryTriangleLoops(
         triangles,
         loop,
         candidateCapTriangles,
+        sourceEdgeTriangleIndexes,
       ) ||
       !isBoundaryLoopCapTopologySafe(
         candidateCapTriangles,
@@ -1971,7 +2011,7 @@ function fillBoundaryTriangleLoops(
     }
 
     for (const triangle of orientCapTrianglesForSharedEdges(
-      triangles,
+      sourceDirectedEdgesByKey,
       candidateCapTriangles,
     )) {
       const triangleKey = getUnorderedTriangleVertexKey(triangle);
@@ -1991,12 +2031,79 @@ function fillBoundaryTriangleLoops(
 }
 
 function orientCapTrianglesForSharedEdges(
-  sourceTriangles: RepairedSceneGeometry['triangles'],
+  sourceDirectedEdgesByKey: Map<string, Array<{ a: number; b: number }>>,
   capTriangles: RepairedSceneGeometry['triangles'],
 ): RepairedSceneGeometry['triangles'] {
   const orientedCapTriangles = capTriangles.map((triangle) => ({
     ...triangle,
   }));
+
+  // sourceDirectedEdgesByKey holds every source triangle's directed edges keyed
+  // by unordered edge key; it is built once per fillBoundaryTriangleLoops pass
+  // (the source triangle list is identical for every candidate loop) and is
+  // never mutated here. Only the caps' directed edges live in capDirectedEdges,
+  // a small per-call map. Flipping a single cap merely reverses that cap's three
+  // directed edges, so the change in countSameDirectionSharedTriangleEdges is
+  // confined to those three unordered edge keys and is scored in O(1) by
+  // combining the immutable source uses with the mutable cap uses. The flip
+  // decisions are therefore identical to scoring the full source+cap triangle
+  // list on every evaluation, at O(source) once instead of O(source) per flip.
+  const capDirectedEdges = new Map<string, Array<{ a: number; b: number }>>();
+  const addCapEdge = (a: number, b: number): void => {
+    const key = getEdgeKey(a, b);
+    const uses = capDirectedEdges.get(key);
+    if (uses) {
+      uses.push({ a, b });
+    } else {
+      capDirectedEdges.set(key, [{ a, b }]);
+    }
+  };
+  const removeCapEdge = (a: number, b: number): void => {
+    const key = getEdgeKey(a, b);
+    const uses = capDirectedEdges.get(key);
+    if (!uses) {
+      return;
+    }
+    const index = uses.findIndex((use) => use.a === a && use.b === b);
+    if (index >= 0) {
+      uses.splice(index, 1);
+    }
+  };
+  // Same "same-direction shared edge" predicate as
+  // countSameDirectionSharedTriangleEdges, evaluated for a single edge key: an
+  // unordered edge used by exactly two triangles (source + cap combined) that
+  // traverse it in the same direction (the two directed edges are not reverses
+  // of each other). The predicate is symmetric in the order of the two uses, so
+  // combining the source and cap arrays in either order gives the same result
+  // as a full rebuild.
+  const sameDirectionSharedKeyScore = (key: string): number => {
+    const sourceUses = sourceDirectedEdgesByKey.get(key);
+    const capUses = capDirectedEdges.get(key);
+    const sourceCount = sourceUses ? sourceUses.length : 0;
+    const capCount = capUses ? capUses.length : 0;
+    if (sourceCount + capCount !== 2) {
+      return 0;
+    }
+    const uses: Array<{ a: number; b: number }> = [];
+    if (sourceUses) {
+      for (const use of sourceUses) {
+        uses.push(use);
+      }
+    }
+    if (capUses) {
+      for (const use of capUses) {
+        uses.push(use);
+      }
+    }
+    return !(uses[0].a === uses[1].b && uses[0].b === uses[1].a) ? 1 : 0;
+  };
+
+  for (const triangle of orientedCapTriangles) {
+    addCapEdge(triangle.v1, triangle.v2);
+    addCapEdge(triangle.v2, triangle.v3);
+    addCapEdge(triangle.v3, triangle.v1);
+  }
+
   for (let iteration = 0; iteration < 2; iteration += 1) {
     let changed = false;
     for (
@@ -2004,24 +2111,51 @@ function orientCapTrianglesForSharedEdges(
       capTriangleIndex < orientedCapTriangles.length;
       capTriangleIndex += 1
     ) {
-      const currentScore = countSameDirectionSharedTriangleEdges([
-        ...sourceTriangles,
-        ...orientedCapTriangles,
-      ]);
       const currentTriangle = orientedCapTriangles[capTriangleIndex];
-      orientedCapTriangles[capTriangleIndex] = {
+      const flippedTriangle = {
         v1: currentTriangle.v1,
         v2: currentTriangle.v3,
         v3: currentTriangle.v2,
       };
-      const flippedScore = countSameDirectionSharedTriangleEdges([
-        ...sourceTriangles,
-        ...orientedCapTriangles,
+
+      // Flipping preserves each edge's unordered key, so the current and
+      // flipped triangles touch the same set of keys. Score each distinct key
+      // once (a degenerate cap can repeat a key) to match the global count,
+      // which credits each unordered edge at most once.
+      const affectedKeys = new Set<string>([
+        getEdgeKey(currentTriangle.v1, currentTriangle.v2),
+        getEdgeKey(currentTriangle.v2, currentTriangle.v3),
+        getEdgeKey(currentTriangle.v3, currentTriangle.v1),
       ]);
-      if (flippedScore < currentScore) {
+
+      let scoreBefore = 0;
+      for (const key of affectedKeys) {
+        scoreBefore += sameDirectionSharedKeyScore(key);
+      }
+
+      removeCapEdge(currentTriangle.v1, currentTriangle.v2);
+      removeCapEdge(currentTriangle.v2, currentTriangle.v3);
+      removeCapEdge(currentTriangle.v3, currentTriangle.v1);
+      addCapEdge(flippedTriangle.v1, flippedTriangle.v2);
+      addCapEdge(flippedTriangle.v2, flippedTriangle.v3);
+      addCapEdge(flippedTriangle.v3, flippedTriangle.v1);
+
+      let scoreAfter = 0;
+      for (const key of affectedKeys) {
+        scoreAfter += sameDirectionSharedKeyScore(key);
+      }
+
+      if (scoreAfter < scoreBefore) {
+        orientedCapTriangles[capTriangleIndex] = flippedTriangle;
         changed = true;
       } else {
-        orientedCapTriangles[capTriangleIndex] = currentTriangle;
+        // Keep the current orientation: undo the cap-edge edits for this cap.
+        removeCapEdge(flippedTriangle.v1, flippedTriangle.v2);
+        removeCapEdge(flippedTriangle.v2, flippedTriangle.v3);
+        removeCapEdge(flippedTriangle.v3, flippedTriangle.v1);
+        addCapEdge(currentTriangle.v1, currentTriangle.v2);
+        addCapEdge(currentTriangle.v2, currentTriangle.v3);
+        addCapEdge(currentTriangle.v3, currentTriangle.v1);
       }
     }
 
@@ -2091,6 +2225,7 @@ function shouldFillBoundaryLoop(
   sourceTriangles: RepairedSceneGeometry['triangles'],
   loop: number[],
   capTriangles: RepairedSceneGeometry['triangles'],
+  sourceEdgeTriangleIndexes: Map<string, number[]>,
 ): boolean {
   const capNormal = getAverageTriangleNormal(vertices, capTriangles);
   if (capNormal.lengthSq() === 0) {
@@ -2102,19 +2237,23 @@ function shouldFillBoundaryLoop(
       getEdgeKey(vertexIndex, loop[(index + 1) % loop.length]),
     ),
   );
-  const incidentNormals: THREE.Vector3[] = [];
-  for (const triangle of sourceTriangles) {
-    if (
-      [
-        [triangle.v1, triangle.v2],
-        [triangle.v2, triangle.v3],
-        [triangle.v3, triangle.v1],
-      ].some(([a, b]) => loopEdgeKeys.has(getEdgeKey(a, b)))
-    ) {
-      const normal = getTriangleNormal(vertices, triangle);
-      if (normal.lengthSq() > 0) {
-        incidentNormals.push(normal);
+  // Gather the source triangles incident to any loop edge via the prebuilt
+  // edge index and dedupe them (a triangle touching two loop edges must still
+  // contribute a single normal, matching the original per-triangle scan).
+  const incidentTriangleIndexes = new Set<number>();
+  for (const edgeKey of loopEdgeKeys) {
+    const triangleIndexes = sourceEdgeTriangleIndexes.get(edgeKey);
+    if (triangleIndexes) {
+      for (const triangleIndex of triangleIndexes) {
+        incidentTriangleIndexes.add(triangleIndex);
       }
+    }
+  }
+  const incidentNormals: THREE.Vector3[] = [];
+  for (const triangleIndex of incidentTriangleIndexes) {
+    const normal = getTriangleNormal(vertices, sourceTriangles[triangleIndex]);
+    if (normal.lengthSq() > 0) {
+      incidentNormals.push(normal);
     }
   }
 

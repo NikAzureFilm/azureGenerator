@@ -17,8 +17,8 @@ assert.match(
 
 assert.match(
   source,
-  /prompt:\s*buildAgentConceptImagePrompt\(toolInput\.prompt\)/,
-  'every agent concept image should receive the 3D/CAD render art direction at the generation boundary',
+  /prompt:\s*applyFlatBottomImageDirective\(\s*buildAgentConceptImagePrompt\(toolInput\.prompt\),\s*flatBottom,\s*\)/,
+  'every agent concept image should receive the 3D/CAD render art direction at the generation boundary, plus the flat-bottom directive when the option is on',
 );
 
 assert.match(

@@ -145,6 +145,11 @@ interface TextAreaChatProps {
     draft?: string;
   };
   seedMultiviewImages?: MultiviewImages;
+  // "Flat bottom" option. Controlled by the parent when the conversation can
+  // persist it (so it survives a reload, a follow-up message and the design
+  // agent's handoff); falls back to local state on the new-conversation view.
+  flatBottom?: boolean;
+  onFlatBottomChange?: (value: boolean) => void;
 }
 
 const MULTIVIEW_ENABLED = true;
@@ -171,6 +176,8 @@ function TextAreaChat({
   persistMultiviewDraft,
   composerFocusRequest,
   seedMultiviewImages,
+  flatBottom: controlledFlatBottom,
+  onFlatBottomChange,
 }: TextAreaChatProps) {
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -183,6 +190,16 @@ function TextAreaChat({
   const [imageCreatorPrompt, setImageCreatorPrompt] = useState('');
   const [includePrintableCadInstruction, setIncludePrintableCadInstruction] =
     useState(true);
+  // Opt-in: asks the generation for a single flat planar underside AND makes
+  // the viewer/exports trim the model's bottom flat. Off by default because it
+  // removes geometry.
+  const [localFlatBottom, setLocalFlatBottom] = useState(false);
+  const flatBottom = controlledFlatBottom ?? localFlatBottom;
+  const toggleFlatBottom = () => {
+    const next = !flatBottom;
+    if (onFlatBottomChange) onFlatBottomChange(next);
+    else setLocalFlatBottom(next);
+  };
   const [imageCreatorModel, setImageCreatorModel] =
     useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
   const [imageCreatorRef, setImageCreatorRef] = useState<{
@@ -587,6 +604,9 @@ function TextAreaChat({
         model,
         multiviewImages,
         imageGenerationModel: selectedImageGenerationModel,
+        // The four views are already rendered, so only the geometry-side cut
+        // can deliver a flat underside here — carry the flag anyway.
+        ...(flatBottom && { flatBottom }),
       };
       onSubmit(content);
       setInput('');
@@ -635,6 +655,9 @@ function TextAreaChat({
         ...(shouldShowPolygonControls(model as CreativeModel) && {
           polygonCount: Math.min(polygonCount, maxPolygonCount),
         }),
+        // Flat underside: steers the concept image server-side and marks the
+        // resulting mesh for the planar bottom cut.
+        ...(flatBottom && { flatBottom }),
       };
     } else if (type === 'parametric' && mesh) {
       content = {
@@ -866,8 +889,9 @@ function TextAreaChat({
       try {
         // For parametric mode STL files, extract bounding box and generate multi-angle renders
         if (type === 'parametric' && fileType === 'stl') {
-          const { parseSTL, renderMultipleAngles } =
-            await import('@/utils/meshUtils');
+          const { parseSTL, renderMultipleAngles } = await import(
+            '@/utils/meshUtils'
+          );
           const { geometry, boundingBox } = await parseSTL(file);
           setMeshBoundingBox(boundingBox);
           setMeshFilename(file.name);
@@ -1869,6 +1893,38 @@ function TextAreaChat({
                   {type === 'parametric'
                     ? 'Add "make it 3d printable" to CAD prompts'
                     : 'Add "make it 3d printable" to mesh prompts'}
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {type === 'creative' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={flatBottom}
+                    aria-label="Flat bottom"
+                    className={cn(
+                      'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2 text-xs transition-colors',
+                      flatBottom
+                        ? 'bg-adam-blue/15 text-adam-blue'
+                        : 'bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFlatBottom();
+                    }}
+                  >
+                    <span className="flex h-4 w-4 items-center justify-center rounded border border-current">
+                      {flatBottom && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="hidden sm:inline">Flat bottom</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Slice the underside flat so the model sits level and prints
+                  without supports
                 </TooltipContent>
               </Tooltip>
             )}

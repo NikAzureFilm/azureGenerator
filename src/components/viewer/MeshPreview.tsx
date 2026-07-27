@@ -37,6 +37,7 @@ import {
 import { DownloadMenu } from './DownloadMenu';
 import { ViewGizmo } from './ViewGizmo';
 import { WireframeIcon } from '@/components/icons/ui/WireframeIcon';
+import { applyFlatBottomToScene } from '@/utils/flatBottomScene';
 
 // Default values for material controls
 import {
@@ -147,6 +148,16 @@ export function MeshPreview({ meshId }: { meshId: string }) {
     setHasPBRMaps(NO_PBR_MAPS);
   }, [meshId, isUpscaled, meshData?.prompt.model]);
 
+  // Was this model generated with the "flat bottom" option? The cut is applied
+  // to the loaded scene here — the one object the viewport, DownloadMenu's
+  // exports and both viewer dialogs all share — so they agree on the geometry.
+  const wantsFlatBottom = !!(
+    meshData?.prompt &&
+    typeof meshData.prompt === 'object' &&
+    'flatBottom' in meshData.prompt &&
+    meshData.prompt.flatBottom
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -157,6 +168,20 @@ export function MeshPreview({ meshId }: { meshId: string }) {
           meshData?.file_type || 'glb',
         );
         if (cancelled) return;
+
+        if (wantsFlatBottom) {
+          // Any non-'cut' outcome leaves the scene untouched. The model is
+          // still published in that case — showing it without the flat
+          // underside beats showing nothing at all.
+          const cut = await applyFlatBottomToScene(loaded.gltf.scene);
+          if (cancelled) return;
+          if (cut.status === 'failed') {
+            posthog.capture('flat_bottom_cut_failed', {
+              meshId,
+              reason: cut.message,
+            });
+          }
+        }
 
         setGltf(loaded.gltf);
         setPolygonCount(loaded.polygonCount);
@@ -180,7 +205,7 @@ export function MeshPreview({ meshId }: { meshId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [mesh, meshData]);
+  }, [mesh, meshData, meshId, wantsFlatBottom]);
 
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode);

@@ -59,21 +59,23 @@ export function CreativePreviewSection({
   );
 }
 
-function GenerationHistoryStrip({
+export function GenerationHistoryStrip({
   messages,
   selectedMessageId,
   onSelect,
+  label = 'Generations',
 }: {
   messages: Message[];
   selectedMessageId: string | null;
   onSelect: (message: Message) => void;
+  label?: string;
 }) {
   return (
     <div className="border-adam-neutral-600 absolute inset-x-0 bottom-0 border-t bg-adam-neutral-950/90 px-4 py-3 shadow-[0_-12px_32px_rgba(0,0,0,0.25)] backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex shrink-0 items-center gap-2 text-xs font-medium text-adam-neutral-300">
           <History className="h-4 w-4" />
-          <span>Generations</span>
+          <span>{label}</span>
         </div>
         <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
           {messages.map((generation, index) => {

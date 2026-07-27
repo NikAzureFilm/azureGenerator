@@ -1,4 +1,5 @@
 import type { AgentPipeline, AgentRecommendation } from '@shared/types.ts';
+import { appendFlatBottomPrompt } from '@shared/flatBottom.ts';
 
 const SINGLE_PIECE_REQUIREMENT =
   'Single-piece output requirement: Generate exactly one contiguous, connected, watertight 3D-printable object. Every feature must physically overlap the body it attaches to. Do not create or display separate parts, an exploded view, a kit, loose accessories, or multiple objects.';
@@ -10,10 +11,14 @@ export function buildFallbackRecommendation({
   assistantText,
   userBriefs,
   hasConceptImage,
+  flatBottom,
 }: {
   assistantText?: string;
   userBriefs: string[];
   hasConceptImage: boolean;
+  // Mirrors the recommend_pipeline tool handler: the prompt this builds is what
+  // the downstream generation receives, so the option has to be spelled out.
+  flatBottom?: boolean;
 }): AgentRecommendation | null {
   if (!hasConceptImage || !assistantText) return null;
 
@@ -26,7 +31,10 @@ export function buildFallbackRecommendation({
     .filter(Boolean)
     .join('\n\n')
     .slice(-6000);
-  const basePrompt = designBrief || assistantText.trim();
+  const basePrompt = appendFlatBottomPrompt(
+    designBrief || assistantText.trim(),
+    flatBottom,
+  );
   const generationPrompt = basePrompt.includes(SINGLE_PIECE_REQUIREMENT)
     ? basePrompt
     : `${basePrompt}\n\n${SINGLE_PIECE_REQUIREMENT}`;

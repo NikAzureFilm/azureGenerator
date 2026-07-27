@@ -25,11 +25,15 @@ export function ImageViewer({
   className,
   hoverable = true,
   clickable = true,
+  fit = 'cover',
 }: {
   image: string;
   className?: string;
   hoverable?: boolean;
   clickable?: boolean;
+  // Chat thumbnails crop to their square wrapper; a large preview pane shows
+  // the whole render instead.
+  fit?: 'cover' | 'contain';
 }) {
   const [loaded, setLoaded] = useState(false);
   const [isMaskEditOpen, setIsMaskEditOpen] = useState(false);
@@ -118,7 +122,10 @@ export function ImageViewer({
         )}
       >
         <img
-          className="h-full w-full object-cover"
+          className={cn(
+            'h-full w-full',
+            fit === 'contain' ? 'object-contain' : 'object-cover',
+          )}
           src={imageUrl.url}
           alt="Image"
           onLoad={() => setLoaded(true)}

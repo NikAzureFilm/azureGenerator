@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIsMutating } from '@tanstack/react-query';
 import posthog from 'posthog-js';
 import { Box, Loader2, Ruler, Images, Sparkles } from 'lucide-react';
+import {
+  ImperativePanelHandle,
+  Panel,
+  PanelGroup,
+} from 'react-resizable-panels';
 import Tree from '@shared/Tree';
 import {
   AgentPipeline,
@@ -26,9 +31,21 @@ import {
   useSendContentMutation,
 } from '@/services/messageService';
 import { useRequestCancellation } from '@/hooks/useRequestCancellation';
+import {
+  CHAT_PANEL_BOUNDS,
+  PREVIEW_PANEL_BOUNDS,
+  useChatPanelSizes,
+} from '@/hooks/useChatPanelSizes';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
+import { ChatPanelResizeHandle } from '@/components/chat/ChatPanelResizeHandle';
 import { AgentComposer } from '@/components/AgentComposer';
+import {
+  readAgentPrintOptions,
+  type AgentPrintOptions,
+} from '@/utils/agentPrintOptions';
+import { AgentPreviewSection } from '@/components/viewer/AgentPreviewSection';
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { UserMessage } from '@/components/chat/UserMessage';
 import { AssistantLoading } from '@/components/chat/AssistantLoading';
@@ -72,13 +89,41 @@ export function AgentEditorView() {
   const { setCurrentMessage } = useCurrentMessage();
   const { billing } = useAuth();
   const { cancelRequest } = useRequestCancellation();
+  const isMobile = useIsMobile();
   const totalTokens = billing?.tokens.total ?? 0;
   const limitReached = totalTokens <= 0;
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const currentProcessingMessageRef = useRef<string | null>(null);
+  const chatPanelRef = useRef<ImperativePanelHandle>(null);
+  const [isChatCollapsed, setIsChatCollapsed] = useState(false);
   const [selectedPipeline, setSelectedPipeline] =
     useState<AgentPipeline | null>(null);
+
+  // Print constraints live on the conversation row so the edge function reads
+  // them on every turn (including replays) and the handoff can pass them on.
+  // Conversations started before the option existed have no keys — default
+  // `threeDPrint` on to keep the printability rules they were designed under.
+  const printOptions: AgentPrintOptions = useMemo(
+    () => readAgentPrintOptions(conversation.settings),
+    [conversation.settings],
+  );
+
+  const handlePrintOptionsChange = useCallback(
+    (next: AgentPrintOptions) => {
+      void updateConversationAsync?.({
+        ...conversation,
+        settings: {
+          ...conversation.settings,
+          threeDPrint: next.threeDPrint,
+          flatBottom: next.flatBottom,
+        },
+      });
+    },
+    [conversation, updateConversationAsync],
+  );
+
+  const { setContainerRef, panelSizes } = useChatPanelSizes(CHAT_PANEL_BOUNDS);
 
   const { data: messages = [] } = useMessagesQuery();
 
@@ -136,6 +181,24 @@ export function AgentEditorView() {
     return userImageId;
   }, [currentMessageBranch]);
 
+  // Concepts the agent rendered along this branch — the preview pane shows the
+  // newest one and lists the rest.
+  const conceptMessages = useMemo(
+    () =>
+      currentMessageBranch.filter(
+        (message) =>
+          message.role === 'assistant' && !!message.content.images?.length,
+      ),
+    [currentMessageBranch],
+  );
+
+  const latestConceptMessage = conceptMessages[conceptMessages.length - 1];
+  // Held in a ref so the effect below can depend on the id alone: refetches
+  // hand back new message objects, and re-running on identity would fight a
+  // user who selected an earlier concept.
+  const latestConceptRef = useRef<Message | undefined>(undefined);
+  latestConceptRef.current = latestConceptMessage;
+
   const lastUserText = useMemo(() => {
     for (let index = currentMessageBranch.length - 1; index >= 0; index -= 1) {
       const message = currentMessageBranch[index];
@@ -166,12 +229,23 @@ export function AgentEditorView() {
     const settings = {
       model,
       imageGenerationModel,
+      // `mode: 'agent'` is intentionally dropped here, but the print options
+      // are carried over so the graduated conversation keeps the constraints
+      // the design was agreed under.
+      threeDPrint: printOptions.threeDPrint,
+      flatBottom: printOptions.flatBottom,
       ...(pipeline === 'multiview' && conceptImageId
         ? { multiviewImages: { front: conceptImageId } }
         : {}),
     };
     return { ...conversation, type, settings } as Conversation;
-  }, [conversation, pipeline, imageGenerationModel, conceptImageId]);
+  }, [
+    conversation,
+    pipeline,
+    imageGenerationModel,
+    conceptImageId,
+    printOptions,
+  ]);
 
   const { mutate: sendHandoffContent, isPending: isHandingOff } =
     useSendContentMutation({ conversation: handoffConversation });
@@ -196,6 +270,7 @@ export function AgentEditorView() {
     const text = buildAgentHandoffPrompt(
       recommendation?.generationPrompt?.trim() || lastUserText,
       pipeline,
+      printOptions.flatBottom,
     );
 
     const content: Content = {
@@ -203,6 +278,10 @@ export function AgentEditorView() {
       model: handoffConversation.settings?.model,
       ...(conceptImageId ? { images: [conceptImageId] } : {}),
       ...(pipeline === 'mesh' ? { imageGenerationModel } : {}),
+      // Structural flag, not just prose: creative-chat reads it off this
+      // message to tell the mesh function, and it marks the result for the
+      // planar bottom cut.
+      ...(printOptions.flatBottom ? { flatBottom: true } : {}),
     };
 
     sendHandoffContent(content);
@@ -219,6 +298,7 @@ export function AgentEditorView() {
     lastUserText,
     imageGenerationModel,
     sendHandoffContent,
+    printOptions.flatBottom,
   ]);
 
   const sendMessage = useCallback(
@@ -260,6 +340,26 @@ export function AgentEditorView() {
     setCurrentMessage(null);
   }, [conversation.id, setCurrentMessage]);
 
+  // Follow the newest concept in the preview pane. On mobile there is no pane,
+  // so the images stay inline in the chat.
+  useEffect(() => {
+    if (isMobile) return;
+    const message = latestConceptRef.current;
+    if (message) {
+      setCurrentMessage(message);
+    }
+  }, [latestConceptMessage?.id, isMobile, setCurrentMessage]);
+
+  const collapseChat = useCallback(() => {
+    chatPanelRef.current?.collapse();
+    setIsChatCollapsed(true);
+  }, []);
+
+  const expandChat = useCallback(() => {
+    chatPanelRef.current?.expand();
+    setIsChatCollapsed(false);
+  }, []);
+
   const scrollToBottom = useCallback(() => {
     if (scrollAreaRef.current) {
       const scrollContainer = scrollAreaRef.current.querySelector(
@@ -293,17 +393,10 @@ export function AgentEditorView() {
       ? lastMessage.content.question
       : undefined;
 
-  return (
-    <div className="flex h-full w-full flex-col items-center overflow-hidden bg-adam-bg-secondary-dark">
-      <div className="flex w-full items-center justify-between bg-transparent p-3 pl-12">
-        <div className="min-w-0 flex-1">
-          <ChatTitle />
-        </div>
-        <span className="flex items-center gap-1.5 rounded-full border border-adam-blue/30 bg-adam-blue/10 px-3 py-1 text-xs font-medium text-adam-blue">
-          <Sparkles className="h-3.5 w-3.5" />
-          Design Agent
-        </span>
-      </div>
+  // Messages, the recommendation panel and the composer. The panel bounds the
+  // width on desktop; the max-w cap keeps the mobile single column centered.
+  const chatColumn = (
+    <div className="flex h-full min-h-0 w-full flex-col items-center overflow-hidden">
       <ScrollArea
         className="relative w-full max-w-2xl flex-1 px-2 py-0"
         ref={scrollAreaRef}
@@ -373,7 +466,7 @@ export function AgentEditorView() {
                 {recommendation.reason}
               </p>
             )}
-            <div className="mb-3 grid gap-2 md:grid-cols-3">
+            <div className="mb-3 grid gap-2">
               {(Object.keys(PIPELINE_META) as AgentPipeline[]).map((key) => {
                 const meta = PIPELINE_META[key];
                 const Icon = meta.icon;
@@ -435,7 +528,58 @@ export function AgentEditorView() {
           disabled={limitReached}
           stopGenerating={stopGenerating}
           placeholder="Describe or refine your idea, or attach a reference image..."
+          printOptions={printOptions}
+          onPrintOptionsChange={handlePrintOptionsChange}
         />
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden bg-adam-bg-secondary-dark">
+      <div className="flex w-full items-center justify-between bg-transparent p-3 pl-12">
+        <div className="min-w-0 flex-1">
+          <ChatTitle />
+        </div>
+        <span className="flex items-center gap-1.5 rounded-full border border-adam-blue/30 bg-adam-blue/10 px-3 py-1 text-xs font-medium text-adam-blue">
+          <Sparkles className="h-3.5 w-3.5" />
+          Design Agent
+        </span>
+      </div>
+      <div
+        className="flex min-h-0 w-full flex-1"
+        ref={isMobile ? undefined : setContainerRef}
+      >
+        {isMobile ? (
+          chatColumn
+        ) : (
+          <PanelGroup direction="horizontal" className="w-full">
+            <Panel
+              collapsible
+              ref={chatPanelRef}
+              defaultSize={panelSizes.defaultSize}
+              minSize={panelSizes.minSize}
+              maxSize={panelSizes.maxSize}
+            >
+              {chatColumn}
+            </Panel>
+            <ChatPanelResizeHandle
+              isCollapsed={isChatCollapsed}
+              onCollapse={collapseChat}
+              onExpand={expandChat}
+            />
+            <Panel
+              defaultSize={PREVIEW_PANEL_BOUNDS.defaultSize}
+              minSize={PREVIEW_PANEL_BOUNDS.minSize}
+              className="overflow-hidden"
+            >
+              <AgentPreviewSection
+                conceptMessages={conceptMessages}
+                isLoading={isLoading}
+              />
+            </Panel>
+          </PanelGroup>
+        )}
       </div>
     </div>
   );

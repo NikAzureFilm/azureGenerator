@@ -11,6 +11,11 @@ import {
   SupabaseClient,
 } from '../_shared/supabaseClient.ts';
 import Tree from '@shared/Tree.ts';
+import {
+  FLAT_BOTTOM_AGENT_RULE,
+  appendFlatBottomPrompt,
+  applyFlatBottomImageDirective,
+} from '@shared/flatBottom.ts';
 import { initSentry, logError } from '../_shared/sentry.ts';
 import { billing, BillingClientError } from '../_shared/billingClient.ts';
 import {
@@ -261,7 +266,7 @@ async function formatAgentAssistantMessage(
   return messages;
 }
 
-const systemPrompt = `You are the AzureFilm Generator design agent. Your job is to have a short back-and-forth conversation with the user to figure out exactly what 3D object they want, visualize it with concept images, and decide which generation pipeline fits best. You do NOT generate the 3D model yourself — the user clicks a Generate button once a recommendation exists.
+const SYSTEM_PROMPT_INTRO = `You are the AzureFilm Generator design agent. Your job is to have a short back-and-forth conversation with the user to figure out exactly what 3D object they want, visualize it with concept images, and decide which generation pipeline fits best. You do NOT generate the 3D model yourself — the user clicks a Generate button once a recommendation exists.
 
 The user can attach reference images (photos, sketches, screenshots, renders) to any message; each attachment is shown to you with its image id. When a message has attachments:
 - Look at them before anything else — they state the intent better than the text does. Say in one short sentence what you see, and never ask about something the image already answers.
@@ -276,20 +281,34 @@ Workflow:
 4. Right after each generated image, you are shown the result in this same turn. Review it critically BEFORE speaking to the user: (a) does it match what the user asked for, (b) is it ONE connected physical piece with no floating or detached elements, (c) is it free of paper-thin or unsupported features that would fail 3D printing, (d) is it a clean, dimensional 3D-object render rather than a real-world photo or flat artwork, (e) for practical CAD, does the three-quarter view clearly communicate the engineering geometry, and (f) for a character or decorative subject, does it appear in its true, vibrant colors — a gray or monochrome CAD-style render of such a subject is a FAILED check that warrants a redo? If it clearly fails a check, immediately call generate_concept_image again — pass baseImageId to fix small flaws while keeping the design, or start fresh when the concept itself is wrong. You get at most one automatic redo per turn; if the redo is still flawed, tell the user honestly what you would change and ask them.
 5. After an image you are happy with, briefly ask what they'd like to change. Iterate until they're happy.
 6. As soon as the design is settled (or the user says something like "looks good", "generate it", "let's go"), call recommend_pipeline with the best-suited pipeline and a generation prompt. You may also call it earlier alongside an image once you're confident — the user can keep chatting even after a recommendation.
-7. NEVER name or recommend a pipeline only in plain text. Whenever you tell the user that CAD, Mesh, or Multiview is recommended, you MUST call recommend_pipeline in that same turn so the Generate button appears.
+7. NEVER name or recommend a pipeline only in plain text. Whenever you tell the user that CAD, Mesh, or Multiview is recommended, you MUST call recommend_pipeline in that same turn so the Generate button appears.`;
 
-Everything you design MUST be 3D printable:
+// Included only when the conversation has the "3D print" option on (the
+// default). With it off the agent still designs objects, it just is not held
+// to printability rules.
+const THREE_D_PRINT_RULES = `Everything you design MUST be 3D printable:
 - One contiguous physical piece: every element attached to or touching the main body — no floating, hovering, or detached parts, no loose accessories, no assemblies of separate objects.
 - No impossibly thin walls, hair-fine spokes, or large unsupported overhangs; favor solid, self-supporting geometry that prints cleanly.
-- Apply this to every concept image description AND to every generationPrompt you pass to recommend_pipeline (state it explicitly there, with dimensions for cad).
+- Apply this to every concept image description AND to every generationPrompt you pass to recommend_pipeline (state it explicitly there, with dimensions for cad).`;
 
-Choosing the pipeline:
+const SYSTEM_PROMPT_OUTRO = `Choosing the pipeline:
 - "cad": parametric CAD engineering. Best for dimensioned, functional, or mechanical parts — brackets, enclosures, gears, mounts, adapters, anything with measurements, flat faces, holes, tolerances, or hardware fit. Produces clean editable geometry, but not organic detail.
 - "mesh": AI mesh generation from a single concept image. Best for organic, sculptural, or decorative objects — figurines, characters, animals, ornaments, stylized props. Great surface detail, no exact dimensions.
 - "multiview": mesh generation from four labeled views (front/back/left/right). Best when the object's sides differ meaningfully and the user cares about controlling each side — vehicles, buildings, asymmetric characters. After handoff the user completes the remaining views from your front concept image.
 - Tie-breaker: when the object is primarily a character or organic/decorative form that merely includes a minor functional feature (keychain loop, hook, stand), choose "mesh" — or "multiview" when its sides differ meaningfully — NOT "cad". "cad" stays the right call for practical everyday objects (phone holders, spice racks, mounts) as well as true engineering parts.
 
 Keep replies short — one or two sentences outside of questions. Stay on the topic of designing 3D objects; politely decline anything else. Never promise actions you have no tool for.`;
+
+function buildSystemPrompt(options: {
+  threeDPrint: boolean;
+  flatBottom: boolean;
+}): string {
+  const sections = [SYSTEM_PROMPT_INTRO];
+  if (options.threeDPrint) sections.push(THREE_D_PRINT_RULES);
+  if (options.flatBottom) sections.push(FLAT_BOTTOM_AGENT_RULE);
+  sections.push(SYSTEM_PROMPT_OUTRO);
+  return sections.join('\n\n');
+}
 
 const tools = [
   {
@@ -621,6 +640,13 @@ Deno.serve(async (req) => {
   const imageGenerationModel = normalizeImageGenerationModel(
     conversationSettings.imageGenerationModel,
   );
+  // Print options live on the conversation, not the request body, so they
+  // survive history replay, retries and branch edits. Conversations created
+  // before the option existed have no key — keep the previous behaviour
+  // (printability enforced) by defaulting `threeDPrint` to on.
+  const threeDPrint = conversationSettings.threeDPrint !== false;
+  const flatBottom = conversationSettings.flatBottom === true;
+  const systemPrompt = buildSystemPrompt({ threeDPrint, flatBottom });
 
   let content: Content = {};
   let terminalGenerationFailed = false;
@@ -912,7 +938,10 @@ Deno.serve(async (req) => {
                   body: JSON.stringify({
                     conversationId,
                     view: 'front',
-                    prompt: buildAgentConceptImagePrompt(toolInput.prompt),
+                    prompt: applyFlatBottomImageDirective(
+                      buildAgentConceptImagePrompt(toolInput.prompt),
+                      flatBottom,
+                    ),
                     provider: getImageGenerationProvider(imageGenerationModel),
                     imageGenerationModel,
                     mode: 'input',
@@ -976,14 +1005,19 @@ Deno.serve(async (req) => {
             const pipeline = normalizeAgentPipeline(toolInput.pipeline);
             if (pipeline) {
               clearToolCall();
+              // Enforce the flat-bottom wording here rather than trusting the
+              // model to repeat it: this prompt is what the downstream mesh/CAD
+              // generation actually receives.
+              const generationPrompt = appendFlatBottomPrompt(
+                toolInput.generationPrompt,
+                flatBottom,
+              );
               content = {
                 ...content,
                 recommendation: {
                   pipeline,
                   ...(toolInput.reason ? { reason: toolInput.reason } : {}),
-                  ...(toolInput.generationPrompt
-                    ? { generationPrompt: toolInput.generationPrompt }
-                    : {}),
+                  ...(generationPrompt ? { generationPrompt } : {}),
                 },
               };
               resultText =
@@ -1300,7 +1334,7 @@ Deno.serve(async (req) => {
                 content: [
                   {
                     type: 'text',
-                    text: '[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request, the 3D-printability rules, and the render art direction: one connected piece, nothing floating or detached, no unprintably thin features, and an unmistakable dimensional 3D-object render rather than a lifestyle photo or flat artwork. For a practical CAD part, require a clear three-quarter engineering-product view with readable solid geometry. If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes and the design is fully specified or the user asked you to recommend/generate, call recommend_pipeline now with the complete generation prompt; never merely name the recommended pipeline in prose. Otherwise, briefly ask what the user would like to change.',
+                    text: `[Automated] This is the concept image your tool call just generated, exactly as shown to the user. Review it against the user’s request, the 3D-printability rules, and the render art direction: one connected piece, nothing floating or detached, no unprintably thin features, and an unmistakable dimensional 3D-object render rather than a lifestyle photo or flat artwork. For a practical CAD part, require a clear three-quarter engineering-product view with readable solid geometry.${flatBottom ? ' The object must also rest on one single flat planar underside, sliced level and broad enough to stand on — a rounded underside, separate feet, or anything protruding below that plane is a FAILED check that warrants a redo.' : ''} If it clearly fails, call generate_concept_image again now — baseImageId for small fixes, fresh for a wrong concept. If it passes and the design is fully specified or the user asked you to recommend/generate, call recommend_pipeline now with the complete generation prompt; never merely name the recommended pipeline in prose. Otherwise, briefly ask what the user would like to change.`,
                   },
                   ...reviewImageParts,
                 ],
@@ -1360,6 +1394,7 @@ Deno.serve(async (req) => {
               assistantText: content.text,
               userBriefs: userDesignBriefs,
               hasConceptImage: !!content.images?.length,
+              flatBottom,
             });
             if (fallbackRecommendation) {
               content = {
@@ -1383,9 +1418,9 @@ Deno.serve(async (req) => {
 
           const hasDeliverableContent = Boolean(
             content.text?.trim() ||
-            content.images?.length ||
-            content.question ||
-            content.recommendation,
+              content.images?.length ||
+              content.question ||
+              content.recommendation,
           );
           if (
             !finalMessageData ||

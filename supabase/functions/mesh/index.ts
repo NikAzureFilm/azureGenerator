@@ -20,6 +20,10 @@ import {
   type SemanticMaterialMap,
 } from '@shared/types.ts';
 import {
+  appendFlatBottomPrompt,
+  applyFlatBottomImageDirective,
+} from '@shared/flatBottom.ts';
+import {
   getImageGenerationProvider,
   getOpenAiImageGenerationQuality,
   normalizeImageGenerationModel,
@@ -335,7 +339,7 @@ const QUALITY_BY_MESH_MODEL: Record<
 async function generateMeshImage(
   userId: string,
   conversationId: string,
-  prompt: string,
+  requestedPrompt: string,
   // Fresh references uploaded in *this* turn — take precedence for base64.
   freshUserImages: string[],
   // All available reference images in the conversation (includes mesh
@@ -346,12 +350,19 @@ async function generateMeshImage(
   priorMeshId: string | undefined,
   imageGenerationModel: ImageGenerationModel | undefined,
   sentryStage: { meshModel: 'fast' | 'quality' | 'ultra'; subStage?: string },
+  // "Flat bottom" option. Applied here rather than at each caller so every
+  // concept image — including the ultra branches that build a prompt without
+  // the user's text — asks for a flat planar underside.
+  flatBottom: boolean,
   generatedImageId?: string,
 ): Promise<{
   imageBytes: Buffer;
   imageCallId: string | null;
   contentType: 'image/jpeg' | 'image/png';
 }> {
+  // Every provider in the fallback chain below re-wraps this same string, so
+  // prefixing once here reaches all of them.
+  const prompt = applyFlatBottomImageDirective(requestedPrompt, flatBottom);
   const hasFreshUserImages = freshUserImages.length > 0;
   // Skip the call-id lookup when the user is providing fresh reference
   // material — we want gpt-image-2 to anchor on the new upload, not a
@@ -868,6 +879,7 @@ Deno.serve(async (req) => {
       imageGenerationModel,
       multiviewImages,
       semanticMaterialMap,
+      flatBottom: rawFlatBottom,
     }: {
       images?: string[];
       mesh?: string;
@@ -883,7 +895,11 @@ Deno.serve(async (req) => {
       imageGenerationModel?: ImageGenerationModel;
       multiviewImages?: MultiviewImages;
       semanticMaterialMap?: SemanticMaterialMap;
+      flatBottom?: boolean;
     } = requestBody;
+
+    // Body is untrusted, so coerce rather than trusting the annotation.
+    const flatBottom = rawFlatBottom === true;
 
     debugLog('Model parameter extracted:', model);
 
@@ -1317,6 +1333,9 @@ Deno.serve(async (req) => {
           ...(imageGenerationModel && { imageGenerationModel }),
           ...(multiviewImages && { multiviewImages }),
           ...(semanticMaterialMap && { semanticMaterialMap }),
+          // Recorded so the viewer/exports know to trim the underside flat,
+          // and so upscales (which spread this prompt) inherit the choice.
+          ...(flatBottom && { flatBottom }),
         },
       })
       .select()
@@ -1382,6 +1401,7 @@ Deno.serve(async (req) => {
         multiviewImages,
         tokenLedger,
         meshReferenceId,
+        flatBottom,
       ),
     );
 
@@ -1432,6 +1452,7 @@ async function submitMeshJob(
   multiviewImages: MultiviewImages | undefined,
   tokenLedger: DeferredTokenLedger,
   meshReferenceId: string,
+  flatBottom: boolean,
 ) {
   debugLog('=== SUBMIT MESH JOB FUNCTION CALLED ===');
   debugLog('submitMeshJob received model:', model);
@@ -1451,7 +1472,14 @@ async function submitMeshJob(
   });
 
   let imageInputs: string[] = [];
-  const meshTextPrompt = text?.trim() || undefined;
+  // A missing text prompt routes the job down the "use the uploaded images
+  // directly" path (no concept image is generated at all), so only extend an
+  // existing prompt here — never conjure one just to carry the directive.
+  // Concept-image prompts get the fuller directive inside generateMeshImage.
+  const trimmedText = text?.trim() || undefined;
+  const meshTextPrompt = trimmedText
+    ? appendFlatBottomPrompt(trimmedText, flatBottom)
+    : undefined;
 
   try {
     if (model === 'multiview') {
@@ -1654,6 +1682,7 @@ async function submitMeshJob(
             mesh,
             imageGenerationModel,
             { meshModel: 'quality' },
+            flatBottom,
             imageData.id,
           );
 
@@ -1742,6 +1771,7 @@ async function submitMeshJob(
             mesh,
             imageGenerationModel,
             { meshModel: 'fast' },
+            flatBottom,
             imageData.id,
           );
 
@@ -1920,6 +1950,7 @@ async function submitMeshJob(
         mesh,
         imageGenerationModel,
         { meshModel: 'ultra', subStage: ultraSubStage },
+        flatBottom,
         imageData.id,
       );
 
@@ -2310,7 +2341,7 @@ Output:`;
       statusCode: 500,
       userId,
       conversationId,
-      requestData: { meshId, model, meshTopology, polygonCount },
+      requestData: { meshId, model, meshTopology, polygonCount, flatBottom },
     });
     await tokenLedger.releaseReference(meshReferenceId, logReservationFailure);
 

@@ -180,6 +180,27 @@ export function ChatSection({
     [conversation, updateConversation],
   );
 
+  // The flat-bottom choice lives on the conversation, so it survives a reload,
+  // a follow-up message, and the design agent's handoff into this view (which
+  // writes settings.flatBottom when the user graduated with the option on).
+  const flatBottom = conversation.settings?.flatBottom === true;
+
+  const handleFlatBottomChange = useCallback(
+    (value: boolean) => {
+      if (!updateConversation) return;
+      updateConversation({
+        ...conversation,
+        settings: {
+          ...(typeof conversation.settings === 'object'
+            ? conversation.settings
+            : {}),
+          flatBottom: value,
+        },
+      });
+    },
+    [conversation, updateConversation],
+  );
+
   const persistMultiviewDraft = useCallback(
     (images: MultiviewImages) => {
       if (!updateConversation) return;
@@ -313,6 +334,8 @@ export function ChatSection({
             conversation={conversation}
             seedMultiviewImages={latestMultiviewImages}
             persistMultiviewDraft={persistMultiviewDraft}
+            flatBottom={flatBottom}
+            onFlatBottomChange={handleFlatBottomChange}
           />
         </div>
       )}

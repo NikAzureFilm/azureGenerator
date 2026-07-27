@@ -257,12 +257,27 @@ function tryManifoldFromArrays(
   positions: Float32Array,
   indices: Uint32Array,
 ): Manifold | null {
+  return tryManifoldFromProperties(wasm, keep, positions, indices, 3);
+}
+
+/**
+ * Build a Manifold from `numProp`-strided vertex properties. With numProp > 3
+ * the extra channels (uv, colour) ride through later boolean/trim operations,
+ * which manifold interpolates across new geometry.
+ */
+function tryManifoldFromProperties(
+  wasm: ManifoldToplevel,
+  keep: (manifold: Manifold) => Manifold,
+  vertProperties: Float32Array,
+  triVerts: Uint32Array,
+  numProp: number,
+): Manifold | null {
   const { Manifold, Mesh } = wasm;
   try {
     const mesh = new Mesh({
-      numProp: 3,
-      vertProperties: new Float32Array(positions),
-      triVerts: new Uint32Array(indices),
+      numProp,
+      vertProperties: new Float32Array(vertProperties),
+      triVerts: new Uint32Array(triVerts),
     });
     mesh.merge();
     const manifold = Manifold.ofMesh(mesh);
@@ -274,6 +289,66 @@ function tryManifoldFromArrays(
   } catch {
     return null;
   }
+}
+
+/**
+ * Same direct → weld → ITK repair ladder `buildBaseManifold` uses, but for an
+ * arbitrary-property mesh (see `flatBottomCut.ts`). Generated meshes routinely
+ * fail a direct `Manifold.ofMesh`, so the fallbacks are not optional.
+ *
+ * Caveat: the weld and ITK stages operate on positions alone, so a mesh that
+ * needs repairing comes back with numProp 3 — extra channels are dropped. The
+ * caller must read `getMesh().numProp` rather than assume its input stride.
+ *
+ * Positions are expected in a millimetre-like scale: both fallbacks use
+ * absolute tolerances.
+ */
+export async function buildManifoldFromMesh(
+  wasm: ManifoldToplevel,
+  keep: (manifold: Manifold) => Manifold,
+  mesh: {
+    vertProperties: Float32Array;
+    triVerts: Uint32Array;
+    numProp: number;
+  },
+): Promise<Manifold | null> {
+  const direct = tryManifoldFromProperties(
+    wasm,
+    keep,
+    mesh.vertProperties,
+    mesh.triVerts,
+    mesh.numProp,
+  );
+  if (direct) return direct;
+
+  const vertexCount = Math.floor(mesh.vertProperties.length / mesh.numProp);
+  const positions = new Float32Array(vertexCount * 3);
+  for (let v = 0; v < vertexCount; v += 1) {
+    positions[v * 3] = mesh.vertProperties[v * mesh.numProp];
+    positions[v * 3 + 1] = mesh.vertProperties[v * mesh.numProp + 1];
+    positions[v * 3 + 2] = mesh.vertProperties[v * mesh.numProp + 2];
+  }
+
+  const welded = weldMesh(positions, mesh.triVerts);
+  const weldedManifold = tryManifoldFromArrays(
+    wasm,
+    keep,
+    welded.positions,
+    welded.indices,
+  );
+  if (weldedManifold) return weldedManifold;
+
+  const repaired = await repairWithItk(welded.positions, welded.indices);
+  if (repaired) {
+    return tryManifoldFromArrays(
+      wasm,
+      keep,
+      repaired.positions,
+      repaired.indices,
+    );
+  }
+
+  return null;
 }
 
 // --- Piece assembly + colouring -------------------------------------------

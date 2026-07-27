@@ -7,7 +7,14 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ArrowUp, CircleX, ImagePlus, Loader2, Square } from 'lucide-react';
+import {
+  ArrowUp,
+  Check,
+  CircleX,
+  ImagePlus,
+  Loader2,
+  Square,
+} from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -33,6 +40,10 @@ import {
   buildAgentMessageContent,
   selectAgentImageFiles,
 } from '@/utils/agentAttachments';
+import {
+  DEFAULT_AGENT_PRINT_OPTIONS,
+  type AgentPrintOptions,
+} from '@/utils/agentPrintOptions';
 
 interface AgentAttachment {
   id: string;
@@ -50,10 +61,13 @@ interface AgentComposerProps {
   placeholder?: string;
   stopGenerating?: () => void;
   onFocus?: () => void;
+  printOptions?: AgentPrintOptions;
+  onPrintOptionsChange?: (options: AgentPrintOptions) => void;
 }
 
 // Composer for design-agent conversations: text plus optional reference
-// images. No model pickers — the agent drives concept-image generation itself.
+// images and the print constraints. No model pickers — the agent drives
+// concept-image generation itself.
 export function AgentComposer({
   onSubmit,
   conversation,
@@ -62,6 +76,8 @@ export function AgentComposer({
   placeholder = 'Describe what you want to build...',
   stopGenerating,
   onFocus,
+  printOptions = DEFAULT_AGENT_PRINT_OPTIONS,
+  onPrintOptionsChange,
 }: AgentComposerProps) {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -378,6 +394,74 @@ export function AgentComposer({
           </Button>
         )}
       </div>
+      {onPrintOptionsChange && (
+        <div className="flex items-center gap-1 pt-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={printOptions.threeDPrint}
+                aria-label="3D print"
+                disabled={disabled}
+                className={cn(
+                  'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2 text-xs transition-colors',
+                  printOptions.threeDPrint
+                    ? 'bg-adam-blue/15 text-adam-blue'
+                    : 'bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                )}
+                onClick={() =>
+                  onPrintOptionsChange({
+                    ...printOptions,
+                    threeDPrint: !printOptions.threeDPrint,
+                  })
+                }
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded border border-current">
+                  {printOptions.threeDPrint && <Check className="h-3 w-3" />}
+                </span>
+                <span className="hidden sm:inline">3D print</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Hold the design to 3D-printing rules — one connected piece, no
+              floating or unprintably thin parts
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={printOptions.flatBottom}
+                aria-label="Flat bottom"
+                disabled={disabled}
+                className={cn(
+                  'flex h-8 items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2 text-xs transition-colors',
+                  printOptions.flatBottom
+                    ? 'bg-adam-blue/15 text-adam-blue'
+                    : 'bg-adam-background-2 text-adam-text-secondary hover:bg-adam-bg-secondary-dark',
+                )}
+                onClick={() =>
+                  onPrintOptionsChange({
+                    ...printOptions,
+                    flatBottom: !printOptions.flatBottom,
+                  })
+                }
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded border border-current">
+                  {printOptions.flatBottom && <Check className="h-3 w-3" />}
+                </span>
+                <span className="hidden sm:inline">Flat bottom</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Design every concept to rest on one flat underside, and slice the
+              generated model flat there
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
     </div>
   );
 }

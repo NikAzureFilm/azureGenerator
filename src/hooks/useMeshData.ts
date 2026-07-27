@@ -53,6 +53,14 @@ export const useMeshData = ({ id }: { id: string }) => {
       return data;
     },
     refetchOnMount: false,
+    // The stored mesh file is immutable once the generation succeeds (a new
+    // generation, upscale or edit gets its own id), so there is nothing to
+    // refetch. Without this the default staleTime of 0 plus
+    // refetchOnWindowFocus re-downloaded and re-parsed the whole model every
+    // time the window regained focus — and now re-ran the flat-bottom cut on
+    // top of it.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   return {

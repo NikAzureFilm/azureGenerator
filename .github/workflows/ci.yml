@@ -49,6 +49,9 @@ jobs:
       - name: 3MF export tests
         run: npm run test:3mf
 
+      - name: Flat-bottom cut tests
+        run: npm run test:flat-bottom
+
       - name: 3MF visual export check
         run: npm run test:3mf:visual
 

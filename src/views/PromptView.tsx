@@ -26,6 +26,10 @@ import { useSendContentMutation } from '@/services/messageService';
 import { useProfile } from '@/services/profileService';
 import { BrandLogo } from '@/components/BrandLogo';
 import { AgentComposer } from '@/components/AgentComposer';
+import {
+  DEFAULT_AGENT_PRINT_OPTIONS,
+  type AgentPrintOptions,
+} from '@/utils/agentPrintOptions';
 import { CreationModeCards } from '@/components/CreationModeCards';
 import type { CreationModeType } from '@/utils/creationModeOptions';
 import {
@@ -70,6 +74,14 @@ export function PromptView() {
   const [model, setModel] = useState<Model>(DEFAULT_PARAMETRIC_MODEL);
   const [imageGenerationModel, setImageGenerationModel] =
     useState<ImageGenerationModel>(DEFAULT_IMAGE_GENERATION_MODEL);
+  // Design-agent print constraints, persisted onto the conversation settings
+  // so the very first agent turn already sees them.
+  const [agentPrintOptions, setAgentPrintOptions] = useState<AgentPrintOptions>(
+    DEFAULT_AGENT_PRINT_OPTIONS,
+  );
+  // Mesh mode's flat-bottom option. Persisted onto the conversation below so
+  // follow-up messages in the editor keep it (ChatSection reads it back).
+  const [flatBottom, setFlatBottom] = useState(false);
 
   const handleTypeChange = (newType: CreationModeType) => {
     setType(newType);
@@ -108,7 +120,10 @@ export function PromptView() {
       settings: {
         model: model,
         imageGenerationModel,
-        ...(type === 'agent' ? { mode: 'agent' as const } : {}),
+        ...(type === 'agent'
+          ? { mode: 'agent' as const, ...agentPrintOptions }
+          : {}),
+        ...(type === 'creative' && flatBottom ? { flatBottom: true } : {}),
       },
       current_message_leaf_id: null,
     },
@@ -134,7 +149,8 @@ export function PromptView() {
           model,
           imageGenerationModel,
           ...(multiviewImages?.front ? { multiviewImages } : {}),
-          ...(type === 'agent' ? { mode: 'agent' } : {}),
+          ...(type === 'agent' ? { mode: 'agent', ...agentPrintOptions } : {}),
+          ...(type === 'creative' && flatBottom ? { flatBottom: true } : {}),
         },
       },
       { onConflict: 'id' },
@@ -142,6 +158,8 @@ export function PromptView() {
 
     if (error) throw error;
   }, [
+    agentPrintOptions,
+    flatBottom,
     conversationType,
     imageGenerationModel,
     model,
@@ -339,6 +357,8 @@ export function PromptView() {
                       }
                     }}
                     placeholder="Describe what you want to build — the agent will sketch it with you..."
+                    printOptions={agentPrintOptions}
+                    onPrintOptionsChange={setAgentPrintOptions}
                   />
                 ) : (
                   <TextAreaChat
@@ -365,6 +385,8 @@ export function PromptView() {
                     onTypeChange={handleTypeChange}
                     ensureConversation={ensureConversation}
                     persistMultiviewDraft={persistMultiviewDraft}
+                    flatBottom={flatBottom}
+                    onFlatBottomChange={setFlatBottom}
                   />
                 )}
               </SelectedItemsContext.Provider>

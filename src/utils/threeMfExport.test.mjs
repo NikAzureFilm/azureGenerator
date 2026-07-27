@@ -2284,3 +2284,123 @@ assert.equal(
     'mesh-scale palette keeps the near-white region',
   );
 }
+
+// Boundary-hole-sealing performance regression. A closed, finely subdivided
+// cube riddled with hundreds of tiny square holes drives fillBoundaryTriangleLoops
+// (orientCapTrianglesForSharedEdges + shouldFillBoundaryLoop) hard: every hole is
+// a small boundary loop whose cap has to be oriented and validated. Before the
+// per-loop O(triangles) rework this exact shape blocked for minutes (measured at
+// ~330s on this mesh); it must now finish quickly while still sealing every hole
+// into a watertight, manifold mesh (proving the fill path actually ran).
+{
+  const subdivisions = 96;
+  const cellSize = 1;
+  const holePeriod = 16;
+  const holeOffset = 8;
+  const cubeSpan = subdivisions * cellSize;
+
+  const perfFaces = [
+    { origin: [0, 0, 0], du: [cellSize, 0, 0], dv: [0, cellSize, 0] },
+    { origin: [0, 0, cubeSpan], du: [cellSize, 0, 0], dv: [0, cellSize, 0] },
+    { origin: [0, 0, 0], du: [cellSize, 0, 0], dv: [0, 0, cellSize] },
+    { origin: [0, cubeSpan, 0], du: [cellSize, 0, 0], dv: [0, 0, cellSize] },
+    { origin: [0, 0, 0], du: [0, cellSize, 0], dv: [0, 0, cellSize] },
+    { origin: [cubeSpan, 0, 0], du: [0, cellSize, 0], dv: [0, 0, cellSize] },
+  ];
+  const perfPointAt = (face, u, v) => [
+    face.origin[0] + face.du[0] * u + face.dv[0] * v,
+    face.origin[1] + face.du[1] * u + face.dv[1] * v,
+    face.origin[2] + face.du[2] * u + face.dv[2] * v,
+  ];
+  const perfIsHoleCell = (u, v) =>
+    u >= 2 &&
+    u <= subdivisions - 3 &&
+    v >= 2 &&
+    v <= subdivisions - 3 &&
+    u % holePeriod === holeOffset &&
+    v % holePeriod === holeOffset;
+
+  const perfPositions = [];
+  let perfHoleCount = 0;
+  for (const face of perfFaces) {
+    for (let u = 0; u < subdivisions; u += 1) {
+      for (let v = 0; v < subdivisions; v += 1) {
+        if (perfIsHoleCell(u, v)) {
+          perfHoleCount += 1;
+          continue; // omit both triangles of this cell -> a small square hole
+        }
+        const p00 = perfPointAt(face, u, v);
+        const p10 = perfPointAt(face, u + 1, v);
+        const p11 = perfPointAt(face, u + 1, v + 1);
+        const p01 = perfPointAt(face, u, v + 1);
+        perfPositions.push(...p00, ...p10, ...p11);
+        perfPositions.push(...p00, ...p11, ...p01);
+      }
+    }
+  }
+
+  const perfGeometry = new THREE.BufferGeometry();
+  perfGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(perfPositions, 3),
+  );
+  const perfScene = new THREE.Scene();
+  perfScene.add(
+    new THREE.Mesh(
+      perfGeometry,
+      new THREE.MeshStandardMaterial({ color: '#c8c8c8' }),
+    ),
+  );
+  const perfTriangleCount = perfPositions.length / 9;
+
+  assert.ok(
+    perfTriangleCount >= 100_000,
+    `boundary-fill perf mesh should have >=100k triangles (has ${perfTriangleCount})`,
+  );
+  assert.ok(
+    perfHoleCount >= 200,
+    `boundary-fill perf mesh should have hundreds of holes (has ${perfHoleCount})`,
+  );
+
+  const perfStart = performance.now();
+  const perfBlob = await createThreeMfBlobFromScene({
+    scene: perfScene,
+    filename: 'holey-cube-perf',
+    colorCount: 1,
+    colorDetail: 75,
+  });
+  const perfElapsedMs = performance.now() - perfStart;
+
+  const perfEntries = await new ZipReader(new BlobReader(perfBlob)).getEntries();
+  const perfModelXml = await getMeshModelXml(perfEntries);
+  const perfTopology = analyzeThreeMfMeshTopology(perfModelXml);
+
+  console.log(
+    `[perf] boundary-hole sealing: ${perfTriangleCount} triangles, ${perfHoleCount} holes, ${Math.round(perfElapsedMs)}ms`,
+  );
+
+  // The fill path must have run and sealed every hole: a watertight manifold
+  // cube has no boundary edges, no over-shared edges, and no degenerate faces.
+  // (This is the same watertight result the pre-optimization code produced, just
+  // far faster.)
+  assert.equal(
+    perfTopology.boundaryEdges,
+    0,
+    'holey-cube perf mesh must be sealed watertight (boundary fill path exercised)',
+  );
+  assert.equal(
+    perfTopology.overSharedEdges,
+    0,
+    'holey-cube perf mesh must have no over-shared edges after repair',
+  );
+  assert.equal(
+    perfTopology.degenerateTriangleCount,
+    0,
+    'holey-cube perf mesh must have no degenerate triangles after repair',
+  );
+
+  assert.ok(
+    perfElapsedMs < 15_000,
+    `boundary-hole sealing must stay fast on a ${perfTriangleCount}-triangle mesh with ${perfHoleCount} holes (took ${Math.round(perfElapsedMs)}ms)`,
+  );
+}

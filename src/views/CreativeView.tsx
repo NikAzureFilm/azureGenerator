@@ -1,36 +1,21 @@
 import { CreativePreviewSection } from '@/components/viewer/CreativePreviewSection';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import {
+  CHAT_PANEL_BOUNDS,
+  PREVIEW_PANEL_BOUNDS,
+  useChatPanelSizes,
+} from '@/hooks/useChatPanelSizes';
 import { Content, Message, Model } from '@shared/types';
 import {
   ImperativePanelHandle,
   Panel,
   PanelGroup,
-  PanelResizeHandle,
 } from 'react-resizable-panels';
 import { ChatSection } from '@/components/chat/ChatSection';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { useRef, useState, useMemo, useCallback } from 'react';
-import { ChevronsRight } from 'lucide-react';
+import { ChatPanelResizeHandle } from '@/components/chat/ChatPanelResizeHandle';
+import { useRef, useState, useCallback } from 'react';
 import { TreeNode } from '@shared/Tree';
 import { CreativePreviewDialog } from '@/components/viewer/CreativePreviewDialog';
-
-// Panel size constants
-const PANEL_SIZES = {
-  CHAT: {
-    DEFAULT: 30,
-    MIN: 384,
-    MAX: 550,
-  },
-  PREVIEW: {
-    DEFAULT: 70,
-    MIN: 20,
-  },
-} as const;
 
 type CreativeViewProps = {
   messages: TreeNode<Message>[];
@@ -71,50 +56,9 @@ export function CreativeView({
 }: CreativeViewProps) {
   const isMobile = useIsMobile();
   const panelRef = useRef<ImperativePanelHandle>(null);
-  const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [containerWidth, setContainerWidth] = useState(0);
 
-  // Update container width on resize
-  const setContainerRef = useCallback((element: HTMLDivElement) => {
-    // Initial measurement
-    setContainerWidth(element.offsetWidth);
-
-    // Create ResizeObserver to watch for container size changes
-    resizeObserverRef.current = new ResizeObserver(() => {
-      setContainerWidth(element.offsetWidth);
-    });
-    resizeObserverRef.current.observe(element);
-    return () => {
-      // Cleanup when element is removed
-      if (resizeObserverRef.current) {
-        resizeObserverRef.current.disconnect();
-        resizeObserverRef.current = null;
-      }
-    };
-  }, []);
-
-  // Calculate panel sizes based on container width
-  const panelSizes = useMemo(() => {
-    if (containerWidth === 0)
-      return { defaultSize: 30, minSize: 0, maxSize: 100 };
-
-    const minSize = (PANEL_SIZES.CHAT.MIN / containerWidth) * 100;
-    const maxSize = Math.min(
-      (PANEL_SIZES.CHAT.MAX / containerWidth) * 100,
-      100,
-    );
-    const defaultSize = Math.min(
-      Math.max(PANEL_SIZES.CHAT.DEFAULT, minSize),
-      maxSize,
-    );
-
-    return {
-      defaultSize,
-      minSize,
-      maxSize,
-    };
-  }, [containerWidth]);
+  const { setContainerRef, panelSizes } = useChatPanelSizes(CHAT_PANEL_BOUNDS);
 
   // Optimized collapse/expand handlers
   const handleCollapse = useCallback(() => {
@@ -175,49 +119,14 @@ export function CreativeView({
                 upscaleMessage={upscaleMessage}
               />
             </Panel>
-            <PanelResizeHandle className="resize-handle group relative">
-              {!isCollapsed && (
-                <div className="absolute left-1 top-1/2 z-50 -translate-y-1/2 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        aria-label="Collapse chat panel"
-                        className="rounded-l-none rounded-r-lg border-b border-r border-t border-gray-200/20 bg-adam-bg-secondary-dark p-2 text-adam-text-primary transition-colors hover:bg-black hover:text-adam-neutral-0 dark:border-gray-800"
-                        onClick={handleCollapse}
-                      >
-                        <ChevronsRight className="h-5 w-5 rotate-180" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent
-                      side="right"
-                      className="border-adam-neutral-700 bg-adam-background-2 text-adam-text-primary"
-                    >
-                      <p>Collapse chat panel</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-              )}
-              {isCollapsed && (
-                <div className="absolute left-0 top-1/2 z-50 -translate-y-1/2">
-                  <Button
-                    aria-label="Expand chat panel"
-                    onClick={handleExpand}
-                    className="flex h-[100px] w-9 flex-col items-center rounded-l-none rounded-r-lg bg-adam-bg-secondary-dark px-1.5 py-2 text-adam-text-primary"
-                  >
-                    <ChevronsRight className="h-5 w-5 text-white" />
-                    <div className="flex flex-1 items-center justify-center">
-                      <span className="rotate-90 transform text-center text-base font-semibold text-white">
-                        Chat
-                      </span>
-                    </div>
-                  </Button>
-                </div>
-              )}
-            </PanelResizeHandle>
+            <ChatPanelResizeHandle
+              isCollapsed={isCollapsed}
+              onCollapse={handleCollapse}
+              onExpand={handleExpand}
+            />
             <Panel
-              defaultSize={PANEL_SIZES.PREVIEW.DEFAULT}
-              minSize={PANEL_SIZES.PREVIEW.MIN}
+              defaultSize={PREVIEW_PANEL_BOUNDS.defaultSize}
+              minSize={PREVIEW_PANEL_BOUNDS.minSize}
               className="overflow-hidden"
             >
               <CreativePreviewSection

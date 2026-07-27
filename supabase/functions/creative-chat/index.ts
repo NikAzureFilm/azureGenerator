@@ -672,6 +672,7 @@ Deno.serve(async (req) => {
         ...(newMessage.content.semanticMaterialMap && {
           semanticMaterialMap: newMessage.content.semanticMaterialMap,
         }),
+        ...(newMessage.content.flatBottom && { flatBottom: true }),
       };
 
       trace('direct_multiview_mesh_request', {
@@ -928,6 +929,10 @@ Deno.serve(async (req) => {
                   const multiviewImages = newMessage?.content?.multiviewImages;
                   const semanticMaterialMap =
                     newMessage?.content?.semanticMaterialMap;
+                  // Read off the persisted user message: the model rewrites
+                  // `text` through the tool call, so the flat-bottom choice
+                  // cannot ride along inside the prompt string.
+                  const flatBottom = newMessage?.content?.flatBottom === true;
 
                   const fallbackText =
                     toolInput.text ?? newMessage?.content?.text;
@@ -945,6 +950,7 @@ Deno.serve(async (req) => {
                     ...(imageGenerationModel && { imageGenerationModel }),
                     ...(multiviewImages && { multiviewImages }),
                     ...(semanticMaterialMap && { semanticMaterialMap }),
+                    ...(flatBottom && { flatBottom }),
                   };
 
                   debugLog('=== CREATIVE-CHAT: CALLING MESH ENDPOINT ===');

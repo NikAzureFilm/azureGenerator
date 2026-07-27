@@ -35,6 +35,7 @@
     "test:unit": "vitest run",
     "test:3mf": "node --experimental-strip-types src/utils/threeMfExport.test.mjs",
     "test:flexi": "node --experimental-strip-types src/utils/flexiToyPlan.test.mjs && node --experimental-strip-types src/utils/flexiToyBuild.test.mjs",
+    "test:flat-bottom": "node --experimental-strip-types shared/flatBottom.test.mjs && node --experimental-strip-types src/utils/flatBottomCut.test.mjs && node --experimental-strip-types src/utils/flatBottomClient.test.mjs && node --experimental-strip-types src/utils/flatBottomWiring.test.mjs",
     "test:3mf:visual": "node --experimental-strip-types scripts/three-mf-visual-report.mjs --self-test --out tmp/3mf-visual-report.html",
     "test:static-shell": "node scripts/static-shell-smoke.mjs",
     "lint": "eslint . --ignore-pattern 'supabase/**'",
