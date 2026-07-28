@@ -696,7 +696,12 @@ const wingSettings = {
 const wingRaw = toInput(makeWingedTube());
 const wingInput = scaleForSettings(wingRaw, wingSettings);
 const wingPlan = planFlexiToy(wingInput, wingSettings);
-const wingOutcome = await buildFlexiToy(wasm, wingInput, wingPlan, wingSettings);
+const wingOutcome = await buildFlexiToy(
+  wasm,
+  wingInput,
+  wingPlan,
+  wingSettings,
+);
 assert.equal(
   wingOutcome.status,
   'ok',
@@ -742,6 +747,225 @@ assert.ok(
     outputWing >= inputWing - 1.2,
     `winged tube: wing survives between cuts (${outputWing.toFixed(1)} vs input ${inputWing.toFixed(1)}mm at x=${midX.toFixed(1)})`,
   );
+}
+
+// --- Shell engagement + skin-lofted seam regressions ------------------------
+
+// Fish-proportioned bodies: an elliptical cross-section (tall > wide), slowly
+// varying along x — the shape class where the shell style used to fall back
+// to the rounded groove on every joint (slope cap) and, when it did engage,
+// cut a deep trench on the tall side (support-extent ledge).
+function makeEllipticalFish({
+  length = 380,
+  halfHeight = 38,
+  halfWidth = 22,
+  radialSegments = 96,
+  rings = 140,
+} = {}) {
+  const positions = [];
+  const profile = (u) => Math.sin(Math.PI * (0.08 + 0.84 * u)) ** 0.6;
+  positions.push(0, 0, 0);
+  const ringStart = 1;
+  for (let ri = 0; ri < rings; ri += 1) {
+    const u = (ri + 1) / (rings + 1);
+    const s = profile(u);
+    for (let k = 0; k < radialSegments; k += 1) {
+      const a = (k / radialSegments) * Math.PI * 2;
+      positions.push(
+        length * u,
+        s * halfHeight * Math.cos(a),
+        s * halfWidth * Math.sin(a),
+      );
+    }
+  }
+  const head = positions.length / 3;
+  positions.push(length, 0, 0);
+  const indices = [];
+  const rv = (ri, k) => ringStart + ri * radialSegments + (k % radialSegments);
+  for (let k = 0; k < radialSegments; k += 1)
+    indices.push(0, rv(0, k + 1), rv(0, k));
+  for (let ri = 0; ri < rings - 1; ri += 1) {
+    for (let k = 0; k < radialSegments; k += 1) {
+      const a = rv(ri, k);
+      const b = rv(ri, k + 1);
+      const c = rv(ri + 1, k + 1);
+      const d = rv(ri + 1, k);
+      indices.push(a, b, c, a, c, d);
+    }
+  }
+  for (let k = 0; k < radialSegments; k += 1)
+    indices.push(head, rv(rings - 1, k), rv(rings - 1, k + 1));
+  return toInput({ positions, indices });
+}
+
+// (a) Flat-fish proportions at the defaults the design review ran (loose
+// clearance, 12° bend): every live joint must host an overlapping shell — no
+// shell-joint-fallback — and every cut must sever.
+{
+  const settings = {
+    segmentCount: 5,
+    clearanceMm: 0.55,
+    targetLengthMm: 260,
+    jointScale: 1.0,
+    axisOverride: 'auto',
+    bendAngleDeg: 12,
+    jointStyle: 'shell',
+  };
+  const fishRaw = makeEllipticalFish();
+  const fish = scaleForSettings(fishRaw, settings);
+  const fishPlan = planFlexiToy(fish, settings);
+  const liveCount = fishPlan.joints.filter((j) => !j.fused).length;
+  assert.ok(liveCount >= 4, `flat fish plans live joints (got ${liveCount})`);
+  const fishOutcome = await buildFlexiToy(wasm, fish, fishPlan, settings);
+  assert.equal(
+    fishOutcome.status,
+    'ok',
+    `flat fish shell builds (got ${fishOutcome.code ?? 'ok'})`,
+  );
+  assert.ok(
+    !fishOutcome.result.warnings.some((w) => w.code === 'shell-joint-fallback'),
+    'flat fish at defaults: shell joints ENGAGE on every live joint (no fallback)',
+  );
+  assert.equal(
+    countBodies(fishOutcome.result.positions, fishOutcome.result.indices),
+    fishOutcome.result.segmentCount,
+    'flat fish shell: every cut fully severs',
+  );
+}
+
+// (b) 2:1 elliptical body: the lofted seam keeps adjacent segments a
+// clearance-scale gap apart, its floor stays within ~3mm of the skin in BOTH
+// the tall and thin directions (no tall-side trench), and (4) a segment
+// rotated by the claimed travel about a horizontal bend axis does not
+// intersect its neighbour (the lofted, θ-invariant seam slides).
+{
+  const settings = {
+    segmentCount: 5,
+    clearanceMm: 0.55,
+    targetLengthMm: 260,
+    jointScale: 1.0,
+    axisOverride: 'x',
+    bendAngleDeg: 12,
+    jointStyle: 'shell',
+  };
+  const raw = makeEllipticalFish({ halfHeight: 40, halfWidth: 20 });
+  const input = scaleForSettings(raw, settings);
+  const plan = planFlexiToy(input, settings);
+  const outcome = await buildFlexiToy(wasm, input, plan, settings);
+  assert.equal(
+    outcome.status,
+    'ok',
+    `2:1 elliptical shell builds (got ${outcome.code ?? 'ok'})`,
+  );
+  const result = outcome.result;
+  assert.ok(
+    !result.warnings.some((w) => w.code === 'shell-joint-fallback'),
+    '2:1 elliptical: shell joints engage',
+  );
+
+  const manifolds = result.segmentTriangleRanges.map((range) =>
+    segmentManifold(wasm, result.positions, result.indices, range),
+  );
+  const minShellGap = 0.9 * Math.min(settings.clearanceMm, 0.55);
+  for (let i = 1; i < manifolds.length; i += 1) {
+    const gap = manifolds[i - 1].minGap(manifolds[i], 5);
+    assert.ok(
+      gap >= minShellGap,
+      `2:1 elliptical: adjacent segments ${i - 1}/${i} keep ${gap.toFixed(3)} ≥ ${minShellGap.toFixed(3)}mm`,
+    );
+  }
+
+  // Result is floor-aligned; joints are in input space.
+  let shiftY = Infinity;
+  for (let i = 1; i < input.positions.length; i += 3) {
+    shiftY = Math.min(shiftY, input.positions[i]);
+  }
+  const liveJoints = plan.joints.filter((j) => !j.fused);
+  const probeJoint = liveJoints[Math.floor(liveJoints.length / 2)];
+  const cx = probeJoint.center[0];
+  const cy = probeJoint.center[1] - shiftY;
+  const cz = probeJoint.center[2];
+
+  // Seam floor vs skin, per direction, within a ±20° azimuth cone about the
+  // tall (+y) / thin (+z) direction. AT the cut plane the seam gap is open
+  // from the ledge outward — the skin is severed and the band walls sit
+  // axially clear of the plane — so the LARGEST result radius in a thin slab
+  // on the plane is the exposed seam floor (internal rise/cup faces sit at
+  // smaller radii and cannot raise a max). The lofted ledge must keep that
+  // floor within ~3mm of the skin in the TALL direction too (the old
+  // support-extent ledge left a >8mm trench there).
+  const coneRadius = (positions, centerY, isTall, axialTol) => {
+    let best = 0;
+    for (let v = 0; v < positions.length / 3; v += 1) {
+      const x = positions[v * 3];
+      if (Math.abs(x - cx) > axialTol) continue;
+      const y = positions[v * 3 + 1] - centerY;
+      const z = positions[v * 3 + 2] - cz;
+      const major = isTall ? Math.abs(y) : Math.abs(z);
+      const minor = isTall ? Math.abs(z) : Math.abs(y);
+      if (minor > Math.tan((20 * Math.PI) / 180) * major) continue;
+      const radius = Math.hypot(y, z);
+      if (radius > best) best = radius;
+    }
+    return best;
+  };
+  // The physical floor sits flap (1.6) + sliding gap (clearance + the
+  // azimuth-slip allowance, ~1.0 here) under the skin; sector envelopes and
+  // the flap's headward taper band add a bounded safety margin on top.
+  // 4.5mm therefore pins "uniform shallow seam" (the pre-loft support-extent
+  // ledge left a 13mm tall-side trench here) without asserting away the
+  // deliberate bend-safety margins.
+  const depths = {};
+  for (const isTall of [true, false]) {
+    const skin = coneRadius(input.positions, probeJoint.center[1], isTall, 1.5);
+    assert.ok(skin > 10, `2:1 skin radius sane (${skin.toFixed(1)}mm)`);
+    const floor = coneRadius(result.positions, cy, isTall, 0.75);
+    assert.ok(floor > 0, `2:1 ${isTall ? 'tall' : 'thin'}: seam floor found`);
+    const depth = skin - floor;
+    depths[isTall ? 'tall' : 'thin'] = depth;
+    assert.ok(
+      depth >= 0.3,
+      `2:1 ${isTall ? 'tall' : 'thin'}: a seam exists (depth ${depth.toFixed(2)}mm)`,
+    );
+    assert.ok(
+      depth <= 4.5,
+      `2:1 ${isTall ? 'tall' : 'thin'}: seam floor stays near the skin (depth ${depth.toFixed(2)}mm)`,
+    );
+  }
+  assert.ok(
+    Math.abs(depths.tall - depths.thin) <= 2.0,
+    `2:1: seam depth is uniform around the ring (tall ${depths.tall.toFixed(2)} vs thin ${depths.thin.toFixed(2)}mm)`,
+  );
+
+  // (4) Bend-safety numeric probe: rotate the head segment about a
+  // horizontal axis ⊥ the joint axis by the claimed travel — the lofted,
+  // θ-invariant seam must slide without interpenetration.
+  const pk = liveJoints.indexOf(probeJoint);
+  const rc = probeJoint.ballRadiusMm + settings.clearanceMm;
+  const thetaMouth = Math.acos(Math.min(1, probeJoint.socketDepthMm / rc));
+  const travelRad =
+    thetaMouth -
+    Math.max(
+      Math.asin(0.35),
+      thetaMouth - (settings.bendAngleDeg * Math.PI) / 180,
+    );
+  const ax = [-probeJoint.axis[2], 0, probeJoint.axis[0]];
+  const axLen = Math.hypot(ax[0], ax[1], ax[2]) || 1;
+  const rotationMatrix = rodriguesAbout(
+    [ax[0] / axLen, ax[1] / axLen, ax[2] / axLen],
+    travelRad,
+    [cx, cy, cz],
+  );
+  const head = manifolds[pk + 1].transform(rotationMatrix);
+  const overlap = manifolds[pk].intersect(head);
+  const overlapVolume = overlap.isEmpty() ? 0 : overlap.volume();
+  assert.ok(
+    overlapVolume < 1e-3,
+    `2:1 elliptical: joint ${pk} swings ${((travelRad * 180) / Math.PI).toFixed(1)}° without collision (overlap ${overlapVolume.toFixed(4)})`,
+  );
+  overlap.delete();
+  head.delete();
+  for (const manifold of manifolds) manifold.delete();
 }
 
 // A closed loop (torus) cannot be severed by a single cut → clean rounded-uncut.
