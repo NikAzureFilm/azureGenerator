@@ -24,6 +24,7 @@ import type {
   FlexiToySettings,
   FlexiToyPlan,
   FlexiJointPlan,
+  FlexiJointStyle,
   FlexiToyResult,
   FlexiToyWarning,
   FlexiToyOutcome,
@@ -120,6 +121,7 @@ export async function buildFlexiToy(
     // Each output segment is a list of component manifolds (usually one; the
     // rounded brim can split a fin sliver off into its interval's segment).
     let segments: Manifold[][];
+    let shellFallbackJoints = 0;
 
     if (cutJoints.length === 0) {
       segments = [[base.manifold]];
@@ -140,6 +142,7 @@ export async function buildFlexiToy(
       }
       segments = pieces.map((piece) => [piece]);
     } else {
+      const notes = { shellFallbackJoints: 0 };
       const grouped = buildRoundedSegments(
         wasm,
         keep,
@@ -148,6 +151,8 @@ export async function buildFlexiToy(
         meshInput,
         clearance,
         settings.bendAngleDeg,
+        jointStyle,
+        notes,
       );
       if (grouped === 'uncut') {
         return {
@@ -165,11 +170,21 @@ export async function buildFlexiToy(
         };
       }
       segments = grouped;
+      shellFallbackJoints = notes.shellFallbackJoints;
     }
 
     const assembled = assemblePieces(segments, meshInput);
 
     const warnings: FlexiToyWarning[] = [...plan.warnings];
+    if (shellFallbackJoints > 0) {
+      warnings.push({
+        code: 'shell-joint-fallback',
+        message:
+          shellFallbackJoints === 1
+            ? 'One joint was too small for an overlapping shell and uses a rounded groove instead.'
+            : `${shellFallbackJoints} joints were too small for overlapping shells and use rounded grooves instead.`,
+      });
+    }
     if (base.repaired) {
       warnings.push({
         code: 'mesh-repaired',
@@ -510,6 +525,8 @@ function buildRoundedSegments(
   meshInput: FlexiMeshInput,
   clearance: number,
   bendAngleDeg: number,
+  jointStyle: FlexiJointStyle = 'rounded',
+  notes: { shellFallbackJoints: number } = { shellFallbackJoints: 0 },
 ): Manifold[][] | 'uncut' | null {
   // Sequential subtract, freeing each intermediate immediately so a 19-joint
   // body doesn't pile up full-body copies (only the running cut is retained).
@@ -550,34 +567,64 @@ function buildRoundedSegments(
         other.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
       maxTailReach = Math.min(maxTailReach, distance - otherCup - 1);
     }
-    // Solve the wedge, re-measure the body over the axial band that wedge
-    // actually sweeps, and iterate until the outer radius stabilises — a body
-    // flaring steeply next to the cut can otherwise outgrow a one-pass band
-    // and bury the groove under the flare.
-    let wedge = solveRoundedWedge(angles, joint, clearance, {
-      floorMm: planeExtents.minMm,
-      outMm: planeExtents.maxMm,
-      maxTailReachMm: maxTailReach,
-    });
-    for (let pass = 0; pass < 4; pass += 1) {
-      const bandHalfWidth =
-        wedge.r3 *
-          Math.max(
-            Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD),
-            Math.cos(wedge.thetaEnd),
-          ) +
-        2;
-      const bandExtents = measure(bandHalfWidth);
-      const next = solveRoundedWedge(angles, joint, clearance, {
+    // The overlapping-shell style needs a lap shelf just under the thinnest
+    // skin; where the body cannot host one, that joint falls back to the
+    // rounded wedge.
+    let cutter: Manifold | null = null;
+    if (jointStyle === 'shell') {
+      let shell = solveShellWedge(angles, joint, clearance, {
         floorMm: planeExtents.minMm,
-        outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+        outMm: planeExtents.maxMm,
+      });
+      for (let pass = 0; shell && pass < 4; pass += 1) {
+        const bandHalfWidth =
+          shell.rOut * Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD) + 2;
+        const bandExtents = measure(bandHalfWidth);
+        const next = solveShellWedge(angles, joint, clearance, {
+          floorMm: planeExtents.minMm,
+          outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+        });
+        const settled = !next || Math.abs(next.rOut - shell.rOut) < 0.25;
+        shell = next;
+        if (settled) break;
+      }
+      if (shell) {
+        cutter = buildShellCutter(wasm, joint, clearance, angles, shell);
+      }
+      if (!cutter) {
+        notes.shellFallbackJoints += 1;
+      }
+    }
+    if (!cutter) {
+      // Solve the wedge, re-measure the body over the axial band that wedge
+      // actually sweeps, and iterate until the outer radius stabilises — a
+      // body flaring steeply next to the cut can otherwise outgrow a one-pass
+      // band and bury the groove under the flare.
+      let wedge = solveRoundedWedge(angles, joint, clearance, {
+        floorMm: planeExtents.minMm,
+        outMm: planeExtents.maxMm,
         maxTailReachMm: maxTailReach,
       });
-      const settled = Math.abs(next.r3 - wedge.r3) < 0.25;
-      wedge = next;
-      if (settled) break;
+      for (let pass = 0; pass < 4; pass += 1) {
+        const bandHalfWidth =
+          wedge.r3 *
+            Math.max(
+              Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD),
+              Math.cos(wedge.thetaEnd),
+            ) +
+          2;
+        const bandExtents = measure(bandHalfWidth);
+        const next = solveRoundedWedge(angles, joint, clearance, {
+          floorMm: planeExtents.minMm,
+          outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+          maxTailReachMm: maxTailReach,
+        });
+        const settled = Math.abs(next.r3 - wedge.r3) < 0.25;
+        wedge = next;
+        if (settled) break;
+      }
+      cutter = buildRoundedCutter(wasm, joint, clearance, angles, wedge);
     }
-    const cutter = buildRoundedCutter(wasm, joint, clearance, angles, wedge);
     if (!cutter) {
       if (cut !== body) cut.delete();
       return null;
@@ -875,6 +922,191 @@ function buildRoundedCutter(
     return null;
   }
 
+  const oriented = cutter.transform(
+    orientationMatrix(joint.axis, joint.center),
+  );
+  cutter.delete();
+  return oriented;
+}
+
+// --- Overlapping-shell (scale) cutter --------------------------------------
+
+// Printable minimum thickness of the lap flap's tip (the head-side skin edge
+// riding over the ledge).
+const SHELL_MIN_FLAP_MM = 1.2;
+// Minimum overlap length (arc under the flap), in mm at the ledge radius.
+const SHELL_MIN_LAP_MM = 2.5;
+
+type ShellWedge = {
+  /** Cup outer wall radius — the internal rise starts here. */
+  r1: number;
+  /** Rise slope dθ/dR toward θ_A (rad/mm). */
+  slope: number;
+  /** Radius where the rise reaches θ_A (inner end of the hidden band). */
+  r2: number;
+  /** Sliding ledge sphere radius — the seam floor, just under the skin. */
+  rLedge: number;
+  /** Outer radius of the seam band (beyond the skin). */
+  rOut: number;
+  /** Head-side edge of the visible seam band (seam spans [θ_B−g, θ_B]). */
+  thetaB: number;
+  /** Tail edge of the hidden inner band, θ_B + lap angle. */
+  thetaA: number;
+};
+
+// Solve the overlapping-shell joint: the visible seam is a narrow band centred
+// on the cut ring whose floor is a concentric SPHERE at rLedge (it slides, so
+// bending never opens a view into the joint), and the head-side skin laps
+// over that floor by `lap` before a hidden band (under the flap) drops down to
+// the internal rise and cup. Null when the body is too thin to host the shelf
+// (caller falls back to the rounded wedge for that joint).
+function solveShellWedge(
+  angles: RoundedGapAngles,
+  joint: FlexiJointPlan,
+  clearance: number,
+  extents: { floorMm: number; outMm: number },
+): ShellWedge | null {
+  const { alpha, gapAngle } = angles;
+  const cs = joint.faceGapMm;
+  const r1 = joint.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
+  // Ledge just under the thinnest skin, keeping a printable flap above it.
+  const rLedge = Math.min(
+    GROOVE_FLOOR_FACTOR * extents.floorMm,
+    extents.floorMm - cs - SHELL_MIN_FLAP_MM,
+  );
+  if (!(rLedge >= r1 + 2)) return null;
+  const r2 = rLedge - 1.5;
+  if (!(r2 > r1 + 0.5)) return null;
+  const thetaB = Math.PI / 2 + gapAngle / 2;
+  const thetaA = thetaB + Math.max(gapAngle, SHELL_MIN_LAP_MM / rLedge);
+  // Room for the head segment's polar pillar past the hidden band.
+  if (thetaA + gapAngle > Math.PI - NECK_FLOOR_RAD) return null;
+  // The rise must reach θ_A by r2 without the offset faces pinching below the
+  // clearance (same law as the rounded wedge).
+  const slopeCap =
+    Math.sqrt(Math.max(0, ((r1 * gapAngle) / clearance) ** 2 - 1)) / r1;
+  if (!(slopeCap * (r2 - r1) >= thetaA - alpha)) return null;
+  return {
+    r1,
+    slope: (thetaA - alpha) / (r2 - r1),
+    r2,
+    rLedge,
+    rOut: GROOVE_OUT_FACTOR * extents.outMm + cs,
+    thetaB,
+    thetaA,
+  };
+}
+
+// Build the overlapping-shell cutter: cup shell + four gap parts —
+//   rise: mouth cone rising from the cup to θ_A (hidden inside the body),
+//   hidden band: [θ_A, θ_A+g] from the rise up under the flap,
+//   ledge: the sliding sphere shell [rLedge, rLedge+cs] under seam and flap,
+//   seam band: [θ_B−g, θ_B] from the ledge out through the skin.
+// Everything is concentric or angular, so travel is exactly the plan's
+// θ_mouth − α; the ledge and cup slide with constant gaps at any bend.
+function buildShellCutter(
+  wasm: ManifoldToplevel,
+  joint: FlexiJointPlan,
+  clearance: number,
+  angles: RoundedGapAngles,
+  shell: ShellWedge,
+): Manifold | null {
+  const r = joint.ballRadiusMm;
+  const rc = r + clearance;
+  const cs = joint.faceGapMm;
+  const { alpha, gapAngle } = angles;
+  const { r1, slope, r2, rLedge, rOut, thetaB, thetaA } = shell;
+  const ov = SHELL_OVERLAP_RAD;
+
+  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const point = (radius: number, theta: number): number[] => [
+    radius * Math.sin(theta),
+    -radius * Math.cos(theta),
+  ];
+  const tailAngle = (radius: number): number => {
+    if (radius <= r1) return alpha;
+    return Math.min(thetaA, alpha + slope * (radius - r1));
+  };
+  // Rise wedge polygon (mouth cone at the cup rotating up to θ_A), sampled so
+  // angular steps stay ≤ CUTTER_ARC_STEP_DEG; overlaps the hidden band at r2+.
+  const riseMax = r2 + 0.3;
+  const facePoints = (
+    rFrom: number,
+    rTo: number,
+    offset: number,
+  ): number[][] => {
+    const knots = [r1, r2].filter(
+      (k) => k > Math.min(rFrom, rTo) && k < Math.max(rFrom, rTo),
+    );
+    const stops = [rFrom, ...knots, rTo];
+    if (rFrom > rTo) stops.sort((a, b) => b - a);
+    const points: number[][] = [];
+    for (let i = 0; i < stops.length - 1; i += 1) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      const sweep = Math.abs(tailAngle(b) - tailAngle(a));
+      const steps = Math.max(1, Math.ceil(sweep / stepRad));
+      for (let s2 = 0; s2 < steps; s2 += 1) {
+        const radius = a + ((b - a) * s2) / steps;
+        points.push(point(radius, tailAngle(radius) + offset));
+      }
+    }
+    points.push(point(rTo, tailAngle(rTo) + offset));
+    return points;
+  };
+  const arcPoints = (radius: number, t0: number, t1: number): number[][] => {
+    const steps = Math.max(1, Math.ceil(Math.abs(t1 - t0) / stepRad));
+    const points: number[][] = [];
+    for (let i = 1; i < steps; i += 1) {
+      points.push(point(radius, t0 + ((t1 - t0) * i) / steps));
+    }
+    return points;
+  };
+  const risePolygon: number[][] = [
+    ...facePoints(r, riseMax, gapAngle),
+    ...arcPoints(riseMax, tailAngle(riseMax) + gapAngle, tailAngle(riseMax)),
+    ...facePoints(riseMax, r, 0),
+    ...arcPoints(r, alpha, alpha + gapAngle),
+  ];
+  let area = 0;
+  for (let i = 0; i < risePolygon.length; i += 1) {
+    const [x1, y1] = risePolygon[i];
+    const [x2, y2] = risePolygon[(i + 1) % risePolygon.length];
+    area += x1 * y2 - x2 * y1;
+  }
+  if (area < 0) risePolygon.reverse();
+
+  const { CrossSection } = wasm;
+  const revolve = (poly: number[][]): Manifold => {
+    const section = new CrossSection(poly as [number, number][]);
+    const solid = section.revolve(CUTTER_REVOLVE_SEGMENTS);
+    section.delete();
+    return solid;
+  };
+  const parts = [
+    // Ball ↔ cup clearance gap around the captured ball.
+    revolve(shellWedge(r, rc, alpha, Math.PI)),
+    revolve(risePolygon),
+    // Hidden band under the flap, from the rise up to the ledge.
+    revolve(shellWedge(r2, rLedge + cs, thetaA, thetaA + gapAngle)),
+    // Sliding ledge: seam floor and the flap's underside.
+    revolve(
+      shellWedge(rLedge, rLedge + cs, thetaB - ov, thetaA + gapAngle + ov),
+    ),
+    // Visible seam band, out through the skin.
+    revolve(shellWedge(rLedge, rOut, thetaB - gapAngle, thetaB)),
+  ];
+  let cutter = parts[0];
+  for (let i = 1; i < parts.length; i += 1) {
+    const unioned = cutter.add(parts[i]);
+    cutter.delete();
+    parts[i].delete();
+    cutter = unioned;
+  }
+  if (cutter.status() !== 'NoError' || cutter.isEmpty()) {
+    cutter.delete();
+    return null;
+  }
   const oriented = cutter.transform(
     orientationMatrix(joint.axis, joint.center),
   );

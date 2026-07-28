@@ -298,7 +298,7 @@ const capsuleRaw = toInput(
 // Core invariants adapted to run for BOTH articulation styles. Returns the
 // rounded-style result so the 3MF export test can reuse it.
 let roundedResult = null;
-for (const style of ['classic', 'rounded']) {
+for (const style of ['classic', 'rounded', 'shell']) {
   const settings = baseSettings(style);
   const capsule = scaleForSettings(capsuleRaw, settings);
   const capsulePlan = planFlexiToy(capsule, settings);
@@ -391,8 +391,8 @@ for (const style of ['classic', 'rounded']) {
     );
   }
 
-  if (style === 'rounded') {
-    roundedResult = result;
+  if (style === 'rounded' || style === 'shell') {
+    if (style === 'rounded') roundedResult = result;
 
     // Concentricity / no-collision: adjacent segments stay apart by ~min(c, gb).
     const bowlGap = Math.max(settings.clearanceMm, 0.55);
@@ -513,7 +513,7 @@ assert.equal(
 // Two-body input (capsule + a substantial detached fin sphere) → both styles.
 // If the rounded style genuinely cannot sever it, it must surface 'rounded-uncut'
 // (never a silent compute-failed); it must never throw.
-for (const style of ['classic', 'rounded']) {
+for (const style of ['classic', 'rounded', 'shell']) {
   const settings = baseSettings(style);
   const twoBodyRaw = toInput(
     combine(

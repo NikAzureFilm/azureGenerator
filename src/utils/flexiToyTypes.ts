@@ -43,15 +43,25 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
 
 /**
  * Articulation style:
+ * - 'shell': overlapping-scale joints (articulated-dragon look) — the seam
+ *   floor is a concentric sliding dome and the head-side skin laps over it,
+ *   so you never see into the joint, bent or straight. Sizing follows the
+ *   rounded family; falls back to the rounded wedge per joint where the body
+ *   is too thin for the lap shelf.
  * - 'rounded': concentric dome-in-dish cut surfaces (flexi-cutter style) — the
  *   gap is invariant under joint rotation, so segments swing to the full
  *   bendAngleDeg; the cut shows as a narrow rounded groove.
  * - 'classic': flat ring cuts (fishing-lure look) — visible flat gaps between
  *   segments; bend is limited by the faces meeting, so travel is smaller.
  */
-export type FlexiJointStyle = 'rounded' | 'classic';
+export type FlexiJointStyle = 'shell' | 'rounded' | 'classic';
 
-export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'rounded';
+export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'shell';
+
+/** Styles that share the rounded family's sizing (cup containment, bowl gap). */
+export function isRoundedFamilyJointStyle(style: FlexiJointStyle): boolean {
+  return style === 'rounded' || style === 'shell';
+}
 
 export type FlexiToySettings = {
   /** 'auto' → round(spineLength / 22) clamped to [4, FLEXI_MAX_SEGMENTS]. */
@@ -106,6 +116,7 @@ export type FlexiWarningCode =
   | 'spine-fallback-straight'
   | 'cuts-not-vertical'
   | 'joint-positions-adjusted'
+  | 'shell-joint-fallback'
   | 'mesh-repaired';
 
 export type FlexiToyWarning = {

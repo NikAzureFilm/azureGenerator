@@ -1075,6 +1075,12 @@ export function FlexiToyDialog({
             className="flex flex-col gap-2 sm:flex-row"
           >
             <StyleCard
+              selected={jointStyle === 'shell'}
+              title="Shell"
+              description="Overlapping scales — joints stay hidden"
+              onSelect={() => setJointStyle('shell')}
+            />
+            <StyleCard
               selected={jointStyle === 'rounded'}
               title="Rounded"
               description="Bends further — smooth, rounded grooves"

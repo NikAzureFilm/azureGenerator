@@ -200,7 +200,7 @@ describe('FlexiToyDialog', () => {
       expect.objectContaining({
         bendAngleDeg: 12,
         clearanceMm: 0.55,
-        jointStyle: 'rounded',
+        jointStyle: 'shell',
       }),
     );
   });

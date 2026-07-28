@@ -20,6 +20,7 @@ import {
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_FACE_GAP_MM,
   FLEXI_DEFAULT_JOINT_STYLE,
+  isRoundedFamilyJointStyle,
 } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
@@ -316,7 +317,7 @@ function minSegmentLengthFor(
   clearance: number,
   jointStyle: FlexiJointStyle,
 ): number {
-  if (jointStyle === 'rounded') {
+  if (isRoundedFamilyJointStyle(jointStyle)) {
     const reach =
       maxBallRadius +
       clearance +
@@ -862,7 +863,7 @@ function sizeJoint(
 
   // Rounded style must keep the whole socket CUP (radius r+c+w) inside the skin;
   // classic keeps the ball's clearance shell (r+c) inside with a socket wall.
-  const rounded = jointStyle === 'rounded';
+  const rounded = isRoundedFamilyJointStyle(jointStyle);
 
   const profile = buildCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
@@ -899,16 +900,15 @@ function sizeJoint(
       if (socketDepthMm === null) {
         return fused(ballRadiusMm);
       }
-      const faceGapMm =
-        jointStyle === 'rounded'
-          ? roundedBowlGap(clearance)
-          : computeFaceGap(
-              bendAngleDeg,
-              rho0,
-              ballRadiusMm,
-              socketDepthMm,
-              clearance,
-            );
+      const faceGapMm = rounded
+        ? roundedBowlGap(clearance)
+        : computeFaceGap(
+            bendAngleDeg,
+            rho0,
+            ballRadiusMm,
+            socketDepthMm,
+            clearance,
+          );
       return {
         center,
         axis,
@@ -1023,13 +1023,12 @@ function capJointBall(
   // Rounded keeps its constant bowl gap; classic's flat gap shrinks with the
   // ball (its bend-driven value is unchanged, so min() with the connectivity
   // budget is exact).
-  const faceGapMm =
-    jointStyle === 'rounded'
-      ? roundedBowlGap(clearance)
-      : Math.min(
-          joint.faceGapMm,
-          cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM,
-        );
+  const faceGapMm = isRoundedFamilyJointStyle(jointStyle)
+    ? roundedBowlGap(clearance)
+    : Math.min(
+        joint.faceGapMm,
+        cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM,
+      );
   return {
     center: joint.center,
     axis: joint.axis,
@@ -1062,7 +1061,7 @@ function jointOverlapCap(
   if (!Number.isFinite(minStationGap)) {
     return Infinity;
   }
-  if (jointStyle === 'rounded') {
+  if (isRoundedFamilyJointStyle(jointStyle)) {
     // 2·(ball + clearance + wall + bowlGap) + margin ≤ gap.
     return (
       (minStationGap - OVERLAP_MARGIN_MM) / 2 -
