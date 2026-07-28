@@ -632,6 +632,118 @@ assert.equal(
   for (const manifold of manifolds) manifold.delete();
 }
 
+// Band-overlap regression: a thin tube with a tall mid-body wing, at max bend
+// and a segment count that pushes pitch to the plan floor. Each rounded-family
+// gap band reaches ±rho·tan(gapAngle/2) axially at cross-section radius rho,
+// so the spacing floor must budget the WIDEST station extent — otherwise two
+// adjacent bands jointly cover the wing's whole axial span and silently shave
+// it to the groove floor between cuts.
+function makeWingedTube({
+  length = 230,
+  radius = 6,
+  wingHalfHeight = 25,
+  wingStart = 0.38,
+  wingEnd = 0.62,
+  radialSegments = 48,
+  rings = 230,
+} = {}) {
+  const positions = [];
+  positions.push(0, 0, 0);
+  const ringStart = 1;
+  const wing = (u) => {
+    if (u <= wingStart || u >= wingEnd) return 0;
+    const t = (u - wingStart) / (wingEnd - wingStart);
+    return Math.sin(Math.PI * t) ** 2;
+  };
+  for (let ri = 0; ri < rings; ri += 1) {
+    const u = (ri + 1) / (rings + 1);
+    const end = Math.min(1, 14 * Math.min(u, 1 - u)) ** 0.5;
+    const ry = end * radius;
+    const rz = end * (radius + (wingHalfHeight - radius) * wing(u));
+    for (let k = 0; k < radialSegments; k += 1) {
+      const a = (k / radialSegments) * Math.PI * 2;
+      positions.push(length * u, ry * Math.cos(a), rz * Math.sin(a));
+    }
+  }
+  const head = positions.length / 3;
+  positions.push(length, 0, 0);
+  const indices = [];
+  const rv = (ri, k) => ringStart + ri * radialSegments + (k % radialSegments);
+  for (let k = 0; k < radialSegments; k += 1)
+    indices.push(0, rv(0, k + 1), rv(0, k));
+  for (let ri = 0; ri < rings - 1; ri += 1) {
+    for (let k = 0; k < radialSegments; k += 1) {
+      const a = rv(ri, k);
+      const b = rv(ri, k + 1);
+      const c = rv(ri + 1, k + 1);
+      const d = rv(ri + 1, k);
+      indices.push(a, b, c, a, c, d);
+    }
+  }
+  for (let k = 0; k < radialSegments; k += 1) {
+    indices.push(head, rv(rings - 1, k), rv(rings - 1, k + 1));
+  }
+  return { positions, indices };
+}
+
+const wingSettings = {
+  ...baseSettings('rounded'),
+  segmentCount: 20,
+  clearanceMm: 0.4,
+  bendAngleDeg: 25,
+  targetLengthMm: 230,
+};
+const wingRaw = toInput(makeWingedTube());
+const wingInput = scaleForSettings(wingRaw, wingSettings);
+const wingPlan = planFlexiToy(wingInput, wingSettings);
+const wingOutcome = await buildFlexiToy(wasm, wingInput, wingPlan, wingSettings);
+assert.equal(
+  wingOutcome.status,
+  'ok',
+  `winged tube builds (got ${wingOutcome.code ?? 'ok'})`,
+);
+assert.ok(
+  wingOutcome.result.segmentCount < 20,
+  `winged tube at max bend: the band floor reduces the segment count (got ${wingOutcome.result.segmentCount})`,
+);
+{
+  // Measure the wing's half-extent between the two cuts nearest the crest —
+  // it must match the input there (the fin is grooved AT stations, never
+  // shaved BETWEEN them).
+  const crestX = 115;
+  const liveX = wingPlan.joints
+    .filter((j) => !j.fused)
+    .map((j) => j.center[0])
+    .sort((a, b) => a - b);
+  let midX = crestX;
+  let bestDistance = Infinity;
+  for (let i = 0; i + 1 < liveX.length; i += 1) {
+    const mid = (liveX[i] + liveX[i + 1]) / 2;
+    if (Math.abs(mid - crestX) < bestDistance) {
+      bestDistance = Math.abs(mid - crestX);
+      midX = mid;
+    }
+  }
+  const maxAbsZNear = (positions, cx) => {
+    let max = 0;
+    for (let v = 0; v < positions.length / 3; v += 1) {
+      if (Math.abs(positions[v * 3] - cx) > 0.75) continue;
+      max = Math.max(max, Math.abs(positions[v * 3 + 2]));
+    }
+    return max;
+  };
+  const inputWing = maxAbsZNear(wingInput.positions, midX);
+  const outputWing = maxAbsZNear(wingOutcome.result.positions, midX);
+  assert.ok(
+    inputWing > 15,
+    `winged tube: probe sits on the wing (input extent ${inputWing.toFixed(1)}mm)`,
+  );
+  assert.ok(
+    outputWing >= inputWing - 1.2,
+    `winged tube: wing survives between cuts (${outputWing.toFixed(1)} vs input ${inputWing.toFixed(1)}mm at x=${midX.toFixed(1)})`,
+  );
+}
+
 // A closed loop (torus) cannot be severed by a single cut → clean rounded-uncut.
 const torusSettings = baseSettings('rounded');
 const torusRaw = makeTorus();

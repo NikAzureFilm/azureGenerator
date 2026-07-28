@@ -58,6 +58,9 @@ const GROOVE_FLOOR_FACTOR = 0.92;
 // The gap wedge's outer radius clears the widest local half-extent by this
 // factor so the band always punches through the skin (fins included).
 const GROOVE_OUT_FACTOR = 1.15;
+// Minimum solid slab that must survive between two adjacent joints' gap bands
+// at the widest feature (mirrors the plan's GAP_BAND_KEEP_MM).
+const GAP_BAND_KEEP_MM = 3;
 
 let cachedWasm: Promise<ManifoldToplevel> | null = null;
 
@@ -547,7 +550,7 @@ function buildRoundedSegments(
       if (cut !== body) cut.delete();
       return null;
     }
-    const angles = roundedGapAngles(joint, clearance, bendAngleDeg);
+    let angles = roundedGapAngles(joint, clearance, bendAngleDeg);
     if (!angles) {
       if (cut !== body) cut.delete();
       return null;
@@ -557,6 +560,7 @@ function buildRoundedSegments(
     // joint's cup wall.
     const index = cutJoints.indexOf(joint);
     let maxTailReach = Infinity;
+    let minNeighborDist = Infinity;
     for (const other of [cutJoints[index - 1], cutJoints[index + 1]]) {
       if (!other) continue;
       const dx = other.center[0] - joint.center[0];
@@ -566,6 +570,30 @@ function buildRoundedSegments(
       const otherCup =
         other.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
       maxTailReach = Math.min(maxTailReach, distance - otherCup - 1);
+      minNeighborDist = Math.min(minNeighborDist, distance);
+    }
+    // Gap-band budget (mirrors the plan's minSegmentLengthFor term): this
+    // joint's band reaches ±rho·tan(gapAngle/2) axially at radius rho, and
+    // its neighbour claims the same, so each side owns half the pitch minus a
+    // solid keep slab. Dragged cuts can be pinned tighter than the plan's
+    // floor; cap the travel here so two bands can never jointly shave a wide
+    // feature between stations.
+    if (Number.isFinite(minNeighborDist)) {
+      const outEstimate =
+        GROOVE_OUT_FACTOR * planeExtents.maxMm + joint.faceGapMm;
+      const halfWidthEstimate =
+        outEstimate * Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD) + 2;
+      const bandMax = Math.max(
+        planeExtents.maxMm,
+        measure(halfWidthEstimate).maxMm,
+      );
+      const budget = Math.max(0.05, (minNeighborDist - GAP_BAND_KEEP_MM) / 2);
+      const capRad = 2 * Math.atan2(budget, bandMax) - SHELL_OVERLAP_RAD;
+      const capDeg = (capRad * 180) / Math.PI;
+      if (capDeg < bendAngleDeg) {
+        const capped = roundedGapAngles(joint, clearance, Math.max(1, capDeg));
+        if (capped) angles = capped;
+      }
     }
     // The overlapping-shell style needs a lap shelf just under the thinnest
     // skin; where the body cannot host one, that joint falls back to the

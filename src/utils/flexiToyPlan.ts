@@ -57,6 +57,11 @@ const CONTAINMENT_SAMPLES = 8;
 const SIZING_SHRINK_STEP_MM = 0.2;
 // Extra clear space required between two joints' spheres inside one short segment.
 const OVERLAP_MARGIN_MM = 0.5;
+// Gap-band spacing budget (rounded family): seam overlap angle added to the
+// travel (mirrors the build's SHELL_OVERLAP_RAD) and the minimum solid slab
+// that must survive between two adjacent joints' bands at the widest feature.
+const GAP_BAND_OVERLAP_DEG = 3;
+const GAP_BAND_KEEP_MM = 3;
 // Rounded-style joint: cup wall thickness and the constant bowl (outer) gap. The
 // concentric dome-in-dish makes travel gap-independent, so the printed groove is
 // just this fixed gap; faceGapMm carries it (see FlexiJointPlan JSDoc).
@@ -222,6 +227,8 @@ export function planFlexiToy(
         maxLiveRadius(placed.joints),
         clearance,
         jointStyle,
+        bendAngleDeg,
+        placed.maxStationExtentMm,
       );
       const pitch = spine.lengthMm / segmentCount;
       if (pitch >= minSegmentLength || segmentCount <= minSegments) {
@@ -251,6 +258,8 @@ export function planFlexiToy(
     maxLiveRadius(joints),
     clearance,
     jointStyle,
+    bendAngleDeg,
+    placed.maxStationExtentMm,
   );
   if (joints.length >= 2 && minAdjacentGap < minSegmentLength) {
     const cap = jointOverlapCap(joints, minAdjacentGap, clearance, jointStyle);
@@ -311,11 +320,18 @@ function maxLiveRadius(joints: FlexiJointPlan[]): number {
 
 // Minimum spine spacing a live joint needs so adjacent joints don't collide.
 // Rounded cutters reach out to the cup + bowl gap, so they need more room than
-// the classic ball-and-socket pair.
+// the classic ball-and-socket pair. Their visible gap band additionally
+// reaches ±rho·tan((travel + seam overlap)/2) axially at cross-section radius
+// rho (see the build's wedge/seam geometry), so on wide stations the pitch
+// must also leave a solid slab between adjacent bands — otherwise two
+// neighbouring cuts jointly shave a wide feature (a fin or wing) down to the
+// groove floor between them.
 function minSegmentLengthFor(
   maxBallRadius: number,
   clearance: number,
   jointStyle: FlexiJointStyle,
+  bendAngleDeg?: number,
+  maxStationExtentMm?: number,
 ): number {
   if (isRoundedFamilyJointStyle(jointStyle)) {
     const reach =
@@ -323,7 +339,19 @@ function minSegmentLengthFor(
       clearance +
       ROUNDED_CUP_WALL_MM +
       roundedBowlGap(clearance);
-    return 2 * reach + OVERLAP_MARGIN_MM;
+    let floor = 2 * reach + OVERLAP_MARGIN_MM;
+    if (
+      bendAngleDeg !== undefined &&
+      maxStationExtentMm !== undefined &&
+      maxStationExtentMm > 0
+    ) {
+      const halfBand = ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360;
+      floor = Math.max(
+        floor,
+        2 * maxStationExtentMm * Math.tan(halfBand) + GAP_BAND_KEEP_MM,
+      );
+    }
+    return floor;
   }
   return Math.max(8, 2.4 * maxBallRadius);
 }
@@ -401,6 +429,8 @@ function sanitizeStations(
     maxLiveRadius(probe.joints),
     clearance,
     jointStyle,
+    bendAngleDeg,
+    probe.maxStationExtentMm,
   );
   const minGapFraction = spine.lengthMm > 0 ? minGapMm / spine.lengthMm : 0.02;
   const fractions = spreadFractions(clamped, minGapFraction);
@@ -733,7 +763,13 @@ function resolveSegmentCount(
   return { initial, minSegments: FLEXI_MIN_SEGMENTS };
 }
 
-type PlacedJoints = { joints: FlexiJointPlan[]; anyLiveTooVertical: boolean };
+type PlacedJoints = {
+  joints: FlexiJointPlan[];
+  anyLiveTooVertical: boolean;
+  /** Widest half-extent across all LIVE stations (0 when none) — feeds the
+   * gap-band spacing budget in minSegmentLengthFor. */
+  maxStationExtentMm: number;
+};
 
 function placeAndSizeJoints(
   fractions: number[],
@@ -746,9 +782,11 @@ function placeAndSizeJoints(
 ): PlacedJoints {
   const joints: FlexiJointPlan[] = [];
   let anyLiveTooVertical = false;
+  let maxStationExtentMm = 0;
   for (const fraction of fractions) {
     const s = spine.lengthMm * fraction;
     const sample = sampleSpine(spine, s);
+    const stationOut: { maxExtentMm?: number } = {};
     const joint = sizeJoint(
       sample.center,
       sample.axis,
@@ -759,13 +797,20 @@ function placeAndSizeJoints(
       bendAngleDeg,
       fraction,
       jointStyle,
+      stationOut,
     );
-    if (sample.tooVertical && !joint.fused) {
-      anyLiveTooVertical = true;
+    if (!joint.fused) {
+      if (sample.tooVertical) {
+        anyLiveTooVertical = true;
+      }
+      maxStationExtentMm = Math.max(
+        maxStationExtentMm,
+        stationOut.maxExtentMm ?? 0,
+      );
     }
     joints.push(joint);
   }
-  return { joints, anyLiveTooVertical };
+  return { joints, anyLiveTooVertical, maxStationExtentMm };
 }
 
 /** Constant bowl (outer) gap for the rounded style. */
@@ -850,6 +895,7 @@ function sizeJoint(
   bendAngleDeg: number,
   spineFraction: number,
   jointStyle: FlexiJointStyle,
+  stationOut?: { maxExtentMm?: number },
 ): FlexiJointPlan {
   const fused = (ballRadiusMm = 0): FlexiJointPlan => ({
     center,
@@ -867,6 +913,11 @@ function sizeJoint(
 
   const profile = buildCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
+  if (stationOut) {
+    // Widest half-extent at this station (profile is already built) — used by
+    // the caller for the gap-band spacing budget.
+    stationOut.maxExtentMm = reduceCrossSectionAt(profile, 0, maxOfArray);
+  }
   if (!(rho0 > 0)) {
     return fused();
   }
