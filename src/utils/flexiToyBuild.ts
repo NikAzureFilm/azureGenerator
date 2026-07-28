@@ -30,6 +30,7 @@ import type {
   FlexiToyOutcome,
 } from './flexiToyTypes.ts';
 import { crossSectionExtentsSampler } from './flexiToyPlan.ts';
+import type { FlexiSectionSampler } from './flexiToyPlan.ts';
 
 /** Non-superseded outcome the worker forwards to the main thread. */
 export type FlexiBuildOutcome = Exclude<
@@ -44,6 +45,12 @@ const ITK_REPAIR_MIN_TRIANGLES = 200;
 
 // --- Rounded (dome-in-dish) cutter tunables (see flexi-changes-v3 spec). ---
 const CUTTER_REVOLVE_SEGMENTS = 96;
+// The shell cutter is a 5-part union whose warp forces an eager evaluation
+// per joint; 64 azimuth segments keep chord sag < 0.05mm at seam radii while
+// halving the boolean cost on dense bodies (the ≤10s budget). The profile
+// arcs likewise sample at 5° — the sliding spheres' sag stays ≤ 0.002·r.
+const SHELL_REVOLVE_SEGMENTS = 64;
+const SHELL_ARC_STEP_DEG = 5;
 // Arc sampling step (degrees) for the profile polygon.
 const CUTTER_ARC_STEP_DEG = 3;
 // Neck strength floor: neck half-angle ≥ asin(0.35) so the neck stays ≥ 0.35·r.
@@ -578,17 +585,24 @@ function buildRoundedSegments(
     // solid keep slab. Dragged cuts can be pinned tighter than the plan's
     // floor; cap the travel here so two bands can never jointly shave a wide
     // feature between stations.
+    // The shell's flared seam-lip walls widen the band at the skin; measure
+    // over the wider reach and spend part of the budget on the flare.
+    const flareBudget = jointStyle === 'shell' ? SHELL_FLARE_BAND_RAD : 0;
+    const flareMeasure = jointStyle === 'shell' ? SHELL_LIP_FLARE_RAD : 0;
     if (Number.isFinite(minNeighborDist)) {
       const outEstimate =
         GROOVE_OUT_FACTOR * planeExtents.maxMm + joint.faceGapMm;
       const halfWidthEstimate =
-        outEstimate * Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD) + 2;
+        outEstimate *
+          Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD + flareMeasure) +
+        2;
       const bandMax = Math.max(
         planeExtents.maxMm,
         measure(halfWidthEstimate).maxMm,
       );
       const budget = Math.max(0.05, (minNeighborDist - GAP_BAND_KEEP_MM) / 2);
-      const capRad = 2 * Math.atan2(budget, bandMax) - SHELL_OVERLAP_RAD;
+      const capRad =
+        2 * (Math.atan2(budget, bandMax) - flareBudget) - SHELL_OVERLAP_RAD;
       const capDeg = (capRad * 180) / Math.PI;
       if (capDeg < bendAngleDeg) {
         const capped = roundedGapAngles(joint, clearance, Math.max(1, capDeg));
@@ -600,24 +614,53 @@ function buildRoundedSegments(
     // rounded wedge.
     let cutter: Manifold | null = null;
     if (jointStyle === 'shell') {
-      let shell = solveShellWedge(angles, joint, clearance, {
-        floorMm: planeExtents.minMm,
-        outMm: planeExtents.maxMm,
-      });
-      for (let pass = 0; shell && pass < 4; pass += 1) {
-        const bandHalfWidth =
-          shell.rOut * Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD) + 2;
-        const bandExtents = measure(bandHalfWidth);
-        const next = solveShellWedge(angles, joint, clearance, {
-          floorMm: planeExtents.minMm,
-          outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
-        });
-        const settled = !next || Math.abs(next.rOut - shell.rOut) < 0.25;
-        shell = next;
-        if (settled) break;
+      // Skin-lofted shell first: per-azimuth seam radii follow the local
+      // skin, so flattened bodies get a uniform shallow seam instead of a
+      // deep trench on the tall side.
+      const loft = solveShellLoft(measure, joint, angles);
+      if (loft) {
+        const lofted = solveShellWedge(
+          angles,
+          joint,
+          clearance,
+          { floorMm: planeExtents.minMm, outMm: planeExtents.maxMm },
+          loft,
+        );
+        if (lofted) {
+          cutter = buildShellCutter(
+            wasm,
+            joint,
+            clearance,
+            angles,
+            lofted,
+            loft,
+          );
+        }
       }
-      if (shell) {
-        cutter = buildShellCutter(wasm, joint, clearance, angles, shell);
+      // Plain revolved shell when the loft could not be solved or its warp
+      // failed validation.
+      if (!cutter) {
+        let shell = solveShellWedge(angles, joint, clearance, {
+          floorMm: planeExtents.minMm,
+          outMm: planeExtents.maxMm,
+        });
+        for (let pass = 0; shell && pass < 4; pass += 1) {
+          const bandHalfWidth =
+            shell.rOut *
+              Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD + flareMeasure) +
+            2;
+          const bandExtents = measure(bandHalfWidth);
+          const next = solveShellWedge(angles, joint, clearance, {
+            floorMm: planeExtents.minMm,
+            outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+          });
+          const settled = !next || Math.abs(next.rOut - shell.rOut) < 0.25;
+          shell = next;
+          if (settled) break;
+        }
+        if (shell) {
+          cutter = buildShellCutter(wasm, joint, clearance, angles, shell);
+        }
       }
       if (!cutter) {
         notes.shellFallbackJoints += 1;
@@ -661,10 +704,14 @@ function buildRoundedSegments(
     cutter.delete();
     if (cut !== body) cut.delete();
     cut = next;
-    if (cut.status() !== 'NoError' || cut.isEmpty()) {
-      if (cut !== body) cut.delete();
-      return null;
-    }
+  }
+
+  // Manifold booleans are lazy: checking status per joint would force a full
+  // evaluation of the growing chain each time. One check here evaluates the
+  // whole subtract tree once.
+  if (cut !== body && (cut.status() !== 'NoError' || cut.isEmpty())) {
+    cut.delete();
+    return null;
   }
 
   const components = cut.decompose();
@@ -960,10 +1007,30 @@ function buildRoundedCutter(
 // --- Overlapping-shell (scale) cutter --------------------------------------
 
 // Printable minimum thickness of the lap flap's tip (the head-side skin edge
-// riding over the ledge).
-const SHELL_MIN_FLAP_MM = 1.2;
+// riding over the ledge). Raised from 1.2 alongside the flared soft lips: the
+// flare thins the very tip, so the base flap carries a little more meat.
+const SHELL_MIN_FLAP_MM = 1.6;
 // Minimum overlap length (arc under the flap), in mm at the ledge radius.
-const SHELL_MIN_LAP_MM = 2.5;
+const SHELL_MIN_LAP_MM = 1.8;
+// Flare of the visible seam band's side walls away from radial (soft lips):
+// both skin edges leave the seam at an obtuse angle instead of a knife edge.
+const SHELL_LIP_FLARE_RAD = (22 * Math.PI) / 180;
+// Radius of the rounded lip arcs at the seam band's base corners (the flap
+// tip and the tail-side groove root).
+const SHELL_LIP_RADIUS_MM = 0.4;
+// Band-reach budget the flare adds at the skin (the lofted ledge keeps the
+// skin within ~1.3× the ledge radius, so the wall's angular drift at the skin
+// stays ≤ ~6° even though the wall itself flares 22°). Mirrored by the plan's
+// SHELL_FLARE_BAND_DEG in minSegmentLengthFor.
+const SHELL_FLARE_BAND_RAD = (6 * Math.PI) / 180;
+// Cap on the azimuth-slip allowance added to the ledge sliding gap (guards
+// fin-edged profiles from blowing the seam open; the envelope + smoothing
+// keeps ordinary flattened bodies far below this).
+const SHELL_SLIP_CAP_MM = 1.2;
+// Cap on the loft's slip rate L·δ (mm of seam-radius change per unit |cotθ|
+// of bend-induced azimuth slip) used to grade the hidden clearances under
+// the flap.
+const SHELL_SLIP_RATE_CAP_MM = 2.5;
 
 type ShellWedge = {
   /** Cup outer wall radius — the internal rise starts here. */
@@ -980,6 +1047,38 @@ type ShellWedge = {
   thetaB: number;
   /** Tail edge of the hidden inner band, θ_B + lap angle. */
   thetaA: number;
+  /**
+   * Angular width of the rise gap above the cup wall. Equals gapAngle when
+   * the slope cap holds; widened past it when the slope-capped rise could not
+   * reach θ_A within the span (see solveShellWedge). Width stays gapAngle for
+   * R ≤ r1 so the mouth angle, capture and travel are bit-identical.
+   */
+  riseGap: number;
+  /** Radial sliding gap of the ledge shell (clearance + azimuth-slip). */
+  slideGap: number;
+};
+
+/** Loft overrides for a skin-following (azimuth-modulated) shell seam. */
+type ShellLoft = {
+  /** Base (thinnest-azimuth) ledge radius the profile is built with. */
+  ledgeMm: number;
+  /** Base outer radius — rOut·m(φ) clears 1.15·skin + clearance everywhere. */
+  outRadiusMm: number;
+  /** Ledge sliding gap: clearance preset + the azimuth-slip allowance. */
+  slideGapMm: number;
+  /**
+   * Slip rate L·δ (mm per unit |cotθ|): how much the lofted seam radius can
+   * change under the bend-induced azimuth slip Δφ ≈ δ·|cotθ|·sin(φ−φ_bend)
+   * for surfaces off the bend equator. Grades the hidden clearances (ledge
+   * floor drop under the flap, hidden-band knee drop) with θ.
+   */
+  slipRateMm: number;
+  /** Per-sector radial multipliers (≥ 1), periodic in the sampler frame. */
+  m: Float64Array;
+  /** In-plane frame the sector azimuths are measured in. */
+  frame: { e1: [number, number, number]; e2: [number, number, number] };
+  /** Largest lofted outer radius (band-reach estimates). */
+  maxOutMm: number;
 };
 
 // Solve the overlapping-shell joint: the visible seam is a narrow band centred
@@ -987,66 +1086,298 @@ type ShellWedge = {
 // bending never opens a view into the joint), and the head-side skin laps
 // over that floor by `lap` before a hidden band (under the flap) drops down to
 // the internal rise and cup. Null when the body is too thin to host the shelf
-// (caller falls back to the rounded wedge for that joint).
+// (caller falls back to the rounded wedge for that joint). With `loft` the
+// ledge/outer radii come from the per-azimuth skin solve instead of the
+// support extents (the cutter is then radially warped, see solveShellLoft).
 function solveShellWedge(
   angles: RoundedGapAngles,
   joint: FlexiJointPlan,
   clearance: number,
   extents: { floorMm: number; outMm: number },
+  loft?: ShellLoft,
 ): ShellWedge | null {
   const { alpha, gapAngle } = angles;
   const cs = joint.faceGapMm;
+  const slideGap = loft ? loft.slideGapMm : cs;
   const r1 = joint.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
   // Ledge just under the thinnest skin, keeping a printable flap above it.
-  const rLedge = Math.min(
-    GROOVE_FLOOR_FACTOR * extents.floorMm,
-    extents.floorMm - cs - SHELL_MIN_FLAP_MM,
-  );
-  if (!(rLedge >= r1 + 2)) return null;
-  const r2 = rLedge - 1.5;
+  const rLedge = loft
+    ? loft.ledgeMm
+    : Math.min(
+        GROOVE_FLOOR_FACTOR * extents.floorMm,
+        extents.floorMm - cs - SHELL_MIN_FLAP_MM,
+      );
+  if (!(rLedge >= r1 + 1.2)) return null;
+  const r2 = rLedge - 0.8;
   if (!(r2 > r1 + 0.5)) return null;
   const thetaB = Math.PI / 2 + gapAngle / 2;
   const thetaA = thetaB + Math.max(gapAngle, SHELL_MIN_LAP_MM / rLedge);
-  // Room for the head segment's polar pillar past the hidden band.
-  if (thetaA + gapAngle > Math.PI - NECK_FLOOR_RAD) return null;
-  // The rise must reach θ_A by r2 without the offset faces pinching below the
-  // clearance (same law as the rounded wedge).
+  // The rise must reach θ_A by r2. The slope cap keeps the parallel offset
+  // faces a full clearance apart (normal separation ≈ R·g/√(1+(R·θ′)²),
+  // worst at the rise's inner radius r1). When the required slope exceeds
+  // the cap, WIDEN the rise gap above the cup wall instead of giving up:
+  // g_rise = (c/r1)·√(1+(r1·m)²) restores the clearance at the steeper slope
+  // m. For R ≤ r1 the width stays gapAngle, so the mouth angle, capture and
+  // travel are bit-identical; the per-radius angular gap only grows, so the
+  // rotation-safety law is untouched.
+  const slope = (thetaA - alpha) / (r2 - r1);
   const slopeCap =
     Math.sqrt(Math.max(0, ((r1 * gapAngle) / clearance) ** 2 - 1)) / r1;
-  if (!(slopeCap * (r2 - r1) >= thetaA - alpha)) return null;
+  const riseGap =
+    slope <= slopeCap
+      ? gapAngle
+      : (clearance / r1) * Math.sqrt(1 + (r1 * slope) ** 2);
+  // Room for the head segment's polar pillar past the hidden band and the
+  // (possibly widened) rise.
+  if (thetaA + Math.max(gapAngle, riseGap) > Math.PI - NECK_FLOOR_RAD) {
+    return null;
+  }
   return {
     r1,
-    slope: (thetaA - alpha) / (r2 - r1),
+    slope,
     r2,
     rLedge,
-    rOut: GROOVE_OUT_FACTOR * extents.outMm + cs,
+    rOut: loft ? loft.outRadiusMm : GROOVE_OUT_FACTOR * extents.outMm + cs,
     thetaB,
     thetaA,
+    riseGap,
+    slideGap,
   };
 }
 
+// Solve the skin-lofted seam: per-azimuth ledge/outer radii from the radial
+// skin profile, expressed as a base solve plus radial multipliers m(φ) ≥ 1.
+//
+// WHY A θ-INVARIANT, AZIMUTH-MODULATED SEAM IS BEND-SAFE: bending is a
+// rotation about an equatorial axis through the joint centre. For points on
+// the bend equator the first-order motion is purely in θ with no azimuth
+// change, so a θ-invariant surface r = ρ·m(φ) slides over its counterpart
+// exactly like a sphere does. The residual azimuth slip for a bend of δ
+// radians is Δφ ≈ δ·|cotθ|·|sin(φ−φ_bend)| + δ²/4 — second order near the
+// equator (the VISIBLE seam band, θ ≈ 90° ± g/2, where |cotθ| ≤ tan(g/2)),
+// first order for the parts of the ledge/flap that reach past the equator.
+// Slip changes the local mating radius by at most ΔR ≤ L·Δφ with
+// L = max|dD/dφ|, and that cost is paid up front where each surface lives:
+// the sliding clearance carries the seam-zone terms
+// (slideGap = clearance preset + L·(δ·tan(g/2) + δ²/4)), while the hidden
+// θ-graded allowances carry the far-flap terms (the ledge floor steps down
+// with |cotθ| under the flap and the hidden band's knee drops below r2 —
+// see buildShellCutter), so no mating pair can close by more than its
+// protection at any bend direction. And because the loft is applied as a
+// purely RADIAL map r → r·m(φ), every ANGULAR gap in the profile is
+// preserved exactly — the per-radius rotation-safety law and the exact free
+// travel are untouched — while radial gaps only grow (m ≥ 1 outside the
+// blend zone below the cup wall).
+function solveShellLoft(
+  measure: FlexiSectionSampler,
+  joint: FlexiJointPlan,
+  angles: RoundedGapAngles,
+): ShellLoft | null {
+  const cs = joint.faceGapMm;
+  const sectors = measure.sectorCount;
+  const dPhi = (2 * Math.PI) / sectors;
+  const travel = Math.max(0, angles.gapAngle - SHELL_OVERLAP_RAD);
+  const plane = measure();
+  if (!(plane.maxMm > 0)) return null;
+  // Axial reach the seam band sweeps at the SKIN for a given local outer
+  // radius (the wall's angular drift at the skin is bounded by the derated
+  // flare budget, not the raw 22° wall flare — the lofted ledge keeps the
+  // skin close above it).
+  const seamHalfWidth = (outMm: number): number =>
+    outMm *
+      Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD + SHELL_FLARE_BAND_RAD) +
+    2;
+  // Band widths are PER AZIMUTH and ASYMMETRIC: the seam band brackets the
+  // cut plane by its own (small) reach on both sides, while the flap/ledge
+  // additionally reach HEADWARD to θ_A + g + overlap at the LOCAL lofted
+  // radius — so a tail-side taper never sinks the ledge, and the tall side's
+  // reach never bands the thin azimuths. Start from the cut-plane extents
+  // and iterate to the solved per-sector radii.
+  let tailWidths: number | Float64Array = seamHalfWidth(
+    GROOVE_OUT_FACTOR * plane.minMm + cs,
+  );
+  let headWidths: number | Float64Array = tailWidths;
+  let result: ShellLoft | null = null;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const prof = measure.dirProfile(tailWidths, headWidths);
+    const inner = fillMissingSectors(prof.inner, 'min');
+    const outer = fillMissingSectors(prof.outer, 'max');
+    if (!inner || !outer) return null;
+    // ±1-sector envelopes: the warp interpolates m(φ) between sector centres,
+    // so the ledge respects the skin minimum of BOTH neighbouring sectors
+    // (fins between samples never get gouged) and the band outer clears their
+    // maximum (never bridged).
+    const innerEnv = new Float64Array(sectors);
+    const outerEnv = new Float64Array(sectors);
+    for (let j = 0; j < sectors; j += 1) {
+      const p = (j + sectors - 1) % sectors;
+      const n = (j + 1) % sectors;
+      innerEnv[j] = Math.min(inner[p], inner[j], inner[n]);
+      outerEnv[j] = Math.max(outer[p], outer[j], outer[n]);
+    }
+    // Azimuth slope of the skin: ψ is the angle between the radial direction
+    // and the surface normal (tanψ = (dD/dφ)/D), the flap thickness is
+    // measured along the normal so the radial drop derates by 1/cosψ (≤ ~1.25
+    // at 2:1 aspect; capped for fin edges), and the max slope L feeds the
+    // slip allowance above.
+    let slopeMax = 0;
+    const derate = new Float64Array(sectors);
+    for (let j = 0; j < sectors; j += 1) {
+      const p = (j + sectors - 1) % sectors;
+      const n = (j + 1) % sectors;
+      const dD = (innerEnv[n] - innerEnv[p]) / (2 * dPhi);
+      slopeMax = Math.max(slopeMax, Math.abs(dD));
+      const cosPsi = innerEnv[j] / Math.hypot(innerEnv[j], dD);
+      derate[j] = Math.min(1.6, 1 / Math.max(cosPsi, 1e-6));
+    }
+    const slipRate = Math.min(SHELL_SLIP_RATE_CAP_MM, slopeMax * travel);
+    const slideGap =
+      cs +
+      Math.min(
+        SHELL_SLIP_CAP_MM,
+        slipRate * Math.tan(angles.gapAngle / 2) +
+          (slopeMax * travel * travel) / 4,
+      );
+    const rho = new Float64Array(sectors);
+    let ledgeBase = Infinity;
+    for (let j = 0; j < sectors; j += 1) {
+      rho[j] = innerEnv[j] - (SHELL_MIN_FLAP_MM + slideGap) * derate[j];
+      ledgeBase = Math.min(ledgeBase, rho[j]);
+    }
+    if (!(ledgeBase > 0)) return null;
+    const m = new Float64Array(sectors);
+    let outBase = 0;
+    let maxOut = 0;
+    for (let j = 0; j < sectors; j += 1) {
+      m[j] = rho[j] / ledgeBase;
+      const out = GROOVE_OUT_FACTOR * outerEnv[j] + cs;
+      outBase = Math.max(outBase, out / m[j]);
+      maxOut = Math.max(maxOut, out);
+    }
+    result = {
+      ledgeMm: ledgeBase,
+      outRadiusMm: outBase,
+      slideGapMm: slideGap,
+      slipRateMm: slipRate,
+      m,
+      frame: measure.frame,
+      maxOutMm: maxOut,
+    };
+    // Re-measure over the axial reach the solved seam actually sweeps AT
+    // EACH AZIMUTH: the seam band around the cut ring at the local outer
+    // radius, plus the ledge/flap span reaching headward to θ_A + g +
+    // overlap at the local lofted ledge radius.
+    const thetaA =
+      Math.PI / 2 +
+      angles.gapAngle / 2 +
+      Math.max(angles.gapAngle, SHELL_MIN_LAP_MM / ledgeBase);
+    const headCos = Math.max(
+      0,
+      -Math.cos(thetaA + angles.gapAngle + SHELL_OVERLAP_RAD),
+    );
+    const nextTail = new Float64Array(sectors);
+    const nextHead = new Float64Array(sectors);
+    let moved = false;
+    for (let j = 0; j < sectors; j += 1) {
+      const out = GROOVE_OUT_FACTOR * outerEnv[j] + cs;
+      nextTail[j] = seamHalfWidth(out);
+      nextHead[j] = Math.max(
+        nextTail[j],
+        headCos * (Math.max(rho[j], 0) + slideGap) + 2,
+      );
+      const previousTail =
+        typeof tailWidths === 'number' ? tailWidths : tailWidths[j];
+      const previousHead =
+        typeof headWidths === 'number' ? headWidths : headWidths[j];
+      if (
+        Math.abs(nextTail[j] - previousTail) >= 0.5 ||
+        Math.abs(nextHead[j] - previousHead) >= 0.5
+      ) {
+        moved = true;
+      }
+    }
+    if (!moved) break;
+    tailWidths = nextTail;
+    headWidths = nextHead;
+  }
+  return result;
+}
+
+// Fill empty azimuth sectors (no vertex data over the band) from the nearest
+// present neighbours: conservatively low for the ledge ('min'), high for the
+// band outer ('max'). Null when no sector has data at all.
+function fillMissingSectors(
+  values: Float64Array,
+  mode: 'min' | 'max',
+): Float64Array | null {
+  const n = values.length;
+  let any = false;
+  for (let j = 0; j < n; j += 1) {
+    if (values[j] > 0) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return null;
+  const out = new Float64Array(n);
+  for (let j = 0; j < n; j += 1) {
+    if (values[j] > 0) {
+      out[j] = values[j];
+      continue;
+    }
+    let before = 0;
+    let after = 0;
+    for (let s = 1; s < n; s += 1) {
+      const v = values[(j + s) % n];
+      if (v > 0) {
+        after = v;
+        break;
+      }
+    }
+    for (let s = 1; s < n; s += 1) {
+      const v = values[(j + n - s) % n];
+      if (v > 0) {
+        before = v;
+        break;
+      }
+    }
+    if (!(before > 0)) before = after;
+    if (!(after > 0)) after = before;
+    out[j] = mode === 'min' ? Math.min(before, after) : Math.max(before, after);
+  }
+  return out;
+}
+
 // Build the overlapping-shell cutter: cup shell + four gap parts —
-//   rise: mouth cone rising from the cup to θ_A (hidden inside the body),
+//   rise: mouth cone rising from the cup to θ_A (hidden inside the body;
+//     its gap widens above the cup wall when the slope cap demanded it),
 //   hidden band: [θ_A, θ_A+g] from the rise up under the flap,
-//   ledge: the sliding sphere shell [rLedge, rLedge+cs] under seam and flap,
-//   seam band: [θ_B−g, θ_B] from the ledge out through the skin.
+//   ledge: the sliding sphere shell [rLedge, rLedge+slideGap] under seam
+//     and flap,
+//   seam band: [θ_B−g, θ_B] from the ledge out through the skin, its side
+//     walls flared SHELL_LIP_FLARE from radial with rounded lip arcs so both
+//     skin edges print obtuse and blunt instead of knife-edged.
 // Everything is concentric or angular, so travel is exactly the plan's
-// θ_mouth − α; the ledge and cup slide with constant gaps at any bend.
+// θ_mouth − α; the ledge and cup slide with constant gaps at any bend. With
+// `loft` the finished solid is additionally warped by the purely radial map
+// r → r·m(φ) (blended to 1 below the cup wall) — see solveShellLoft for why
+// that preserves travel and rotation safety.
 function buildShellCutter(
   wasm: ManifoldToplevel,
   joint: FlexiJointPlan,
   clearance: number,
   angles: RoundedGapAngles,
   shell: ShellWedge,
+  loft?: ShellLoft,
 ): Manifold | null {
   const r = joint.ballRadiusMm;
   const rc = r + clearance;
-  const cs = joint.faceGapMm;
   const { alpha, gapAngle } = angles;
-  const { r1, slope, r2, rLedge, rOut, thetaB, thetaA } = shell;
+  const { r1, slope, r2, rLedge, rOut, thetaB, thetaA, riseGap, slideGap } =
+    shell;
   const ov = SHELL_OVERLAP_RAD;
 
-  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const stepRad = (SHELL_ARC_STEP_DEG * Math.PI) / 180;
   const point = (radius: number, theta: number): number[] => [
     radius * Math.sin(theta),
     -radius * Math.cos(theta),
@@ -1090,39 +1421,104 @@ function buildShellCutter(
     }
     return points;
   };
+  // Head face of the rise: the mouth cone width gapAngle from the ball out,
+  // then — when the rise had to widen — an arc out to the widened gap and
+  // the offset face at riseGap. The widening jump sits a clearance BELOW the
+  // cup wall (still inside the wall band, above the cavity): the jump arc
+  // then keeps ≥ clearance from the steep tail face climbing from (r1, α)
+  // (its distance is ≈ (r1−rJump)·r1·slope/√(1+(r1·slope)²) + rJump·g/…,
+  // which the parallel-offset formula alone does not cover), while the
+  // socket mouth ring at the cavity radius keeps the gapAngle cone — so
+  // capture and travel are bit-identical.
+  const widened = riseGap > gapAngle + 1e-9;
+  const rJump = Math.max(rc + 0.2, r1 - Math.max(clearance, 0.3));
+  const riseHeadFace: number[][] = widened
+    ? [
+        point(r, alpha + gapAngle),
+        point(rJump, alpha + gapAngle),
+        ...arcPoints(rJump, alpha + gapAngle, alpha + riseGap),
+        ...facePoints(rJump, riseMax, riseGap),
+      ]
+    : facePoints(r, riseMax, gapAngle);
   const risePolygon: number[][] = [
-    ...facePoints(r, riseMax, gapAngle),
-    ...arcPoints(riseMax, tailAngle(riseMax) + gapAngle, tailAngle(riseMax)),
+    ...riseHeadFace,
+    ...arcPoints(riseMax, tailAngle(riseMax) + riseGap, tailAngle(riseMax)),
     ...facePoints(riseMax, r, 0),
     ...arcPoints(r, alpha, alpha + gapAngle),
   ];
-  let area = 0;
-  for (let i = 0; i < risePolygon.length; i += 1) {
-    const [x1, y1] = risePolygon[i];
-    const [x2, y2] = risePolygon[(i + 1) % risePolygon.length];
-    area += x1 * y2 - x2 * y1;
-  }
-  if (area < 0) risePolygon.reverse();
+  fixWinding(risePolygon);
+
+  const seamPolygon = buildSeamBandPolygon(
+    rLedge,
+    rOut,
+    thetaB,
+    gapAngle,
+    slideGap,
+  );
+
+  // θ-graded slip allowances (loft only): first-order azimuth slip under a
+  // bend moves off-equator points by Δφ ≈ δ·|cotθ|, which on an
+  // azimuth-modulated seam changes mating radii by up to slipRate·|cotθ|.
+  // Pay it where it is hidden: the ledge FLOOR steps down with |cotθ| under
+  // the flap (the visible seam floor at θ ≤ θ_B keeps its depth), and the
+  // hidden band's inner radius drops below r2 so the head shoulder's top
+  // clears the shelf bottom at slipped azimuths near the knee.
+  const slipRate = loft ? loft.slipRateMm : 0;
+  const cotAt = (theta: number): number => -1 / Math.tan(theta);
+  const rHB = loft
+    ? Math.max(r1 + 0.1, r2 - slipRate * Math.max(0, cotAt(thetaA)))
+    : r2;
+  const dropAt = (theta: number): number => {
+    if (!(slipRate > 0)) return 0;
+    return Math.min(
+      rLedge - rHB,
+      Math.max(0, slipRate * (cotAt(theta) - cotAt(thetaB))),
+    );
+  };
+  const ledgePolygon: number[][] = (() => {
+    const t0 = thetaB - ov;
+    const t1 = thetaA + gapAngle + ov;
+    const steps = Math.max(1, Math.ceil((t1 - t0) / stepRad));
+    const floor: number[][] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const t = t0 + ((t1 - t0) * i) / steps;
+      floor.push(point(rLedge - dropAt(t), t));
+    }
+    floor.reverse();
+    return [
+      ...sphereArc(rLedge + slideGap, t0, t1, SHELL_ARC_STEP_DEG),
+      ...floor,
+    ];
+  })();
+  fixWinding(ledgePolygon);
 
   const { CrossSection } = wasm;
   const revolve = (poly: number[][]): Manifold => {
     const section = new CrossSection(poly as [number, number][]);
-    const solid = section.revolve(CUTTER_REVOLVE_SEGMENTS);
+    const solid = section.revolve(SHELL_REVOLVE_SEGMENTS);
     section.delete();
     return solid;
   };
   const parts = [
     // Ball ↔ cup clearance gap around the captured ball.
-    revolve(shellWedge(r, rc, alpha, Math.PI)),
+    revolve(shellWedge(r, rc, alpha, Math.PI, SHELL_ARC_STEP_DEG)),
     revolve(risePolygon),
-    // Hidden band under the flap, from the rise up to the ledge.
-    revolve(shellWedge(r2, rLedge + cs, thetaA, thetaA + gapAngle)),
-    // Sliding ledge: seam floor and the flap's underside.
+    // Hidden band under the flap, from the rise (knee dropped by the slip
+    // allowance) up to the ledge.
     revolve(
-      shellWedge(rLedge, rLedge + cs, thetaB - ov, thetaA + gapAngle + ov),
+      shellWedge(
+        rHB,
+        rLedge + slideGap,
+        thetaA,
+        thetaA + gapAngle,
+        SHELL_ARC_STEP_DEG,
+      ),
     ),
-    // Visible seam band, out through the skin.
-    revolve(shellWedge(rLedge, rOut, thetaB - gapAngle, thetaB)),
+    // Sliding ledge: seam floor and the flap's underside, floor graded down
+    // under the flap by the slip allowance.
+    revolve(ledgePolygon),
+    // Visible seam band, out through the skin (flared, soft-lipped).
+    revolve(seamPolygon),
   ];
   let cutter = parts[0];
   for (let i = 1; i < parts.length; i += 1) {
@@ -1135,11 +1531,265 @@ function buildShellCutter(
     cutter.delete();
     return null;
   }
+  if (loft) {
+    const warped = warpShellCutter(cutter, shell, loft);
+    cutter.delete();
+    if (!warped) return null;
+    cutter = warped;
+  }
   const oriented = cutter.transform(
-    orientationMatrix(joint.axis, joint.center),
+    loft
+      ? basisOrientationMatrix(
+          loft.frame.e1,
+          loft.frame.e2,
+          joint.axis,
+          joint.center,
+        )
+      : orientationMatrix(joint.axis, joint.center),
   );
   cutter.delete();
   return oriented;
+}
+
+// Apply the loft's purely radial map r → r·m(φ) to the revolved cutter,
+// blended smoothly from m = 1 below the cup wall r1 to full strength at r2.
+// Blending on the spherical radius R keeps the map rotation-invariant about
+// the centre, monotone in R (no self-intersection) and continuous in φ, so a
+// valid solid warps to a valid solid; status() is still checked and a failure
+// falls back to the plain revolved shell.
+function warpShellCutter(
+  cutter: Manifold,
+  shell: ShellWedge,
+  loft: ShellLoft,
+): Manifold | null {
+  const { r1, r2 } = shell;
+  const sectors = loft.m.length;
+  const mAt = (phi: number): number => {
+    const t = (phi / (2 * Math.PI)) * sectors - 0.5;
+    const j0 = Math.floor(t);
+    const f = t - j0;
+    const a = loft.m[((j0 % sectors) + sectors) % sectors];
+    const b = loft.m[(((j0 + 1) % sectors) + sectors) % sectors];
+    return a + (b - a) * f;
+  };
+  const span = Math.max(r2 - r1, 1e-6);
+  let warped: Manifold | null = null;
+  try {
+    warped = cutter.warp((vert) => {
+      const radius = Math.hypot(vert[0], vert[1], vert[2]);
+      if (!(radius > r1)) return;
+      const phi = Math.atan2(vert[1], vert[0]);
+      const m = mAt(Number.isFinite(phi) ? phi : 0);
+      if (!(m > 1)) return;
+      const t = radius >= r2 ? 1 : (radius - r1) / span;
+      const smooth = t * t * (3 - 2 * t);
+      const s = 1 + (m - 1) * smooth;
+      vert[0] *= s;
+      vert[1] *= s;
+      vert[2] *= s;
+    });
+  } catch {
+    return null;
+  }
+  if (warped.status() !== 'NoError' || warped.isEmpty()) {
+    warped.delete();
+    return null;
+  }
+  return warped;
+}
+
+// The visible seam band's revolve profile: a wedge from the ledge floor out
+// past the skin whose side walls are flared SHELL_LIP_FLARE from radial (both
+// printed skin edges leave the seam at an obtuse angle — soft lips), with a
+// SHELL_LIP_RADIUS arc rounding the flap tip (head wall at the flap's
+// underside radius rLedge + slideGap) and the tail-side groove root.
+function buildSeamBandPolygon(
+  rLedge: number,
+  rOut: number,
+  thetaB: number,
+  gapAngle: number,
+  slideGap: number,
+): number[][] {
+  const stepRad = (SHELL_ARC_STEP_DEG * Math.PI) / 180;
+  const fr = SHELL_LIP_RADIUS_MM;
+  const flare = SHELL_LIP_FLARE_RAD;
+  const point = (radius: number, theta: number): number[] => [
+    radius * Math.sin(theta),
+    -radius * Math.cos(theta),
+  ];
+  const radial = (theta: number): number[] => [
+    Math.sin(theta),
+    Math.cos(theta) * -1,
+  ];
+  const tangential = (theta: number): number[] => [
+    Math.cos(theta),
+    Math.sin(theta),
+  ];
+  const thetaOf = (p: number[]): number => {
+    // Inverse of `point`: θ from the profile coordinates.
+    return Math.atan2(p[0], -p[1]);
+  };
+  const norm2 = (p: number[]): number => Math.hypot(p[0], p[1]);
+  // Line from `base` along unit `dir` to the circle of radius `radius`.
+  const alongTo = (
+    base: number[],
+    dir: number[],
+    radius: number,
+  ): number[] | null => {
+    const bd = base[0] * dir[0] + base[1] * dir[1];
+    const disc = bd * bd - (base[0] ** 2 + base[1] ** 2) + radius * radius;
+    if (!(disc >= 0)) return null;
+    const lambda = -bd + Math.sqrt(disc);
+    if (!(lambda > 0)) return null;
+    return [base[0] + lambda * dir[0], base[1] + lambda * dir[1]];
+  };
+  // Arc of `radius` about `center` from point `from` to point `to` (short
+  // way), endpoints included.
+  const filletArc = (
+    center: number[],
+    from: number[],
+    to: number[],
+  ): number[][] => {
+    const a0 = Math.atan2(from[1] - center[1], from[0] - center[0]);
+    let a1 = Math.atan2(to[1] - center[1], to[0] - center[0]);
+    while (a1 - a0 > Math.PI) a1 -= 2 * Math.PI;
+    while (a0 - a1 > Math.PI) a1 += 2 * Math.PI;
+    const radius = norm2([from[0] - center[0], from[1] - center[1]]);
+    const steps = Math.max(2, Math.ceil(Math.abs(a1 - a0) / stepRad));
+    const points: number[][] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const a = a0 + ((a1 - a0) * i) / steps;
+      points.push([
+        center[0] + radius * Math.cos(a),
+        center[1] + radius * Math.sin(a),
+      ]);
+    }
+    return points;
+  };
+  const arcAt = (radius: number, t0: number, t1: number): number[][] => {
+    const steps = Math.max(1, Math.ceil(Math.abs(t1 - t0) / stepRad));
+    const points: number[][] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      points.push(point(radius, t0 + ((t1 - t0) * i) / steps));
+    }
+    return points;
+  };
+
+  const thetaTail = thetaB - gapAngle;
+  // Head wall: flared headward (+θ) from its base on the ledge.
+  const headBase = point(rLedge, thetaB);
+  const uH = radial(thetaB);
+  const tH = tangential(thetaB);
+  const wH = [
+    uH[0] * Math.cos(flare) + tH[0] * Math.sin(flare),
+    uH[1] * Math.cos(flare) + tH[1] * Math.sin(flare),
+  ];
+  // Tail wall: flared tailward (−θ).
+  const tailBase = point(rLedge, thetaTail);
+  const uT = radial(thetaTail);
+  const tT = tangential(thetaTail);
+  const wT = [
+    uT[0] * Math.cos(flare) - tT[0] * Math.sin(flare),
+    uT[1] * Math.cos(flare) - tT[1] * Math.sin(flare),
+  ];
+  const headOut = alongTo(headBase, wH, rOut);
+  const tailOut = alongTo(tailBase, wT, rOut);
+  if (!headOut || !tailOut) {
+    // Degenerate flare (should not happen with rOut > rLedge); fall back to
+    // the plain radial-walled wedge.
+    return [
+      ...sphereArc(rOut, thetaTail, thetaB),
+      ...sphereArc(rLedge, thetaB, thetaTail),
+    ];
+  }
+
+  // Flap-tip fillet: arc of radius fr tangent to the head wall (headward
+  // side) and to the flap's underside sphere rLedge + slideGap from outside —
+  // the union with the ledge shell then leaves a rounded, obtuse flap tip.
+  const rFlap = rLedge + slideGap;
+  const nH = [-wH[1], wH[0]]; // +90°: the headward side of the wall.
+  let headLip: number[][] | null = null;
+  {
+    const q = [headBase[0] + fr * nH[0], headBase[1] + fr * nH[1]];
+    const bd = q[0] * wH[0] + q[1] * wH[1];
+    const target = rFlap + fr;
+    const disc = bd * bd - (q[0] ** 2 + q[1] ** 2) + target * target;
+    if (disc >= 0) {
+      const a = -bd + Math.sqrt(disc);
+      if (a > 0) {
+        const center = [q[0] + a * wH[0], q[1] + a * wH[1]];
+        const t1 = [center[0] - fr * nH[0], center[1] - fr * nH[1]];
+        const clen = norm2(center);
+        const t2 = [(center[0] * rFlap) / clen, (center[1] * rFlap) / clen];
+        if (norm2(t1) < rOut - 0.5) {
+          headLip = filletArc(center, t1, t2);
+        }
+      }
+    }
+  }
+  // Tail groove-root fillet: cut the cutter's convex base corner with an arc
+  // tangent to the ledge floor and the tail wall, so the printed groove root
+  // is a rounded cove instead of a sharp crease.
+  const nT = [wT[1], -wT[0]]; // −90°: the headward (interior) side.
+  let tailRoot: number[][] | null = null;
+  {
+    const q = [tailBase[0] + fr * nT[0], tailBase[1] + fr * nT[1]];
+    const bd = q[0] * wT[0] + q[1] * wT[1];
+    const target = rLedge + fr;
+    const disc = bd * bd - (q[0] ** 2 + q[1] ** 2) + target * target;
+    if (disc >= 0) {
+      const a = -bd + Math.sqrt(disc);
+      if (a > 0) {
+        const center = [q[0] + a * wT[0], q[1] + a * wT[1]];
+        const clen = norm2(center);
+        const floorTangent = [
+          (center[0] * rLedge) / clen,
+          (center[1] * rLedge) / clen,
+        ];
+        const wallTangent = [center[0] - fr * nT[0], center[1] - fr * nT[1]];
+        tailRoot = [...filletArc(center, floorTangent, wallTangent)];
+      }
+    }
+  }
+
+  // Walk: ledge floor (headmost point under the flap tip, tailward to the
+  // groove root), rounded root, up the flared tail wall, outer cap, down the
+  // flared head wall into the flap-tip fillet. The closing edge (fillet's
+  // sphere tangent point radially down to the floor's headmost point) is
+  // buried inside the ledge shell's coverage, so the union hides it.
+  const floorHeadTheta = headLip
+    ? thetaOf(headLip[headLip.length - 1])
+    : thetaB;
+  const floorTailTheta = tailRoot ? thetaOf(tailRoot[0]) : thetaTail;
+  const polygon: number[][] = [
+    // Ledge floor, walked tailward. Its first point closes the polygon with
+    // a radial edge down from the flap-tip fillet; its last point would
+    // duplicate the groove root's first, so it is dropped when rounded.
+    ...arcAt(rLedge, floorHeadTheta, floorTailTheta).slice(
+      0,
+      tailRoot ? -1 : undefined,
+    ),
+    // Rounded groove root, then up the flared tail wall.
+    ...(tailRoot ?? []),
+    tailOut,
+    // Outer cap.
+    ...arcAt(rOut, thetaOf(tailOut), thetaOf(headOut)),
+    // Down the flared head wall to the flap-tip fillet.
+    ...(headLip ?? []),
+  ];
+  fixWinding(polygon);
+  return polygon;
+}
+
+// Normalize a profile polygon to CCW (positive area) in place.
+function fixWinding(polygon: number[][]): void {
+  let area = 0;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const [x1, y1] = polygon[i];
+    const [x2, y2] = polygon[(i + 1) % polygon.length];
+    area += x1 * y2 - x2 * y1;
+  }
+  if (area < 0) polygon.reverse();
 }
 
 // A simple closed CCW polygon for a spherical-shell wedge between radii Ra < Rb
@@ -1150,12 +1800,18 @@ function shellWedge(
   rb: number,
   t0: number,
   t1: number,
+  stepDeg: number = CUTTER_ARC_STEP_DEG,
 ): number[][] {
-  return [...sphereArc(rb, t0, t1), ...sphereArc(ra, t1, t0)];
+  return [...sphereArc(rb, t0, t1, stepDeg), ...sphereArc(ra, t1, t0, stepDeg)];
 }
 
-function sphereArc(radius: number, t0: number, t1: number): number[][] {
-  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+function sphereArc(
+  radius: number,
+  t0: number,
+  t1: number,
+  stepDeg: number = CUTTER_ARC_STEP_DEG,
+): number[][] {
+  const stepRad = (stepDeg * Math.PI) / 180;
   const steps = Math.max(1, Math.ceil(Math.abs(t1 - t0) / stepRad));
   const points: number[][] = [];
   for (let i = 0; i <= steps; i += 1) {
@@ -1163,6 +1819,36 @@ function sphereArc(radius: number, t0: number, t1: number): number[][] {
     points.push([radius * Math.sin(t), -radius * Math.cos(t)]);
   }
   return points;
+}
+
+// Column-major 4×4 mapping the revolve's native +X/+Y onto an EXPLICIT
+// in-plane basis (the lofted cutter's azimuths must line up with the frame
+// its skin profile was measured in) and +Z onto the joint axis.
+function basisOrientationMatrix(
+  e1: [number, number, number],
+  e2: [number, number, number],
+  axis: [number, number, number],
+  center: [number, number, number],
+): ReturnType<typeof orientationMatrix> {
+  const z = normalizeVec(axis);
+  return [
+    e1[0],
+    e1[1],
+    e1[2],
+    0,
+    e2[0],
+    e2[1],
+    e2[2],
+    0,
+    z[0],
+    z[1],
+    z[2],
+    0,
+    center[0],
+    center[1],
+    center[2],
+    1,
+  ];
 }
 
 // Column-major 4×4 that maps the revolve's native +Z axis onto `axis` (with an

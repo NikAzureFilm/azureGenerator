@@ -39,6 +39,11 @@ type Vec3 = [number, number, number];
 const BIN_COUNT = 64;
 const SMOOTH_TAPS = 5;
 const CROSS_SECTION_DIRECTIONS = 16;
+// Signed azimuth sectors for the radial skin profile (the lofted shell seam
+// needs the actual radial skin distance per azimuth, not the support-function
+// max-projection the direction fan measures). 64 sectors keep the ±1-sector
+// safety envelope's cost under ~0.5mm on a 2:1 elliptical section.
+const CROSS_SECTION_SECTORS = 64;
 const AUTO_SEGMENT_PITCH_MM = 22;
 const AUTO_MIN_SEGMENTS = 4;
 const BALL_SIZE_FACTOR = 0.55;
@@ -62,6 +67,20 @@ const OVERLAP_MARGIN_MM = 0.5;
 // that must survive between two adjacent joints' bands at the widest feature.
 const GAP_BAND_OVERLAP_DEG = 3;
 const GAP_BAND_KEEP_MM = 3;
+// Overlapping-shell planning mirrors of the build's cutter tunables (the build
+// cannot be imported here without a cycle): seam-floor factor, printable flap
+// tip, and the minimum lap shelf (ledge − cup wall) the plan should reserve so
+// a joint sized here actually hosts the shell in the build. The plan floor
+// (2.5mm) is deliberately looser than the build's hard gate (1.2mm) — sizing
+// shrinks the ball a step to make the shelf fit rather than letting the whole
+// joint fall back to the rounded groove.
+const SHELL_FLOOR_FACTOR = 0.92;
+const SHELL_MIN_FLAP_MM = 1.6;
+const SHELL_LAP_SHELF_MM = 2.5;
+// Extra half-band angle (deg) the shell seam's flared lip walls can add to the
+// gap band's axial reach at the skin (mirrors the build's SHELL_LIP_FLARE
+// derated by the lofted ledge sitting close under the skin).
+const SHELL_FLARE_BAND_DEG = 6;
 // Rounded-style joint: cup wall thickness and the constant bowl (outer) gap. The
 // concentric dome-in-dish makes travel gap-independent, so the printed groove is
 // just this fixed gap; faceGapMm carries it (see FlexiJointPlan JSDoc).
@@ -345,7 +364,12 @@ function minSegmentLengthFor(
       maxStationExtentMm !== undefined &&
       maxStationExtentMm > 0
     ) {
-      const halfBand = ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360;
+      // The shell's flared seam-lip walls widen the band's reach at the skin;
+      // budget the (loft-derated) flare on top of the travel + seam overlap.
+      const flareDeg = jointStyle === 'shell' ? SHELL_FLARE_BAND_DEG : 0;
+      const halfBand =
+        ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360 +
+        (flareDeg * Math.PI) / 180;
       floor = Math.max(
         floor,
         2 * maxStationExtentMm * Math.tan(halfBand) + GAP_BAND_KEEP_MM,
@@ -925,12 +949,56 @@ function sizeJoint(
   // Start at the requested size (grown to the min printable ball, capped by the
   // on-axis clearance + wall budget), then shrink until the socket cavity is
   // contained along its whole axial reach — this is what stops a tapering body
-  // from being pierced by the socket.
+  // from being pierced by the socket. For the shell style the shrink loop also
+  // asks the lap shelf (seam ledge above the cup wall) to fit: a step-smaller
+  // ball keeps the overlapping-scale look instead of the whole joint falling
+  // back to a rounded groove in the build. If even the smallest printable ball
+  // cannot host the shelf, the largest contained ball is kept (the build's
+  // per-joint rounded fallback still applies) rather than fusing the joint.
+  const finish = (ballRadiusMm: number): FlexiJointPlan => {
+    const socketDepthMm = captureDepth(ballRadiusMm, clearance);
+    // Capture only gets harder as the ball shrinks (clearance grows relative
+    // to the ball), so a contained-but-uncaptive ball can never be rescued by
+    // shrinking further — fuse instead.
+    if (socketDepthMm === null) {
+      return fused(ballRadiusMm);
+    }
+    const faceGapMm = rounded
+      ? roundedBowlGap(clearance)
+      : computeFaceGap(
+          bendAngleDeg,
+          rho0,
+          ballRadiusMm,
+          socketDepthMm,
+          clearance,
+        );
+    return {
+      center,
+      axis,
+      ballRadiusMm,
+      socketDepthMm,
+      faceGapMm,
+      spineFraction,
+      fused: false,
+    };
+  };
+  const shellShelfFits = (ballRadiusMm: number): boolean => {
+    if (jointStyle !== 'shell') return true;
+    const cs = roundedBowlGap(clearance);
+    const cupOuter = ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM;
+    // Mirror of the build's ledge estimate (thin-direction floor).
+    const ledge = Math.min(
+      SHELL_FLOOR_FACTOR * rho0,
+      rho0 - cs - SHELL_MIN_FLAP_MM,
+    );
+    return ledge - cupOuter >= SHELL_LAP_SHELF_MM;
+  };
   let ballRadiusMm = clamp(
     jointScale * BALL_SIZE_FACTOR * rho0,
     FLEXI_MIN_BALL_RADIUS_MM,
     rho0 - clearance - FLEXI_MIN_SOCKET_WALL_MM,
   );
+  let containedFallback: number | null = null;
   while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
     const contained = rounded
       ? socketContainedAlongReach(
@@ -944,33 +1012,15 @@ function sizeJoint(
           FLEXI_MIN_SOCKET_WALL_MM,
         );
     if (contained) {
-      const socketDepthMm = captureDepth(ballRadiusMm, clearance);
-      // Capture only gets harder as the ball shrinks (clearance grows relative
-      // to the ball), so a contained-but-uncaptive ball can never be rescued by
-      // shrinking further — fuse instead.
-      if (socketDepthMm === null) {
-        return fused(ballRadiusMm);
+      if (containedFallback === null) containedFallback = ballRadiusMm;
+      if (shellShelfFits(ballRadiusMm)) {
+        return finish(ballRadiusMm);
       }
-      const faceGapMm = rounded
-        ? roundedBowlGap(clearance)
-        : computeFaceGap(
-            bendAngleDeg,
-            rho0,
-            ballRadiusMm,
-            socketDepthMm,
-            clearance,
-          );
-      return {
-        center,
-        axis,
-        ballRadiusMm,
-        socketDepthMm,
-        faceGapMm,
-        spineFraction,
-        fused: false,
-      };
     }
     ballRadiusMm -= SIZING_SHRINK_STEP_MM;
+  }
+  if (containedFallback !== null) {
+    return finish(containedFallback);
   }
   return fused();
 }
@@ -997,6 +1047,41 @@ export function crossSectionExtentsAt(
 }
 
 /**
+ * Per-azimuth radial skin profile over an axial band centred on the cut plane:
+ * `outer[j]` is the largest skin radius seen in signed azimuth sector j across
+ * the band (the seam band must reach past it), `inner[j]` the smallest
+ * per-slice skin radius across the band (the lofted seam ledge must stay a
+ * flap thickness under it). 0 in either array ⇒ no vertex data for that
+ * sector; callers fill by envelope from neighbouring sectors.
+ */
+export type FlexiSectionDirProfile = {
+  inner: Float64Array;
+  outer: Float64Array;
+};
+
+/**
+ * Sampler over a joint's cross-section profile. Callable like
+ * `crossSectionExtentsAt`; additionally exposes the in-plane frame its
+ * azimuths are measured in (sector j spans angles
+ * [j, j+1)·2π/sectorCount from e1 toward e2) and a per-direction band
+ * sampler for the lofted shell seam.
+ */
+export type FlexiSectionSampler = {
+  (bandHalfWidthMm?: number): { minMm: number; maxMm: number };
+  frame: { e1: [number, number, number]; e2: [number, number, number] };
+  sectorCount: number;
+  /** Band widths either uniform or per sector, and asymmetric: `tail` reaches
+   * toward −axis and `head` toward +axis (the lofted flap overlaps only the
+   * head side, so a tail-side taper must not sink the ledge; and the tall
+   * side's reach must not band the thin azimuths). `head` defaults to
+   * `tail`. */
+  dirProfile: (
+    tailHalfWidthMm: number | Float64Array,
+    headHalfWidthMm?: number | Float64Array,
+  ) => FlexiSectionDirProfile;
+};
+
+/**
  * Same measurement as `crossSectionExtentsAt`, but the (expensive, one full
  * pass over every vertex) profile is built once and the returned sampler can
  * be queried at any number of band half-widths for the cost of a bin scan —
@@ -1006,7 +1091,7 @@ export function crossSectionExtentsSampler(
   positions: Float32Array,
   center: [number, number, number],
   axis: [number, number, number],
-): (bandHalfWidthMm?: number) => { minMm: number; maxMm: number } {
+): FlexiSectionSampler {
   const frame = buildAxisFrame(axis as Vec3);
   const profile = buildCrossSectionProfile(
     positions,
@@ -1014,7 +1099,7 @@ export function crossSectionExtentsSampler(
     axis as Vec3,
     frame,
   );
-  return (bandHalfWidthMm?: number) => {
+  const sampler = ((bandHalfWidthMm?: number) => {
     const halfWidths =
       bandHalfWidthMm !== undefined
         ? [Math.max(bandHalfWidthMm, SLAB_WIDEN_HALF_WIDTHS[0])]
@@ -1023,7 +1108,43 @@ export function crossSectionExtentsSampler(
       minMm: reduceCrossSectionAt(profile, 0, minOfArray, halfWidths),
       maxMm: reduceCrossSectionAt(profile, 0, maxOfArray, halfWidths),
     };
+  }) as FlexiSectionSampler;
+  sampler.frame = {
+    e1: [frame.e1[0], frame.e1[1], frame.e1[2]],
+    e2: [frame.e2[0], frame.e2[1], frame.e2[2]],
   };
+  sampler.sectorCount = CROSS_SECTION_SECTORS;
+  sampler.dirProfile = (
+    tailHalfWidthMm: number | Float64Array,
+    headHalfWidthMm?: number | Float64Array,
+  ) => {
+    const headWidths = headHalfWidthMm ?? tailHalfWidthMm;
+    const widthAt = (widths: number | Float64Array, j: number): number =>
+      Math.max(
+        typeof widths === 'number' ? widths : widths[j],
+        SLAB_WIDEN_HALF_WIDTHS[0],
+      );
+    const inner = new Float64Array(CROSS_SECTION_SECTORS);
+    const outer = new Float64Array(CROSS_SECTION_SECTORS);
+    inner.fill(Infinity);
+    for (let j = 0; j < CROSS_SECTION_SECTORS; j += 1) {
+      const lo = Math.round(-widthAt(tailHalfWidthMm, j) / PROFILE_BIN_MM);
+      const hi = Math.round(widthAt(headWidths, j) / PROFILE_BIN_MM);
+      for (let binIndex = lo; binIndex <= hi; binIndex += 1) {
+        const bin = profile.bins.get(binIndex);
+        if (!bin) continue;
+        const radius = bin.secMax[j];
+        if (!(radius > 0)) continue;
+        if (radius < inner[j]) inner[j] = radius;
+        if (radius > outer[j]) outer[j] = radius;
+      }
+    }
+    for (let j = 0; j < CROSS_SECTION_SECTORS; j += 1) {
+      if (!Number.isFinite(inner[j])) inner[j] = 0;
+    }
+    return { inner, outer };
+  };
+  return sampler;
 }
 
 // Printed gap between a joint's two segment faces. It scales with the local body
@@ -1182,15 +1303,23 @@ function socketContainedAlongReach(
 }
 
 type CrossSectionProfile = {
-  // Axial bin index → per-direction max |projection| and the point count.
-  bins: Map<number, { dirMax: Float64Array; count: number }>;
+  // Axial bin index → per-direction max |projection|, per-sector max radial
+  // distance (0 ⇒ no vertex fell in that sector for this slice), and the point
+  // count.
+  bins: Map<
+    number,
+    { dirMax: Float64Array; secMax: Float64Array; count: number }
+  >;
   cos: Float64Array;
   sin: Float64Array;
 };
 
 // Bin every vertex by its axial offset from the joint, recording the maximum
-// |projection| onto each of a fan of cross-section directions. Cheap to query at
-// any offset afterwards (one pass over the vertices, O(V × directions)).
+// |projection| onto each of a fan of cross-section directions (a support
+// function — bounds the body for containment / band sizing) plus, per signed
+// azimuth sector, the maximum in-plane radial distance (the actual skin radius
+// at that azimuth — the lofted shell seam follows this). Cheap to query at any
+// offset afterwards (one pass over the vertices, O(V × directions)).
 function buildCrossSectionProfile(
   positions: Float32Array,
   center: Vec3,
@@ -1205,8 +1334,12 @@ function buildCrossSectionProfile(
     sin[k] = Math.sin(angle);
   }
 
-  const bins = new Map<number, { dirMax: Float64Array; count: number }>();
+  const bins = new Map<
+    number,
+    { dirMax: Float64Array; secMax: Float64Array; count: number }
+  >();
   const vertexCount = Math.floor(positions.length / 3);
+  const sectorScale = CROSS_SECTION_SECTORS / (2 * Math.PI);
   for (let i = 0; i < vertexCount; i += 1) {
     const relX = positions[i * 3] - center[0];
     const relY = positions[i * 3 + 1] - center[1];
@@ -1217,12 +1350,22 @@ function buildCrossSectionProfile(
     const binIndex = Math.round(d / PROFILE_BIN_MM);
     let bin = bins.get(binIndex);
     if (!bin) {
-      bin = { dirMax: new Float64Array(CROSS_SECTION_DIRECTIONS), count: 0 };
+      bin = {
+        dirMax: new Float64Array(CROSS_SECTION_DIRECTIONS),
+        secMax: new Float64Array(CROSS_SECTION_SECTORS),
+        count: 0,
+      };
       bins.set(binIndex, bin);
     }
     for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
       const projection = Math.abs(x * cos[k] + y * sin[k]);
       if (projection > bin.dirMax[k]) bin.dirMax[k] = projection;
+    }
+    const radius = Math.hypot(x, y);
+    if (radius > 1e-9) {
+      let sector = Math.floor((Math.atan2(y, x) + 2 * Math.PI) * sectorScale);
+      sector %= CROSS_SECTION_SECTORS;
+      if (radius > bin.secMax[sector]) bin.secMax[sector] = radius;
     }
     bin.count += 1;
   }
