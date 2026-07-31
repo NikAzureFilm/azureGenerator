@@ -545,7 +545,7 @@ function StyleCard({
       aria-checked={selected}
       onClick={onSelect}
       className={cn(
-        'flex flex-1 flex-col gap-1 rounded-lg border p-3 text-left transition-colors',
+        'flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors',
         selected
           ? 'border-adam-blue bg-adam-blue/10 ring-1 ring-adam-blue'
           : 'border-adam-neutral-700 hover:border-adam-neutral-500',
@@ -1072,13 +1072,19 @@ export function FlexiToyDialog({
           <div
             role="radiogroup"
             aria-label="Joint style"
-            className="flex flex-col gap-2 sm:flex-row"
+            className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
           >
             <StyleCard
               selected={jointStyle === 'shell'}
               title="Shell"
               description="Overlapping scales — joints stay hidden"
               onSelect={() => setJointStyle('shell')}
+            />
+            <StyleCard
+              selected={jointStyle === 'strong'}
+              title="Strong"
+              description="Open gaps and a hinge bar — captive joint"
+              onSelect={() => setJointStyle('strong')}
             />
             <StyleCard
               selected={jointStyle === 'rounded'}
@@ -1254,7 +1260,9 @@ export function FlexiToyDialog({
             <p className="mt-1 text-xs text-adam-text-secondary/80">
               {jointStyle === 'classic'
                 ? 'How wide the gaps are — classic joints bend less.'
-                : 'How far each joint can bend.'}
+                : jointStyle === 'strong'
+                  ? 'How far each joint can bend. Bigger bends open the gap between segments wider.'
+                  : 'How far each joint can bend.'}
             </p>
           </div>
         </div>

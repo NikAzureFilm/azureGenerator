@@ -4,6 +4,9 @@ import {
   computeFlexiScale,
   scaleFlexiPositions,
   socketMouthRadius,
+  minSegmentLengthFor,
+  solveStrongJointGeometry,
+  strongPullPlay,
 } from './flexiToyPlan.ts';
 import {
   FLEXI_MIN_BALL_RADIUS_MM,
@@ -12,6 +15,7 @@ import {
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_SEGMENTS,
   FLEXI_MAX_FACE_GAP_MM,
+  isRoundedFamilyJointStyle,
 } from './flexiToyTypes.ts';
 
 // --- Synthetic fixtures (generated in-test) --------------------------------
@@ -813,5 +817,537 @@ for (const bendAngleDeg of [5, 12, 25]) {
 // The actual achievable swing is proven geometrically in flexiToyBuild.test.mjs
 // (rotate a built segment by the claimed travel and check it does not collide
 // with its neighbour) rather than by re-deriving θ_mouth − α_neck here.
+
+// --- STRONG style: solver invariants --------------------------------------
+
+// The strong joint is NOT a cup/dome, so it must not inherit rounded sizing.
+assert.equal(
+  isRoundedFamilyJointStyle('strong'),
+  false,
+  'strong is not a rounded-family style',
+);
+
+const STRONG_RADII = [2.5, 3, 4, 5, 6, 8];
+const STRONG_CLEARANCES = [0.3, 0.4, 0.55, 0.8];
+const STRONG_BENDS = [5, 12, 25];
+
+// (1) The solved joint honours all three contracts the head/bar solve exists to
+// enforce, over the whole legal settings box:
+//   · CAPTURE — the throat, at its narrowest plane, is at least
+//     FLEXI_CAPTURE_MARGIN_MM narrower than the head. A ball of radius `rho`
+//     cannot cross a planar hole whose smaller half-extent is under `rho`, so
+//     this is what makes the joint captive under ANY rigid motion, not just the
+//     pure axial pull the first design checked.
+//   · RATTLE — pull-out slop stays inside `clearance + capture margin`. The
+//     round-2 verifier measured 2.92mm here on the flat-rear gem; that gem is
+//     gone and this is the assertion that keeps it gone.
+//   · CONCENTRICITY — the pocket is a BALL of radius exactly `r + c`, which is
+//     what makes travel clearance-preserving for free (law 2) and keeps the
+//     isotropic containment gate honest.
+let strongWideSeen = 0;
+let strongPinnedSeen = 0;
+for (const r of STRONG_RADII) {
+  for (const c of STRONG_CLEARANCES) {
+    for (const bendAngleDeg of STRONG_BENDS) {
+      const geometry = solveStrongJointGeometry(r, c, bendAngleDeg);
+      if (!geometry) continue;
+      const throatMin = Math.min(
+        geometry.throatInnerHalfMm,
+        geometry.slotInnerHalfMm,
+      );
+      assert.ok(
+        Math.abs(geometry.captureMarginMm - (r - throatMin)) < 1e-12,
+        'the reported capture margin is head radius − narrowest throat half-extent',
+      );
+      assert.ok(
+        geometry.captureMarginMm >= FLEXI_CAPTURE_MARGIN_MM - 1e-9,
+        `strong keeps the capture margin (r=${r} c=${c} b=${bendAngleDeg}: ${geometry.captureMarginMm.toFixed(4)})`,
+      );
+      assert.ok(
+        geometry.axialFreePlayMm <= c + FLEXI_CAPTURE_MARGIN_MM + 1e-9,
+        `strong pull-out slop stays inside the budget (r=${r} c=${c} b=${bendAngleDeg}: ${geometry.axialFreePlayMm.toFixed(4)} vs ${(c + FLEXI_CAPTURE_MARGIN_MM).toFixed(2)})`,
+      );
+      assert.equal(
+        geometry.headRadiusMm,
+        r,
+        'the head sphere IS the planned ball',
+      );
+      for (const reach of [
+        geometry.cavityRadiusMm,
+        geometry.cavityLatMm,
+        geometry.cavityUpMm,
+        geometry.cavityAxMm,
+      ]) {
+        assert.ok(
+          Math.abs(reach - (r + c)) < 1e-12,
+          `the pocket is concentric and isotropic (r=${r} c=${c} b=${bendAngleDeg})`,
+        );
+      }
+      if (geometry.mode === 'pinned') {
+        strongPinnedSeen += 1;
+        assert.ok(
+          geometry.bladeHalfMm < 0.35 * r - 1e-12,
+          `pinned mode narrowed the bar (r=${r} c=${c} b=${bendAngleDeg})`,
+        );
+      } else {
+        strongWideSeen += 1;
+        assert.ok(
+          Math.abs(geometry.bladeHalfMm - 0.35 * r) < 1e-12,
+          `wide mode keeps the target bar width (r=${r} c=${c} b=${bendAngleDeg})`,
+        );
+      }
+      assert.ok(
+        2 * geometry.bladeHalfMm >= 1.4 - 1e-12,
+        'a solved bar is at least the printable minimum width',
+      );
+      // Containment parity with `rounded`: the slot never out-demands the
+      // pocket, so `strongCavityFits` can never be stricter than the cup gate.
+      assert.ok(
+        Math.max(geometry.throatOuterHalfMm, geometry.slotOuterHalfMm) <=
+          geometry.cavityRadiusMm + 1e-9,
+        `the throat slot never demands more room than the pocket (r=${r} c=${c} b=${bendAngleDeg})`,
+      );
+    }
+  }
+}
+assert.ok(strongWideSeen > 0 && strongPinnedSeen > 0, 'both solve modes occur');
+
+// (2) The pocket really does contain the swept head grown by the clearance —
+// checked by SAMPLING actual rotated head-surface points, not by re-deriving the
+// algebra that produced the pocket. This is the containment claim the whole
+// travel guarantee rests on: rotation about the pivot preserves every radius, so
+// a concentric ball `r + c` clears a head `r` by `c` at every bend and azimuth.
+for (const r of [2.5, 4, 8]) {
+  for (const c of [0.3, 0.55, 0.8]) {
+    for (const bendAngleDeg of STRONG_BENDS) {
+      const geometry = solveStrongJointGeometry(r, c, bendAngleDeg);
+      if (!geometry) continue;
+      const bend = (bendAngleDeg * Math.PI) / 180;
+      const rodrigues = (p, m, phi) => {
+        const cs = Math.cos(phi);
+        const sn = Math.sin(phi);
+        const d = m[0] * p[0] + m[1] * p[1] + m[2] * p[2];
+        const x = [
+          m[1] * p[2] - m[2] * p[1],
+          m[2] * p[0] - m[0] * p[2],
+          m[0] * p[1] - m[1] * p[0],
+        ];
+        return [0, 1, 2].map(
+          (i) => p[i] * cs + x[i] * sn + m[i] * d * (1 - cs),
+        );
+      };
+      let worst = 0;
+      for (let i = 0; i <= 24; i += 1) {
+        const polar = (Math.PI * i) / 24;
+        for (let j = 0; j < 24; j += 1) {
+          const azim = (2 * Math.PI * j) / 24;
+          const p = [
+            r * Math.sin(polar) * Math.cos(azim),
+            r * Math.sin(polar) * Math.sin(azim),
+            r * Math.cos(polar),
+          ];
+          for (let k = 0; k < 16; k += 1) {
+            const psi = (2 * Math.PI * k) / 16;
+            for (const phi of [bend, -bend, bend / 2]) {
+              const q = rodrigues(p, [Math.cos(psi), Math.sin(psi), 0], phi);
+              // grown by the clearance in the worst (radial) direction
+              worst = Math.max(worst, Math.hypot(q[0], q[1], q[2]) + c);
+            }
+          }
+        }
+      }
+      assert.ok(
+        worst <= geometry.cavityRadiusMm + 1e-9,
+        `the pocket contains the swept head + clearance (r=${r} c=${c} b=${bendAngleDeg}: ${worst.toFixed(6)} vs ${geometry.cavityRadiusMm})`,
+      );
+    }
+  }
+}
+
+// (3) Feasibility is MONOTONE INCREASING in the ball radius — this is what
+// licenses sizeJoint's "hard stop, do not keep shrinking" rule.
+for (const c of STRONG_CLEARANCES) {
+  for (const bendAngleDeg of STRONG_BENDS) {
+    for (let r = 2.5; r <= 8.0001; r += 0.05) {
+      if (!solveStrongJointGeometry(r, c, bendAngleDeg)) continue;
+      assert.ok(
+        solveStrongJointGeometry(r + 0.2, c, bendAngleDeg) !== null,
+        `strong feasibility is monotone in r (r=${r.toFixed(2)} c=${c} b=${bendAngleDeg})`,
+      );
+    }
+  }
+}
+
+// (4) Strong never spaces TIGHTER than rounded — the invariant that makes the
+// build's per-joint rounded fallback always fit. No claim is made the other way.
+for (const r of STRONG_RADII) {
+  for (const c of STRONG_CLEARANCES) {
+    for (const bendAngleDeg of STRONG_BENDS) {
+      for (const extent of [0, 6, 10, 26]) {
+        const strong = minSegmentLengthFor(
+          r,
+          c,
+          'strong',
+          bendAngleDeg,
+          extent,
+        );
+        const rounded = minSegmentLengthFor(
+          r,
+          c,
+          'rounded',
+          bendAngleDeg,
+          extent,
+        );
+        assert.ok(
+          strong >= rounded - 1e-9,
+          `strong pitch floor >= rounded (r=${r} c=${c} b=${bendAngleDeg} rho=${extent}: ${strong} vs ${rounded})`,
+        );
+      }
+    }
+  }
+}
+
+// (5) Containment: on the steep 45° cone the strong cavity is driven down by
+// the same skin the rounded cup is, and never ends up LARGER than the rounded
+// radius by more than one shrink step.
+{
+  const strongCone = planFlexiToy(steepCone, {
+    ...coneSettings,
+    jointStyle: 'strong',
+  });
+  const roundedCone = planFlexiToy(steepCone, {
+    ...coneSettings,
+    jointStyle: 'rounded',
+  });
+  const strongLive = strongCone.joints.filter((joint) => !joint.fused);
+  assert.ok(
+    strongLive.length >= 1,
+    `strong still articulates the steep cone (got ${strongLive.length})`,
+  );
+  strongCone.joints.forEach((joint, index) => {
+    if (joint.fused) return;
+    const rounded = roundedCone.joints[index];
+    if (rounded.fused) return;
+    assert.ok(
+      joint.ballRadiusMm <= rounded.ballRadiusMm + 0.2 + 1e-6,
+      `strong ball is not larger than the rounded ball (joint ${index}: ${joint.ballRadiusMm} vs ${rounded.ballRadiusMm})`,
+    );
+  });
+  for (const joint of strongLive) {
+    // The whole cavity slab must stay a wall inside the true cone radius.
+    const geometry = solveStrongJointGeometry(
+      joint.ballRadiusMm,
+      coneSettings.clearanceMm,
+      coneSettings.bendAngleDeg,
+    );
+    assert.ok(geometry, 'a live strong joint always has a solved geometry');
+    const x = joint.center[0];
+    for (let s = 0; s <= 8; s += 1) {
+      const d = -geometry.cavityAxMm + (2 * geometry.cavityAxMm * s) / 8;
+      const need =
+        Math.sqrt(
+          Math.max(
+            0,
+            geometry.cavityRadiusMm * geometry.cavityRadiusMm - d * d,
+          ),
+        ) + FLEXI_MIN_SOCKET_WALL_MM;
+      assert.ok(
+        need <= coneTrueRadius(x + d) + 1e-6,
+        `strong cavity stays a wall inside the cone (x=${x.toFixed(1)}, d=${d.toFixed(2)}: need ${need.toFixed(2)} vs ${coneTrueRadius(x + d).toFixed(2)})`,
+      );
+    }
+  }
+}
+
+// (6) Every live strong joint is BUILDABLE — by whichever cutter the build will
+// actually reach for.
+//
+// This is deliberately NOT "the solver can always realise the strong solid".
+// The gem/bar solver returns null below roughly r = 3.2mm at loose clearance and
+// max bend (the blade's hard width floor), and `sizeJoint` used to FUSE there.
+// Measured cost of that rule: a 170mm slim tube at clearance 0.55 / bend 25°
+// lost EVERY joint and exported one rigid body, while shell, rounded and classic
+// all delivered six articulated bodies from the identical mesh. Such a joint is
+// now planned as a live ROUNDED joint and the build falls back per joint,
+// reporting 'strong-joint-fallback'. The invariant that keeps that safe is that
+// the plan entry supports the rounded cutter, which is what is asserted here.
+{
+  const strongCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+  let solvable = 0;
+  let fallback = 0;
+  for (const bendAngleDeg of [5, 12, 25]) {
+    for (const clearanceMm of [0.3, 0.4, 0.55]) {
+      for (const jointScale of [0.6, 1.0, 1.4]) {
+        const plan = planFlexiToy(strongCapsule, {
+          ...DEFAULT_SETTINGS,
+          jointStyle: 'strong',
+          axisOverride: 'x',
+          clearanceMm,
+          bendAngleDeg,
+          jointScale,
+        });
+        for (const joint of plan.joints) {
+          if (joint.fused) continue;
+          if (
+            solveStrongJointGeometry(
+              joint.ballRadiusMm,
+              clearanceMm,
+              bendAngleDeg,
+            ) === null
+          ) {
+            fallback += 1;
+          } else {
+            solvable += 1;
+          }
+          assert.ok(
+            Math.abs(joint.faceGapMm - Math.max(clearanceMm, 0.55)) < 1e-9,
+            'strong carries the constant bowl gap in faceGapMm',
+          );
+          assert.ok(
+            joint.socketDepthMm > 0,
+            'strong keeps socketDepthMm meaningful for the rounded fallback',
+          );
+          assert.ok(
+            minSegmentLengthFor(
+              joint.ballRadiusMm,
+              clearanceMm,
+              'strong',
+              bendAngleDeg,
+              14,
+            ) >=
+              minSegmentLengthFor(
+                joint.ballRadiusMm,
+                clearanceMm,
+                'rounded',
+                bendAngleDeg,
+                14,
+              ) -
+                1e-9,
+            'a live strong joint always has at least the rounded pitch budget',
+          );
+        }
+      }
+    }
+  }
+  assert.ok(
+    solvable > 0,
+    'strong is still a strong joint on ordinary bodies (guard against the ' +
+      'fallback quietly swallowing every case)',
+  );
+  assert.ok(
+    solvable + fallback > 0,
+    'the strong sweep planned at least one live joint',
+  );
+}
+
+// (6b) Fix for the round-2 blocker: a body too slim for the strong SOLID keeps
+// its articulation instead of going rigid. At clearance 0.55 / bend 25° the
+// solver's floor is r ≈ 3.194mm, so a station whose ball lands just under that
+// used to fuse; every joint fusing meant a single rigid export where the other
+// three styles all articulated.
+{
+  // Sweep body width rather than pinning one magic radius: the assertion is
+  // "wherever a live joint falls below the strong solver's floor, strong still
+  // articulates exactly as much as rounded", and the sweep locates such joints
+  // itself so the fixture cannot silently stop exercising the path.
+  let belowFloorCases = 0;
+  for (const maxRadius of [7, 8, 9, 10, 11, 12, 13, 14]) {
+    const body = makeSpindle({ length: 170, maxRadius, axis: 'x' });
+    const base = {
+      ...DEFAULT_SETTINGS,
+      axisOverride: 'x',
+      segmentCount: 6,
+      targetLengthMm: 170,
+      clearanceMm: 0.55,
+      bendAngleDeg: 25,
+    };
+    const strongPlan = planFlexiToy(body, { ...base, jointStyle: 'strong' });
+    const roundedPlan = planFlexiToy(body, { ...base, jointStyle: 'rounded' });
+    const liveStrong = strongPlan.joints.filter((j) => !j.fused);
+    const liveRounded = roundedPlan.joints.filter((j) => !j.fused);
+    const belowFloor = liveStrong.filter(
+      (j) => solveStrongJointGeometry(j.ballRadiusMm, 0.55, 25) === null,
+    );
+    if (belowFloor.length === 0) continue;
+    belowFloorCases += 1;
+    assert.equal(
+      liveStrong.length,
+      liveRounded.length,
+      `maxRadius ${maxRadius}: strong articulates exactly as much as rounded ` +
+        `(${belowFloor.length} of its live joints are below the strong solver floor)`,
+    );
+  }
+  assert.ok(
+    belowFloorCases > 0,
+    'the slim sweep found at least one body below the strong solver floor ' +
+      '(otherwise this block asserts nothing)',
+  );
+}
+
+// (7) Dragged stations survive on the strong style and spread to its floor.
+{
+  const dragCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+  const dragged = planFlexiToy(dragCapsule, {
+    ...DEFAULT_SETTINGS,
+    jointStyle: 'strong',
+    segmentCount: 5,
+    axisOverride: 'x',
+    jointPositions: [0.2, 0.22, 0.6, 0.9],
+  });
+  assert.equal(
+    dragged.joints.length,
+    4,
+    'strong keeps the pinned station count (5 segments → 4 joints)',
+  );
+  const fractions = dragged.joints.map((joint) => joint.spineFraction);
+  for (let i = 1; i < fractions.length; i += 1) {
+    assert.ok(
+      fractions[i] > fractions[i - 1],
+      'strong dragged stations stay strictly increasing',
+    );
+  }
+  const live = dragged.joints.filter((joint) => !joint.fused);
+  if (live.length >= 2) {
+    const floor = minSegmentLengthFor(
+      live.reduce((max, joint) => Math.max(max, joint.ballRadiusMm), 0),
+      DEFAULT_SETTINGS.clearanceMm,
+      'strong',
+      DEFAULT_SETTINGS.bendAngleDeg,
+      undefined,
+    );
+    assert.ok(floor > 0, 'strong reports a positive spacing floor');
+  }
+  assert.ok(
+    dragged.warnings.some((w) => w.code === 'joint-positions-adjusted'),
+    'strong reports that the too-close dragged cuts were nudged',
+  );
+}
+
+// (8) Round-1 verifier regression: the tapered THROAT SLOT must contain the
+// swept BAR, not just the swept gem.
+//
+// The spec proves the cavity is a superset of the gem's swept envelope and then
+// sizes the slot per axis — `|v'| ≤ bh/cosβ + d·tanβ`, exact for a pure yaw. It
+// is NOT exact for a rectangle bending about an oblique azimuth: the other
+// half-extent leaks in through the corner. And between the gem's rear face and
+// the cavity's tail wall the bar used to be covered only by the CAVITY, whose
+// octahedral faces know nothing about it. Measured before the fix: 0.83 mm of
+// interference at bend 25°, costing 3.4° of the contracted travel.
+//
+// This is the same check the build's cutter realises: slot half-extents
+// `base + taper·depth` from the pivot plane out past the head segment's face.
+{
+  const rodrigues = (p, m, phi) => {
+    const c = Math.cos(phi);
+    const s = Math.sin(phi);
+    const d = m[0] * p[0] + m[1] * p[1] + m[2] * p[2];
+    const x = [
+      m[1] * p[2] - m[2] * p[1],
+      m[2] * p[0] - m[0] * p[2],
+      m[0] * p[1] - m[1] * p[0],
+    ];
+    return [0, 1, 2].map((i) => p[i] * c + x[i] * s + m[i] * d * (1 - c));
+  };
+  // How far the point pokes OUT of (cavity ∪ slot ∪ the seam void); ≤ 0 is safe.
+  const intrusion = (q, g) => {
+    const [v, u, s] = q;
+    const depth = -s;
+    if (depth > g.faceOffsetMm) return -Infinity;
+    const cavity = Math.hypot(v, u, s) - g.cavityRadiusMm;
+    let slot = Infinity;
+    if (depth >= 0) {
+      slot = Math.max(
+        Math.abs(v) - (g.throatBaseHalfMm + g.throatTaper * depth),
+        Math.abs(u) - (g.slotBaseHalfMm + g.throatTaper * depth),
+      );
+    }
+    return Math.min(cavity, slot);
+  };
+  let worst = -Infinity;
+  let worstCell = '';
+  for (const r of [2.5, 3, 4, 5, 6, 8]) {
+    for (const c of [0.3, 0.4, 0.55, 0.8]) {
+      for (const bendAngleDeg of [5, 12, 25]) {
+        const g = solveStrongJointGeometry(r, c, bendAngleDeg);
+        if (!g) continue;
+        const bend = (bendAngleDeg * Math.PI) / 180;
+        const sTop = 0.2;
+        const sRoot = -g.faceOffsetMm - Math.max(2, 0.5 * r);
+        for (let i = 0; i <= 48; i += 1) {
+          const s = sRoot + ((sTop - sRoot) * i) / 48;
+          for (const sv of [1, -1]) {
+            for (const su of [1, -1]) {
+              const p = [sv * g.bladeHalfMm, su * g.bladeHeightHalfMm, s];
+              for (let k = 0; k < 48; k += 1) {
+                const psi = (k / 48) * 2 * Math.PI;
+                const value = intrusion(
+                  rodrigues(p, [Math.cos(psi), Math.sin(psi), 0], bend),
+                  g,
+                );
+                if (value > worst) {
+                  worst = value;
+                  worstCell = `r=${r} c=${c} b=${bendAngleDeg}`;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(
+    worst <= 0,
+    `the swept bar stays inside cavity ∪ slot at every bend azimuth (worst ${worst.toFixed(4)}mm at ${worstCell})`,
+  );
+}
+
+// (9) Round-2 verifier regression: free play is bounded, and by the CONTRACT
+// rather than by whatever the solver happens to produce.
+//
+// The flat-rear gem gave `r·sinβ + c − S(1 + sinβ − cosβ)` of pull-out — up to
+// 2.92mm measured on a 200mm toy, 4× the reference model's 0.72mm — because a
+// flat face is not rotation-invariant and the pocket had to clear its swept
+// corner. The spherical head has no swept corner: five directions give exactly
+// the clearance, and the sixth is limited only by how far out the throat slot
+// interrupts the bearing surface.
+{
+  let maxAxial = 0;
+  for (const r of [2.5, 3, 4, 5, 6, 8]) {
+    for (const c of [0.3, 0.4, 0.55, 0.8]) {
+      for (const bendAngleDeg of [5, 12, 25]) {
+        const g = solveStrongJointGeometry(r, c, bendAngleDeg);
+        if (!g) continue;
+        assert.ok(
+          Math.abs(
+            g.axialFreePlayMm - strongPullPlay(r, c, g.bearingRadiusMm),
+          ) < 1e-12,
+          `pull-out slop is the concentric-ball chord at the bearing radius (r=${r} c=${c} b=${bendAngleDeg})`,
+        );
+        assert.ok(
+          g.axialFreePlayMm <= c + FLEXI_CAPTURE_MARGIN_MM + 1e-9,
+          `pull-out slop stays inside clearance + capture margin (r=${r} c=${c} b=${bendAngleDeg}: ${g.axialFreePlayMm.toFixed(4)})`,
+        );
+        assert.ok(
+          g.axialFreePlayMm >= c - 1e-9,
+          `pull-out slop is never LESS than the clearance (r=${r} c=${c} b=${bendAngleDeg})`,
+        );
+        // The five uninterrupted directions give the clearance, plus only the
+        // facet allowance of the built spheres (a couple of hundredths).
+        assert.ok(
+          g.verticalFreePlayMm === g.lateralFreePlayMm &&
+            g.lateralFreePlayMm >= c - 1e-12 &&
+            g.lateralFreePlayMm <= c + 0.05,
+          `the five uninterrupted directions give the clearance (r=${r} c=${c} b=${bendAngleDeg}: ${g.lateralFreePlayMm.toFixed(4)} vs ${c})`,
+        );
+        maxAxial = Math.max(maxAxial, g.axialFreePlayMm);
+      }
+    }
+  }
+  // The documented envelope, not a wish: these are the numbers the style ships.
+  assert.ok(
+    maxAxial < 1.11,
+    `pull-out slop over the legal box tops out at the loosest budget (got ${maxAxial.toFixed(3)})`,
+  );
+}
 
 console.log('flexiToyPlan.test.mjs: all assertions passed');

@@ -20,7 +20,7 @@ import {
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_FACE_GAP_MM,
   FLEXI_DEFAULT_JOINT_STYLE,
-  isRoundedFamilyJointStyle,
+  assertNever,
 } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
@@ -81,6 +81,97 @@ const SHELL_LAP_SHELF_MM = 2.5;
 // gap band's axial reach at the skin (mirrors the build's SHELL_LIP_FLARE
 // derated by the lofted ledge sitting close under the skin).
 const SHELL_FLARE_BAND_DEG = 6;
+// --- Strong ("strong joints") style tunables -------------------------------
+// The male is a SPHERICAL bearing HEAD at the pivot on a rectangular BAR that
+// crosses the visible gap and buries itself in the tail segment. The female is a
+// CONCENTRIC spherical pocket behind a THROAT LAND whose tapered slot passes the
+// bar. These live here — not in the build — because both stages call
+// `solveStrongJointGeometry`, so the two cannot drift.
+//
+// WHY A SPHERE (fix-3). The first cut of this style used a truncated octahedral
+// gem with a FLAT rear face. Two independent defects came out of that one
+// choice, and both are structural, not tuning:
+//
+//  · RATTLE. A flat face is not rotation-invariant. Its outer corner sweeps to a
+//    depth `S·cos β + (r−S)·sin β` when the joint bends, so the cavity's tail
+//    wall has to sit behind that — and the gem can then slide the whole way
+//    back. Measured pull-out reached 2.92mm at bend 25°, 4× the reference toy's.
+//  · ESCAPE. Pinning capture on the lateral axis only (`rear − throat = 0.3`)
+//    left the gem THINNER (2·S) than the slot was TALL, so a ~50° roll turned it
+//    edge-on and it walked straight out of the throat.
+//
+// Law 2 — concentric spheres slide on each other with constant gap — kills both
+// at once. A ball of radius `r` in a ball of radius `r + c`:
+//  · has exactly `c` of play in five of the six translation directions, and the
+//    sixth (pull-out, where the throat slot interrupts the bearing surface) is
+//    solved and capped at `strongPullBudget` (§`solveStrongJointGeometry`);
+//  · is CAPTIVE under any rigid motion whatsoever, because a ball of radius `r`
+//    cannot pass a rectangular hole whose smaller half-extent is under `r` —
+//    an argument that does not care about roll, tilt, or their composition;
+//  · keeps its clearance exactly through the bend without any swept-envelope
+//    bookkeeping, since rotation about the pivot preserves every radius.
+//
+// The cost is honest and recorded in §risks: the head is no longer faceted, so
+// the pocket roof prints as a dome (exactly what the shipped `rounded` socket
+// already does), and the twist key is now the bar alone.
+const STRONG_BLADE_FRACTION = 0.35; // target bar half-width  = 0.35·r
+const STRONG_BLADE_HEIGHT_FRACTION = 0.62; // target bar half-height = 0.62·r
+const STRONG_BLADE_MIN_MM = 1.4; // hard floor on bar WIDTH (2·bh)
+const STRONG_BLADE_MIN_HEIGHT_MM = 0.6; // hard floor on bar half-HEIGHT
+// Seam overlap on top of the travel (mirrors GAP_BAND_OVERLAP_DEG / the build's
+// SHELL_OVERLAP_RAD) and the caps on the near-axis clearance term.
+//
+// This is the SEAM's cushion, not the joint's travel margin. The seam is the
+// loosest part of the mechanism: what actually stops a swing first is the bar
+// in its slot or the ball in its pocket, so the measured first contact lands at
+// bend + 2.6° … + 5° across the tested box (spindle and winged fixtures, bend
+// 12 and 25, clearance 0.4) rather than at exactly bend + 3°. Every direction
+// clears the requested bend; do not read this constant as the delivered margin.
+const STRONG_SEAM_OVERLAP_DEG = 3;
+const STRONG_SEAM_EXTRA_MAX_RAD = Math.PI / 3;
+const STRONG_SEAM_EPS_MM = 0.25;
+const STRONG_SEAM_INNER_PAD_MM = 1.0;
+const STRONG_GEM_UNION_OVERLAP_MM = 0.2;
+// The bar solve is a short fixed point: the oblique-bend corner pad depends on
+// the very half-extents it helps size.
+const STRONG_SOLVE_ITERATIONS = 12;
+// Samples used to maximise the rectangular bar's oblique-bend corner excess
+// (see `strongCornerPad`). 32 steps pins the maximum to well under 1 µm.
+const STRONG_CORNER_SAMPLES = 32;
+// Fixed-point depth of the bearing-radius solve (where the throat slot's wall
+// meets the cavity's spherical wall). Converges geometrically; 40 is far past
+// machine precision for the whole legal settings box.
+const STRONG_BEARING_ITERATIONS = 40;
+// Facet count of the head/pocket spheres. The build reads these — they live here
+// because the SOLVER has to know them: a faceted sphere is not its ideal ball,
+// and the difference is the same order as the tolerance the pull-out budget is
+// stated to, so ignoring it would make the solved figure a fiction. (Measured
+// on the built solids: n = 64 alone put the pull-out 0.06mm over budget at
+// bend 25° / clearance 0.55.)
+//
+// manifold's geodesic sphere refines an octahedron and puts every VERTEX on the
+// sphere, so its facet planes sit at `1 − 13.5/n²` of the nominal radius
+// (measured 13.26/n², flat across n = 32…128; rounded up here). The pocket is
+// therefore built oversize by the reciprocal so it still CONTAINS its ideal
+// ball, and the head is left nominal so it is CONTAINED in its own.
+export const STRONG_SPHERE_SEGMENTS = 96;
+const STRONG_SPHERE_INRADIUS_RATIO =
+  1 - 13.5 / (STRONG_SPHERE_SEGMENTS * STRONG_SPHERE_SEGMENTS);
+export const STRONG_SPHERE_INFLATION = 1 / STRONG_SPHERE_INRADIUS_RATIO;
+/** Thickness of the annular land plate the throat slot is cut through. */
+const strongThroatLand = (r: number): number =>
+  Math.min(1.6, Math.max(0.8, 0.3 * r));
+/**
+ * Ceiling on the strong joint's pull-out slop. `clearanceMm` is what the other
+ * five directions give for free; the pull-out direction is interrupted by the
+ * throat slot, so it is allowed one capture margin more and the bar is narrowed
+ * until it complies. The reference toy measures 0.72mm printed pull-out, which
+ * is this budget at the standard preset.
+ */
+const strongPullBudget = (clearanceMm: number): number =>
+  clearanceMm + FLEXI_CAPTURE_MARGIN_MM;
+/** How far past the tail face the bar buries itself so it fuses to the tail segment. */
+const strongAnchor = (r: number): number => Math.max(2.0, 0.5 * r);
 // Rounded-style joint: cup wall thickness and the constant bowl (outer) gap. The
 // concentric dome-in-dish makes travel gap-independent, so the printed groove is
 // just this fixed gap; faceGapMm carries it (see FlexiJointPlan JSDoc).
@@ -281,7 +372,13 @@ export function planFlexiToy(
     placed.maxStationExtentMm,
   );
   if (joints.length >= 2 && minAdjacentGap < minSegmentLength) {
-    const cap = jointOverlapCap(joints, minAdjacentGap, clearance, jointStyle);
+    const cap = jointOverlapCap(
+      joints,
+      minAdjacentGap,
+      clearance,
+      jointStyle,
+      bendAngleDeg,
+    );
     let capped = false;
     joints = joints.map((joint) => {
       if (joint.fused || joint.ballRadiusMm <= cap + 1e-9) return joint;
@@ -345,39 +442,94 @@ function maxLiveRadius(joints: FlexiJointPlan[]): number {
 // must also leave a solid slab between adjacent bands — otherwise two
 // neighbouring cuts jointly shave a wide feature (a fin or wing) down to the
 // groove floor between them.
-function minSegmentLengthFor(
+function roundedFamilyMinSegmentLength(
+  maxBallRadius: number,
+  clearance: number,
+  flareDeg: number,
+  bendAngleDeg?: number,
+  maxStationExtentMm?: number,
+): number {
+  const reach =
+    maxBallRadius + clearance + ROUNDED_CUP_WALL_MM + roundedBowlGap(clearance);
+  let floor = 2 * reach + OVERLAP_MARGIN_MM;
+  if (
+    bendAngleDeg !== undefined &&
+    maxStationExtentMm !== undefined &&
+    maxStationExtentMm > 0
+  ) {
+    const halfBand =
+      ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360 +
+      (flareDeg * Math.PI) / 180;
+    floor = Math.max(
+      floor,
+      2 * maxStationExtentMm * Math.tan(halfBand) + GAP_BAND_KEEP_MM,
+    );
+  }
+  return floor;
+}
+
+/**
+ * Minimum spine pitch a live joint of this style needs. Exported (like
+ * `socketMouthRadius`) so the plan suite can pin the cross-style ordering that
+ * makes the build's per-joint rounded fallback always fit; not part of the
+ * frozen plan contract.
+ */
+export function minSegmentLengthFor(
   maxBallRadius: number,
   clearance: number,
   jointStyle: FlexiJointStyle,
   bendAngleDeg?: number,
   maxStationExtentMm?: number,
 ): number {
-  if (isRoundedFamilyJointStyle(jointStyle)) {
-    const reach =
-      maxBallRadius +
-      clearance +
-      ROUNDED_CUP_WALL_MM +
-      roundedBowlGap(clearance);
-    let floor = 2 * reach + OVERLAP_MARGIN_MM;
-    if (
-      bendAngleDeg !== undefined &&
-      maxStationExtentMm !== undefined &&
-      maxStationExtentMm > 0
-    ) {
-      // The shell's flared seam-lip walls widen the band's reach at the skin;
-      // budget the (loft-derated) flare on top of the travel + seam overlap.
-      const flareDeg = jointStyle === 'shell' ? SHELL_FLARE_BAND_DEG : 0;
-      const halfBand =
-        ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360 +
-        (flareDeg * Math.PI) / 180;
-      floor = Math.max(
-        floor,
-        2 * maxStationExtentMm * Math.tan(halfBand) + GAP_BAND_KEEP_MM,
+  switch (jointStyle) {
+    // The shell's flared seam-lip walls widen the band's reach at the skin;
+    // budget the (loft-derated) flare on top of the travel + seam overlap.
+    case 'shell':
+      return roundedFamilyMinSegmentLength(
+        maxBallRadius,
+        clearance,
+        SHELL_FLARE_BAND_DEG,
+        bendAngleDeg,
+        maxStationExtentMm,
       );
+    case 'rounded':
+      return roundedFamilyMinSegmentLength(
+        maxBallRadius,
+        clearance,
+        0,
+        bendAngleDeg,
+        maxStationExtentMm,
+      );
+    case 'strong': {
+      // Strong pitches WIDER than `rounded`: its own footprint (pocket + wall
+      // headward, land + bar anchor tailward) binds nearly everywhere. Swept
+      // over r ∈ {2.5,3,4,5,6,8} × c ∈ {0.3,0.4,0.55,0.8} × bend ∈ {5,12,25} ×
+      // station extent ∈ {5,10,20}, the strong term is strictly larger in 182
+      // of 216 cells, by up to 1.16× (worst at r=8, c=0.3, bend=5: 23.90 vs
+      // 20.60mm). The `max` is therefore usually the strong term; taking it
+      // anyway is what keeps the build's per-joint rounded fallback guaranteed
+      // to have room, and the plan suite pins only the one safe direction,
+      // strong ≥ rounded.
+      const rounded = roundedFamilyMinSegmentLength(
+        maxBallRadius,
+        clearance,
+        0,
+        bendAngleDeg,
+        maxStationExtentMm,
+      );
+      const footprint = strongFootprintMm(
+        maxBallRadius,
+        clearance,
+        bendAngleDeg,
+        maxStationExtentMm,
+      );
+      return footprint === null ? rounded : Math.max(rounded, footprint);
     }
-    return floor;
+    case 'classic':
+      return Math.max(8, 2.4 * maxBallRadius);
+    default:
+      return assertNever(jointStyle, 'minSegmentLengthFor');
   }
-  return Math.max(8, 2.4 * maxBallRadius);
 }
 
 function minAdjacentStationGap(joints: FlexiJointPlan[]): number {
@@ -931,10 +1083,6 @@ function sizeJoint(
     fused: true,
   });
 
-  // Rounded style must keep the whole socket CUP (radius r+c+w) inside the skin;
-  // classic keeps the ball's clearance shell (r+c) inside with a socket wall.
-  const rounded = isRoundedFamilyJointStyle(jointStyle);
-
   const profile = buildCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
   if (stationOut) {
@@ -963,15 +1111,26 @@ function sizeJoint(
     if (socketDepthMm === null) {
       return fused(ballRadiusMm);
     }
-    const faceGapMm = rounded
-      ? roundedBowlGap(clearance)
-      : computeFaceGap(
-          bendAngleDeg,
-          rho0,
-          ballRadiusMm,
-          socketDepthMm,
-          clearance,
-        );
+    // Rounded family and strong both carry the constant bowl gap; classic's is
+    // the bend-driven flat ring gap.
+    const faceGapMm = ((): number => {
+      switch (jointStyle) {
+        case 'shell':
+        case 'rounded':
+        case 'strong':
+          return roundedBowlGap(clearance);
+        case 'classic':
+          return computeFaceGap(
+            bendAngleDeg,
+            rho0,
+            ballRadiusMm,
+            socketDepthMm,
+            clearance,
+          );
+        default:
+          return assertNever(jointStyle, 'sizeJoint faceGap');
+      }
+    })();
     return {
       center,
       axis,
@@ -983,15 +1142,61 @@ function sizeJoint(
     };
   };
   const shellShelfFits = (ballRadiusMm: number): boolean => {
-    if (jointStyle !== 'shell') return true;
-    const cs = roundedBowlGap(clearance);
-    const cupOuter = ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM;
-    // Mirror of the build's ledge estimate (thin-direction floor).
-    const ledge = Math.min(
-      SHELL_FLOOR_FACTOR * rho0,
-      rho0 - cs - SHELL_MIN_FLAP_MM,
-    );
-    return ledge - cupOuter >= SHELL_LAP_SHELF_MM;
+    switch (jointStyle) {
+      case 'rounded':
+      case 'classic':
+      case 'strong':
+        return true;
+      case 'shell': {
+        const cs = roundedBowlGap(clearance);
+        const cupOuter = ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM;
+        // Mirror of the build's ledge estimate (thin-direction floor).
+        const ledge = Math.min(
+          SHELL_FLOOR_FACTOR * rho0,
+          rho0 - cs - SHELL_MIN_FLAP_MM,
+        );
+        return ledge - cupOuter >= SHELL_LAP_SHELF_MM;
+      }
+      default:
+        return assertNever(jointStyle, 'shellShelfFits');
+    }
+  };
+  // Rounded family must keep the whole socket CUP (radius r+c+w) inside the
+  // skin; classic keeps the ball's clearance shell (r+c) inside with a socket
+  // wall; strong keeps its closed cavity AND its throat slot inside.
+  const cavityContained = (ballRadiusMm: number): boolean => {
+    switch (jointStyle) {
+      case 'shell':
+      case 'rounded':
+        return socketContainedAlongReach(
+          profile,
+          ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
+          0,
+        );
+      case 'classic':
+        return socketContainedAlongReach(
+          profile,
+          ballRadiusMm + clearance,
+          FLEXI_MIN_SOCKET_WALL_MM,
+        );
+      case 'strong':
+        // The strong SOLID is not realisable at every radius — its blade has a
+        // hard width floor, so below roughly r = 3.2mm at loose clearance and
+        // max bend the solver returns null. That is not a reason to fuse: such a
+        // joint is still a perfectly good ROUNDED joint, and the build already
+        // falls back to the rounded cutter per joint (reporting
+        // 'strong-joint-fallback'). So judge containment by whichever cavity
+        // will ACTUALLY be carved, exactly as the build will decide it.
+        return solveStrongJointGeometry(ballRadiusMm, clearance, bendAngleDeg)
+          ? strongCavityFits(profile, ballRadiusMm, clearance, bendAngleDeg)
+          : socketContainedAlongReach(
+              profile,
+              ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
+              0,
+            );
+      default:
+        return assertNever(jointStyle, 'sizeJoint containment');
+    }
   };
   let ballRadiusMm = clamp(
     jointScale * BALL_SIZE_FACTOR * rho0,
@@ -1000,17 +1205,7 @@ function sizeJoint(
   );
   let containedFallback: number | null = null;
   while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
-    const contained = rounded
-      ? socketContainedAlongReach(
-          profile,
-          ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
-          0,
-        )
-      : socketContainedAlongReach(
-          profile,
-          ballRadiusMm + clearance,
-          FLEXI_MIN_SOCKET_WALL_MM,
-        );
+    const contained = cavityContained(ballRadiusMm);
     if (contained) {
       if (containedFallback === null) containedFallback = ballRadiusMm;
       if (shellShelfFits(ballRadiusMm)) {
@@ -1192,15 +1387,24 @@ function capJointBall(
   if (socketDepthMm === null) {
     return fused;
   }
-  // Rounded keeps its constant bowl gap; classic's flat gap shrinks with the
-  // ball (its bend-driven value is unchanged, so min() with the connectivity
-  // budget is exact).
-  const faceGapMm = isRoundedFamilyJointStyle(jointStyle)
-    ? roundedBowlGap(clearance)
-    : Math.min(
-        joint.faceGapMm,
-        cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM,
-      );
+  // Rounded family and strong keep their constant bowl gap; classic's flat gap
+  // shrinks with the ball (its bend-driven value is unchanged, so min() with
+  // the connectivity budget is exact).
+  const faceGapMm = ((): number => {
+    switch (jointStyle) {
+      case 'shell':
+      case 'rounded':
+      case 'strong':
+        return roundedBowlGap(clearance);
+      case 'classic':
+        return Math.min(
+          joint.faceGapMm,
+          cap - socketDepthMm - BALL_CONNECTIVITY_MARGIN_MM,
+        );
+      default:
+        return assertNever(jointStyle, 'capJointBall faceGap');
+    }
+  })();
   return {
     center: joint.center,
     axis: joint.axis,
@@ -1222,6 +1426,7 @@ function jointOverlapCap(
   pitch: number,
   clearance: number,
   jointStyle: FlexiJointStyle,
+  bendAngleDeg: number,
 ): number {
   let minStationGap = Infinity;
   for (let i = 1; i < joints.length; i += 1) {
@@ -1233,17 +1438,63 @@ function jointOverlapCap(
   if (!Number.isFinite(minStationGap)) {
     return Infinity;
   }
-  if (isRoundedFamilyJointStyle(jointStyle)) {
-    // 2·(ball + clearance + wall + bowlGap) + margin ≤ gap.
-    return (
-      (minStationGap - OVERLAP_MARGIN_MM) / 2 -
-      clearance -
-      ROUNDED_CUP_WALL_MM -
-      roundedBowlGap(clearance)
-    );
+  // 2·(ball + clearance + wall + bowlGap) + margin ≤ gap.
+  const roundedCap =
+    (minStationGap - OVERLAP_MARGIN_MM) / 2 -
+    clearance -
+    ROUNDED_CUP_WALL_MM -
+    roundedBowlGap(clearance);
+  switch (jointStyle) {
+    case 'shell':
+    case 'rounded':
+      return roundedCap;
+    case 'strong': {
+      // The strong footprint is monotone increasing in r, so bisect for the
+      // largest ball whose cavity + land + anchor still fits the tightest
+      // station gap. An INFEASIBLE radius counts as fitting purely to keep the
+      // bisection well posed: feasibility is monotone in r, so the infeasible
+      // set is a prefix and treating it as "fits" leaves the predicate
+      // monotone, which is all the bisection needs. (It does NOT mean the joint
+      // fuses — sizeJoint's strong arm plans a live joint judged by the rounded
+      // cup when the strong solver is infeasible, and the build falls back per
+      // joint.) The rounded cap is taken too, so the build's per-joint rounded
+      // fallback always has room.
+      const fits = (radius: number): boolean => {
+        const geometry = solveStrongJointGeometry(
+          radius,
+          clearance,
+          bendAngleDeg,
+        );
+        if (!geometry) return true;
+        const footprint =
+          geometry.cavityAxMm +
+          FLEXI_MIN_SOCKET_WALL_MM +
+          geometry.faceOffsetMm +
+          strongAnchor(radius) +
+          OVERLAP_MARGIN_MM;
+        return footprint <= minStationGap;
+      };
+      let lo = FLEXI_MIN_BALL_RADIUS_MM;
+      let hi = maxLiveRadius(joints);
+      if (!(hi > lo)) {
+        return Math.min(roundedCap, fits(lo) ? hi : 0);
+      }
+      if (fits(hi)) return Math.min(roundedCap, hi);
+      if (!fits(lo)) return 0;
+      for (let i = 0; i < 16; i += 1) {
+        const mid = (lo + hi) / 2;
+        if (fits(mid)) lo = mid;
+        else hi = mid;
+      }
+      return Math.min(roundedCap, lo);
+    }
+    case 'classic': {
+      const distanceCap = (minStationGap - clearance - OVERLAP_MARGIN_MM) / 2;
+      return Math.min(pitch / 2.4, distanceCap);
+    }
+    default:
+      return assertNever(jointStyle, 'jointOverlapCap');
   }
-  const distanceCap = (minStationGap - clearance - OVERLAP_MARGIN_MM) / 2;
-  return Math.min(pitch / 2.4, distanceCap);
 }
 
 /** Socket face depth (h) that captures the ball, or null if none does. */
@@ -1262,6 +1513,401 @@ function captureDepth(
     }
   }
   return null;
+}
+
+// --- Strong ("strong joints") solved geometry ------------------------------
+
+/**
+ * Solved strong-joint geometry, in the joint frame
+ * (`v` = lateral / e2, `u` = up / e1, `s` = axial / axis, tail negative).
+ *
+ * Male   = HEAD `Ball(rho)` at the pivot + BAR `{|v| ≤ bh, |u| ≤ Hb}` running
+ *          tailward out of it, across the visible gap, into the tail segment.
+ * Female = CAVITY `Ball(rho + c)`, CONCENTRIC with the head, behind a THROAT
+ *          LAND of thickness `t` pierced by a tapered (bowtie) SLOT sized so the
+ *          bar clears it through a ±bend rotation about the pivot.
+ *
+ * Containment is a one-liner rather than a swept-envelope calculation: the head
+ * is a subset of `Ball(rho)`, a rotation about the pivot preserves every point's
+ * radius, so the swept head grown by `c` is a subset of `Ball(rho + c)` — for
+ * ANY bend angle, about ANY axis. That is law 2, and it is why this style's
+ * clearance neither shrinks nor has to be budgeted against the travel.
+ *
+ * Three things are solved (all of them the BAR's half-width; the head is simply
+ * the ball the plan already sized):
+ *  1. CAPTURE — the throat, at its narrowest plane, must be narrower than the
+ *     head by `FLEXI_CAPTURE_MARGIN_MM`. A ball of radius `rho` cannot cross a
+ *     planar hole whose smaller half-extent is under `rho` (at the instant its
+ *     centre is in the hole's plane its cross-section there is a disc of radius
+ *     `rho`), so this blocks escape under any composition of roll, tilt and
+ *     translation — not just the pure pull the previous design checked.
+ *  2. RATTLE — pull-out slop is `√((rho+c)² − w²) − √(rho² − w²)` where `w` is
+ *     the bearing radius, the smallest radius at which the cavity's spherical
+ *     wall still has material (i.e. just outside the slot). It grows with `w`,
+ *     so the bar is narrowed until the slop meets `strongPullBudget`.
+ *  3. CONTAINMENT PARITY — the slot must never demand more room inside the skin
+ *     than the cavity does, so `strongCavityFits` is bounded by the same
+ *     `r + c + wall` the `rounded` cup needs and strong articulates a slim body
+ *     exactly as far as rounded does.
+ */
+export type StrongJointGeometry = {
+  /** Head sphere radius (= the plan's ball radius). */
+  headRadiusMm: number;
+  /** Bar half-width (lateral) and half-height. */
+  bladeHalfMm: number;
+  bladeHeightHalfMm: number;
+  /** Cavity sphere radius, `rho + c`, concentric with the head. */
+  cavityRadiusMm: number;
+  /**
+   * The cavity's three half-extents. All equal `cavityRadiusMm` — the pocket is
+   * a ball — but the build and the containment gate read them by name, and
+   * keeping them distinct documents which reach each caller means.
+   */
+  cavityLatMm: number;
+  cavityUpMm: number;
+  cavityAxMm: number;
+  /** Land plate thickness, and the head segment's tail face at s = −faceOffsetMm. */
+  throatLandMm: number;
+  faceOffsetMm: number;
+  /** Tapered slot half-sizes at the cavity wall (inner) and past the head face (outer). */
+  throatInnerHalfMm: number;
+  throatOuterHalfMm: number;
+  slotInnerHalfMm: number;
+  slotOuterHalfMm: number;
+  /**
+   * The slot is the affine bowtie `half(d) = base + taper·d` in the depth
+   * `d = −s`. The build seeds its hull from these so the built slot IS that
+   * envelope at every depth.
+   */
+  throatBaseHalfMm: number;
+  slotBaseHalfMm: number;
+  throatTaper: number;
+  /**
+   * How much wider the head is than the throat at the throat's narrowest plane.
+   * At least `FLEXI_CAPTURE_MARGIN_MM` by construction — this is the number that
+   * makes the joint captive, and the build suite measures it off the built
+   * solids rather than trusting the solver.
+   */
+  captureMarginMm: number;
+  /** Radius at which the head bears on the cavity wall when pulled tailward. */
+  bearingRadiusMm: number;
+  /**
+   * Pure-translation free play before contact, per direction. The joint is
+   * CAPTIVE in all six regardless — this is slop, never escape.
+   *
+   * Five of the six are exactly `clearanceMm`: a ball in a concentric ball has
+   * that much room whichever way it is pushed. The sixth, pull-out, is the only
+   * direction whose bearing surface is interrupted (by the throat slot the bar
+   * passes through), so the head must travel out to the bearing radius before it
+   * touches. That figure is solved and capped at `strongPullBudget(c)`.
+   */
+  axialFreePlayMm: number;
+  verticalFreePlayMm: number;
+  lateralFreePlayMm: number;
+  /** `wide` = the bar is at its target width; `pinned` = a constraint narrowed it. */
+  mode: 'wide' | 'pinned';
+};
+
+/**
+ * Extra half-width the tapered slot needs beyond the per-axis bound
+ * `w/cos β + d·tan β` so a RECTANGULAR bar clears it through an OBLIQUE bend.
+ *
+ * For a rotation of β about an axis at azimuth ψ in the `{e1, e2}` circle, the
+ * bar corner `(a_v, a_u, s)` lands at
+ *   `v' = a_v(cos²ψ + sin²ψ/cos β) − a_u sinψ cosψ (1−cos β)/cos β − d tanβ sinψ`
+ * (exact — the `sinψ = 1` pure-yaw case collapses to `a_v/cos β − d tan β`,
+ * which is what a naive formula assumes). Dropping the last, non-positive term
+ * leaves an excess over that formula of at most
+ *   `((1−cos β)/cos β) · max_t ( other·t·√(1−t²) − w·t² )`,  `t = |cos ψ|`.
+ * That maximum is taken numerically here; it is a strict upper bound, so the
+ * slot is a proven superset of the swept bar at every depth.
+ */
+function strongCornerPad(
+  halfMm: number,
+  otherHalfMm: number,
+  bendRatio: number,
+): number {
+  if (!(bendRatio > 0)) return 0;
+  let best = 0;
+  for (let i = 1; i < STRONG_CORNER_SAMPLES; i += 1) {
+    const t = i / STRONG_CORNER_SAMPLES;
+    const value = otherHalfMm * t * Math.sqrt(1 - t * t) - halfMm * t * t;
+    if (value > best) best = value;
+  }
+  return bendRatio * best;
+}
+
+/**
+ * Radius at which a slot wall `half(d) = base + taper·d` crosses the cavity's
+ * spherical wall of radius `A` — i.e. the smallest radius on that wall that
+ * still has material behind it, which is where the head bears when pulled out.
+ * `w = base + taper·√(A² − w²)` is a contraction for `taper < 1`, so a plain
+ * fixed point converges geometrically.
+ */
+function strongBearingRadius(
+  cavityRadiusMm: number,
+  baseHalfMm: number,
+  taper: number,
+): number {
+  let w = baseHalfMm;
+  for (let i = 0; i < STRONG_BEARING_ITERATIONS; i += 1) {
+    const depth = Math.sqrt(
+      Math.max(0, cavityRadiusMm * cavityRadiusMm - w * w),
+    );
+    const next = baseHalfMm + taper * depth;
+    if (Math.abs(next - w) < 1e-12) return next;
+    w = next;
+  }
+  return w;
+}
+
+/**
+ * The two radii the BUILT solids actually present to each other: the pocket's
+ * widest point (a sphere vertex, since the pocket is inflated to contain its
+ * ideal ball) and the head's narrowest (a facet plane). Pairing the two worst
+ * cases is a bound, not an average — deliberately, so every play figure the
+ * solver reports is one the built geometry cannot exceed.
+ */
+function strongBuiltRadii(
+  headRadiusMm: number,
+  clearanceMm: number,
+): { outerMm: number; innerMm: number } {
+  return {
+    outerMm: (headRadiusMm + clearanceMm) * STRONG_SPHERE_INFLATION,
+    innerMm: headRadiusMm * STRONG_SPHERE_INRADIUS_RATIO,
+  };
+}
+
+/**
+ * Pull-out slop for a head of radius `rho` in a concentric cavity of radius
+ * `rho + c` whose tail wall is interrupted out to the bearing radius `w` — the
+ * chord difference between the two spheres at that radius, taken on the BUILT
+ * (faceted) radii.
+ */
+export function strongPullPlay(
+  headRadiusMm: number,
+  clearanceMm: number,
+  bearingRadiusMm: number,
+): number {
+  const { outerMm, innerMm } = strongBuiltRadii(headRadiusMm, clearanceMm);
+  const w = Math.min(bearingRadiusMm, innerMm);
+  return (
+    Math.sqrt(Math.max(0, outerMm * outerMm - w * w)) -
+    Math.sqrt(Math.max(0, innerMm * innerMm - w * w))
+  );
+}
+
+/**
+ * Solve the strong joint's head / bar / cavity / throat for a ball radius,
+ * clearance and bend angle. Pure — the plan and the build both call it, so they
+ * cannot drift. Returns null when the joint is infeasible (the plan then judges
+ * containment by the rounded cup and the build carves the rounded groove).
+ *
+ * There is no `clamp()` anywhere in the solve: an under-strength bar is an
+ * explicit infeasibility, never a silently discarded floor.
+ */
+export function solveStrongJointGeometry(
+  ballRadiusMm: number,
+  clearanceMm: number,
+  bendAngleDeg: number,
+): StrongJointGeometry | null {
+  const rho = ballRadiusMm;
+  const c = clearanceMm;
+  if (!(rho > 0) || !(c >= 0) || !Number.isFinite(bendAngleDeg)) return null;
+  const bend = (bendAngleDeg * Math.PI) / 180;
+  const cosB = Math.cos(bend);
+  const tanB = Math.tan(bend);
+  if (!(cosB > 1e-6) || bend < 0) return null;
+  const bendRatio = (1 - cosB) / cosB;
+
+  const cavityRadius = rho + c;
+  const throatLand = strongThroatLand(rho);
+  const faceOffset = cavityRadius + throatLand;
+
+  // Largest bearing radius the pull-out budget allows. Slop
+  // `√(A²−w²) − √(rho²−w²)` is increasing in `w`, so invert it once:
+  // `√(rho²−w²) ≥ (A² − rho² − P²) / (2P)`, on the BUILT radii.
+  const budget = strongPullBudget(c);
+  const built = strongBuiltRadii(rho, c);
+  const minChord =
+    (built.outerMm * built.outerMm -
+      built.innerMm * built.innerMm -
+      budget * budget) /
+    (2 * budget);
+  const bearingCeiling =
+    minChord >= built.innerMm
+      ? 0
+      : Math.sqrt(
+          Math.max(
+            0,
+            built.innerMm * built.innerMm -
+              Math.max(0, minChord) * Math.max(0, minChord),
+          ),
+        );
+  const depthAtCeiling = Math.sqrt(
+    Math.max(0, cavityRadius * cavityRadius - bearingCeiling * bearingCeiling),
+  );
+
+  const targetHalf = STRONG_BLADE_FRACTION * rho;
+  const targetHeight = STRONG_BLADE_HEIGHT_FRACTION * rho;
+  let bladeHalf = targetHalf;
+  let bladeHeightHalf = targetHeight;
+  for (let i = 0; i < STRONG_SOLVE_ITERATIONS; i += 1) {
+    const padLat = strongCornerPad(bladeHalf, bladeHeightHalf, bendRatio);
+    // (1) capture: the throat at the cavity wall stays a margin inside the head.
+    const capCapture =
+      (rho - FLEXI_CAPTURE_MARGIN_MM - c - cavityRadius * tanB - padLat) * cosB;
+    // (2) rattle: the bearing radius stays within the pull-out budget.
+    const capPlay =
+      (bearingCeiling - c - padLat - tanB * depthAtCeiling) * cosB;
+    // (3) containment parity: the slot never out-demands the cavity itself.
+    const capFit = (rho - faceOffset * tanB - padLat) * cosB;
+    bladeHalf = Math.min(targetHalf, capCapture, capPlay, capFit);
+    if (!(bladeHalf > 0)) break;
+    const padUp = strongCornerPad(bladeHeightHalf, bladeHalf, bendRatio);
+    bladeHeightHalf = Math.min(
+      targetHeight,
+      (rho - faceOffset * tanB - padUp) * cosB,
+    );
+    if (!(bladeHeightHalf > 0)) break;
+  }
+  if (
+    !(2 * bladeHalf >= STRONG_BLADE_MIN_MM) ||
+    !(bladeHeightHalf >= STRONG_BLADE_MIN_HEIGHT_MM)
+  ) {
+    return null;
+  }
+
+  const padLat = strongCornerPad(bladeHalf, bladeHeightHalf, bendRatio);
+  const padUp = strongCornerPad(bladeHeightHalf, bladeHalf, bendRatio);
+  const throatBase = bladeHalf / cosB + padLat + c;
+  const slotBase = bladeHeightHalf / cosB + padUp + c;
+  const bearingRadius = Math.min(
+    strongBearingRadius(cavityRadius, throatBase, tanB),
+    strongBearingRadius(cavityRadius, slotBase, tanB),
+  );
+
+  return {
+    headRadiusMm: rho,
+    bladeHalfMm: bladeHalf,
+    bladeHeightHalfMm: bladeHeightHalf,
+    cavityRadiusMm: cavityRadius,
+    cavityLatMm: cavityRadius,
+    cavityUpMm: cavityRadius,
+    cavityAxMm: cavityRadius,
+    throatLandMm: throatLand,
+    faceOffsetMm: faceOffset,
+    throatInnerHalfMm: throatBase + cavityRadius * tanB,
+    throatOuterHalfMm: throatBase + faceOffset * tanB,
+    slotInnerHalfMm: slotBase + cavityRadius * tanB,
+    slotOuterHalfMm: slotBase + faceOffset * tanB,
+    throatBaseHalfMm: throatBase,
+    slotBaseHalfMm: slotBase,
+    throatTaper: tanB,
+    captureMarginMm:
+      rho -
+      Math.min(
+        throatBase + cavityRadius * tanB,
+        slotBase + cavityRadius * tanB,
+      ),
+    bearingRadiusMm: bearingRadius,
+    axialFreePlayMm: strongPullPlay(rho, c, bearingRadius),
+    verticalFreePlayMm: built.outerMm - built.innerMm,
+    lateralFreePlayMm: built.outerMm - built.innerMm,
+    mode: bladeHalf >= targetHalf - 1e-9 ? 'wide' : 'pinned',
+  };
+}
+
+/**
+ * Lateral half-width of the strong cavity at axial offset `d` from the pivot —
+ * the pocket is a ball, so this is just its chord.
+ */
+export function strongCavityHalfWidthAt(
+  geometry: StrongJointGeometry,
+  d: number,
+): number {
+  const radius = geometry.cavityRadiusMm;
+  if (Math.abs(d) > radius) return 0;
+  return Math.sqrt(Math.max(0, radius * radius - d * d));
+}
+
+/** Seam overlap (deg) added on top of the travel — exported for the build. */
+export const STRONG_SEAM_OVERLAP_DEGREES = STRONG_SEAM_OVERLAP_DEG;
+export const STRONG_SEAM_EXTRA_MAX_RADIANS = STRONG_SEAM_EXTRA_MAX_RAD;
+export const STRONG_SEAM_EPS_MILLIMETRES = STRONG_SEAM_EPS_MM;
+export const STRONG_SEAM_INNER_PAD_MILLIMETRES = STRONG_SEAM_INNER_PAD_MM;
+export const STRONG_GEM_UNION_OVERLAP_MILLIMETRES = STRONG_GEM_UNION_OVERLAP_MM;
+/** How far past the tail face the bar buries itself (build-side, mm). */
+export function strongAnchorMm(ballRadiusMm: number): number {
+  return strongAnchor(ballRadiusMm);
+}
+
+/**
+ * Containment gate for the strong style. Conservative and ISOTROPIC: it reads
+ * the same min-over-16-directions reducer `socketContainedAlongReach` uses, so
+ * it can never be fooled by a thin fin the way a single support direction can.
+ *
+ * (1) the closed cavity, sampled across its own axial reach, and
+ * (2) the land: the slot must not sever the head segment's tail face.
+ */
+function strongCavityFits(
+  profile: CrossSectionProfile,
+  ballRadiusMm: number,
+  clearanceMm: number,
+  bendAngleDeg: number,
+  wallMm: number = FLEXI_MIN_SOCKET_WALL_MM,
+): boolean {
+  const geometry = solveStrongJointGeometry(
+    ballRadiusMm,
+    clearanceMm,
+    bendAngleDeg,
+  );
+  if (!geometry) return false;
+  for (let j = 0; j <= CONTAINMENT_SAMPLES; j += 1) {
+    const d =
+      -geometry.cavityAxMm +
+      (2 * geometry.cavityAxMm * j) / CONTAINMENT_SAMPLES;
+    const needed = strongCavityHalfWidthAt(geometry, d) + wallMm;
+    if (needed > crossSectionAt(profile, d) + 1e-6) {
+      return false;
+    }
+  }
+  const slot =
+    Math.max(geometry.throatOuterHalfMm, geometry.slotOuterHalfMm) + wallMm;
+  for (const d of [-geometry.cavityAxMm, -geometry.faceOffsetMm]) {
+    if (slot > crossSectionAt(profile, d) + 1e-6) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Axial footprint one strong joint claims along the spine: the head side needs
+ * the cavity plus a wall, the tail side needs the land plus the bar's anchor,
+ * and both must clear the seam band's reach at the widest station.
+ */
+function strongFootprintMm(
+  maxBallRadius: number,
+  clearance: number,
+  bendAngleDeg: number | undefined,
+  maxStationExtentMm: number | undefined,
+): number | null {
+  if (bendAngleDeg === undefined) return null;
+  const geometry = solveStrongJointGeometry(
+    maxBallRadius,
+    clearance,
+    bendAngleDeg,
+  );
+  if (!geometry) return null;
+  const half = ((bendAngleDeg + GAP_BAND_OVERLAP_DEG) * Math.PI) / 360;
+  const band = (maxStationExtentMm ?? 0) * Math.tan(half);
+  const head = Math.max(geometry.cavityAxMm + FLEXI_MIN_SOCKET_WALL_MM, band);
+  const tail = Math.max(
+    geometry.faceOffsetMm + strongAnchor(maxBallRadius),
+    band,
+  );
+  return head + tail + OVERLAP_MARGIN_MM;
 }
 
 /**

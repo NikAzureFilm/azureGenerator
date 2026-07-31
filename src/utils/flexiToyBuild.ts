@@ -18,6 +18,7 @@ import type { ManifoldToplevel, Manifold, Vec3 } from 'manifold-3d';
 import {
   FLEXI_DEFAULT_JOINT_STYLE,
   FLEXI_MIN_SOCKET_WALL_MM,
+  assertNever,
 } from './flexiToyTypes.ts';
 import type {
   FlexiMeshInput,
@@ -29,8 +30,23 @@ import type {
   FlexiToyWarning,
   FlexiToyOutcome,
 } from './flexiToyTypes.ts';
-import { crossSectionExtentsSampler } from './flexiToyPlan.ts';
-import type { FlexiSectionSampler } from './flexiToyPlan.ts';
+import {
+  crossSectionExtentsSampler,
+  solveStrongJointGeometry,
+  strongAnchorMm,
+  STRONG_SEAM_OVERLAP_DEGREES,
+  STRONG_SEAM_EXTRA_MAX_RADIANS,
+  STRONG_SEAM_EPS_MILLIMETRES,
+  STRONG_SEAM_INNER_PAD_MILLIMETRES,
+  STRONG_GEM_UNION_OVERLAP_MILLIMETRES,
+  STRONG_SPHERE_SEGMENTS,
+  STRONG_SPHERE_INFLATION,
+  strongCavityHalfWidthAt,
+} from './flexiToyPlan.ts';
+import type {
+  FlexiSectionSampler,
+  StrongJointGeometry,
+} from './flexiToyPlan.ts';
 
 /** Non-superseded outcome the worker forwards to the main thread. */
 export type FlexiBuildOutcome = Exclude<
@@ -132,55 +148,114 @@ export async function buildFlexiToy(
     // rounded brim can split a fin sliver off into its interval's segment).
     let segments: Manifold[][];
     let shellFallbackJoints = 0;
+    let strongFallbackJoints = 0;
+    let strongTravelClampedJoints = 0;
+    let strongMinTravelDeg = settings.bendAngleDeg;
 
+    // Exhaustive over FlexiJointStyle, the same `switch` + `assertNever` shape
+    // the plan uses at its six dispatch sites. A chained `else` here would send
+    // a future fifth style silently down the rounded path and build the wrong
+    // thing; this way the compiler flags the omission and, if one is ever
+    // constructed at runtime, the build reports a failure instead of lying.
     if (cutJoints.length === 0) {
       segments = [[base.manifold]];
-    } else if (jointStyle === 'classic') {
-      const pieces = buildClassicSegments(
-        wasm,
-        keep,
-        base.manifold,
-        cutJoints,
-        clearance,
-      );
-      if (!pieces) {
-        return {
-          status: 'error',
-          code: 'compute-failed',
-          message: 'The flexi toy could not be built from this model.',
-        };
-      }
-      segments = pieces.map((piece) => [piece]);
     } else {
-      const notes = { shellFallbackJoints: 0 };
-      const grouped = buildRoundedSegments(
-        wasm,
-        keep,
-        base.manifold,
-        cutJoints,
-        meshInput,
-        clearance,
-        settings.bendAngleDeg,
-        jointStyle,
-        notes,
-      );
-      if (grouped === 'uncut') {
-        return {
-          status: 'error',
-          code: 'rounded-uncut',
-          message:
-            'The rounded joints could not fully separate this model (usually a strong off-axis feature crossing a cut). Try the Classic joint style.',
-        };
+      switch (jointStyle) {
+        case 'strong': {
+          // A top-level arm, NOT a branch inside buildRoundedSegments: the
+          // strong joint has no rounded gap angles (whose null return would
+          // abort the whole build) and its own male solid has to survive past
+          // the subtract chain, so it owns its loop scaffold.
+          const notes = {
+            strongFallbackJoints: 0,
+            travelClampedJoints: 0,
+            minTravelDeg: settings.bendAngleDeg,
+          };
+          const grouped = buildStrongSegments(
+            wasm,
+            keep,
+            base.manifold,
+            cutJoints,
+            meshInput,
+            clearance,
+            settings.bendAngleDeg,
+            notes,
+          );
+          if (grouped === 'uncut') {
+            return {
+              status: 'error',
+              code: 'rounded-uncut',
+              message:
+                'The strong joints could not fully separate this model (usually a strong off-axis feature crossing a cut). Try the Classic joint style.',
+            };
+          }
+          if (!grouped) {
+            return {
+              status: 'error',
+              code: 'compute-failed',
+              message: 'The flexi toy could not be built from this model.',
+            };
+          }
+          segments = grouped;
+          strongFallbackJoints = notes.strongFallbackJoints;
+          strongTravelClampedJoints = notes.travelClampedJoints;
+          strongMinTravelDeg = notes.minTravelDeg;
+          break;
+        }
+        case 'classic': {
+          const pieces = buildClassicSegments(
+            wasm,
+            keep,
+            base.manifold,
+            cutJoints,
+            clearance,
+          );
+          if (!pieces) {
+            return {
+              status: 'error',
+              code: 'compute-failed',
+              message: 'The flexi toy could not be built from this model.',
+            };
+          }
+          segments = pieces.map((piece) => [piece]);
+          break;
+        }
+        case 'shell':
+        case 'rounded': {
+          const notes = { shellFallbackJoints: 0 };
+          const grouped = buildRoundedSegments(
+            wasm,
+            keep,
+            base.manifold,
+            cutJoints,
+            meshInput,
+            clearance,
+            settings.bendAngleDeg,
+            jointStyle,
+            notes,
+          );
+          if (grouped === 'uncut') {
+            return {
+              status: 'error',
+              code: 'rounded-uncut',
+              message:
+                'The rounded joints could not fully separate this model (usually a strong off-axis feature crossing a cut). Try the Classic joint style.',
+            };
+          }
+          if (!grouped) {
+            return {
+              status: 'error',
+              code: 'compute-failed',
+              message: 'The flexi toy could not be built from this model.',
+            };
+          }
+          segments = grouped;
+          shellFallbackJoints = notes.shellFallbackJoints;
+          break;
+        }
+        default:
+          return assertNever(jointStyle, 'buildFlexiToy joint style');
       }
-      if (!grouped) {
-        return {
-          status: 'error',
-          code: 'compute-failed',
-          message: 'The flexi toy could not be built from this model.',
-        };
-      }
-      segments = grouped;
-      shellFallbackJoints = notes.shellFallbackJoints;
     }
 
     const assembled = assemblePieces(segments, meshInput);
@@ -193,6 +268,28 @@ export async function buildFlexiToy(
           shellFallbackJoints === 1
             ? 'One joint was too small for an overlapping shell and uses a rounded groove instead.'
             : `${shellFallbackJoints} joints were too small for overlapping shells and use rounded grooves instead.`,
+      });
+    }
+    if (strongFallbackJoints > 0) {
+      warnings.push({
+        code: 'strong-joint-fallback',
+        message:
+          strongFallbackJoints === 1
+            ? 'One joint was too small for a strong hinge and uses a rounded groove instead.'
+            : `${strongFallbackJoints} joints were too small for strong hinges and use rounded grooves instead.`,
+      });
+    }
+    // Reducing a strong joint's travel is a legitimate trade (the alternative is
+    // a cut that does not separate), but it must never be SILENT: the user asked
+    // for a bend angle and got less. One aggregated line, like the fallbacks.
+    if (strongTravelClampedJoints > 0) {
+      const rounded = Math.round(strongMinTravelDeg);
+      warnings.push({
+        code: 'strong-travel-reduced',
+        message:
+          strongTravelClampedJoints === 1
+            ? `One joint bends about ${rounded}° instead of ${settings.bendAngleDeg}° so its cut still separates cleanly.`
+            : `${strongTravelClampedJoints} joints bend about ${rounded}° instead of ${settings.bendAngleDeg}° so their cuts still separate cleanly.`,
       });
     }
     if (base.repaired) {
@@ -1002,6 +1099,1210 @@ function buildRoundedCutter(
   );
   cutter.delete();
   return oriented;
+}
+
+// --- Strong ("strong joints") segments --------------------------------------
+
+// Sampled radii used by the reach probes and the dense-station clamp.
+const STRONG_REACH_SAMPLES = 48;
+// Number of travel steps the dense-station clamp walks down before giving up
+// on the strong joint and handing it to the rounded cutter.
+const STRONG_CLAMP_STEPS = 8;
+// Half-thickness of the two seed slabs the tapered throat slot is hulled from.
+const STRONG_SLOT_SEED_MM = 0.05;
+// How far past the head segment's tail face the slot's outer seed sits. The
+// headward end sits on the PIVOT plane (s = 0) — never past it, or it would
+// notch the cavity's nose wall and kill the push-in stop.
+const STRONG_SLOT_OUTSET_MM = 0.5;
+// Mirror of the plan's OVERLAP_MARGIN_MM — the clear space two adjacent joints'
+// solids must keep between them (the plan cannot be a build dependency).
+const STRONG_OVERLAP_MARGIN_MM = 0.5;
+// The seam band's reach is only measured over the OUTER part of the section
+// (from this fraction of the widest local extent out to it) — that is where two
+// neighbouring bands could jointly shave a feature.
+const STRONG_BAND_REACH_INNER_FRACTION = 0.6;
+// Adaptive seam-profile sampling: the radial probe used to estimate the local
+// angular rate, the floor on a radial step, and the hard trip count.
+const STRONG_SEAM_PROBE_MM = 0.05;
+const STRONG_SEAM_MIN_STEP_MM = 0.05;
+const STRONG_SEAM_MAX_STEPS = 400;
+// Absolute ceiling on that walk. Past it the seam is not sampled at all and the
+// joint takes the rounded fallback — a wedge this large belongs to a body no
+// strong joint was scaled for.
+const STRONG_SEAM_MAX_STEPS_HARD = 1200;
+// Bisection depth of the rise-slope solve. (The gap between the two seam faces
+// is MEASURED at the same angle-bounded radii the cutter polygon is built from
+// — see strongSeamCurves — so the solve sees the geometry that actually ships.)
+const STRONG_SLOPE_STEPS = 14;
+// A tail-face point this close to the axis carries no material worth speaking
+// of (the revolve of a sub-millimetre radius), so it is not counted when the
+// wedge's reach into a neighbouring joint is measured.
+const STRONG_REACH_RHO_GATE_MM = 0.5;
+
+// --- The VISIBLE gap -------------------------------------------------------
+//
+// This style's whole point is that you SEE the joint. Keeping the running
+// clearance is not enough for that: the clearance is a NORMAL separation, and
+// the seam faces are steeply inclined cones, so the axial void a printed part
+// actually reads is a different (much smaller) number. Left to the clearance
+// fit alone the seam collapses to a hairline — measured 0.5mm on the standard
+// spindle, narrower than the classic and rounded styles on the same settings
+// and a fifth of the reference toy's.
+//
+// Reference grounding (tmp/axo-dissection.md §5.3, §11): adjacent segment skins
+// stand 2.21–2.27mm apart printed, on a body ~26mm across at those joints, at
+// ±12° of yaw travel. The physical maximum a revolved wedge can open at
+// cylindrical radius `rho` is `rho·Δθ` (flat faces, no ramp) = 3.46mm there, so
+// the reference spends this share of the available angle on the visible gap and
+// the rest on contouring. Targeting the same share makes the gap scale with the
+// local cross-section AND grow with the bend angle, since Δθ is
+// `bend + overlap + a clearance term`.
+const STRONG_VISIBLE_GAP_SHARE = 0.65;
+// Where the gap is judged: just inside the narrowest local skin radius, i.e.
+// inside the silhouette all the way round — where the eye reads the seam, and
+// where the build suite's probe measures it.
+const STRONG_VISIBLE_PROBE_FRACTION = 0.85;
+// Floor and ceiling on the target. The floor stops a small joint reading as a
+// hairline; the ceiling stops a fat body spending its whole segment pitch on
+// air.
+const STRONG_VISIBLE_GAP_MIN_MM = 0.9;
+const STRONG_VISIBLE_GAP_MAX_MM = 3.5;
+// The target never asks for more than this share of the physical maximum, so
+// the flattest seam the profile allows (slope 0) always clears it and the
+// bisection cannot chase an unreachable number.
+const STRONG_VISIBLE_HEADROOM = 0.85;
+// Bisection depths for the visible-gap slope fit and for the radius-at-rho
+// solve it is measured through.
+const STRONG_VISIBLE_SLOPE_STEPS = 16;
+const STRONG_VISIBLE_RADIUS_STEPS = 28;
+// Opening the seam costs AXIAL room, and a dense or pinned cut may have none.
+// The gap is cosmetic and the travel is not, so the target is walked down these
+// scales first — all the way back to 0, the narrow clearance-only seam — and
+// only then is the travel touched.
+const STRONG_VISIBLE_SCALES = [1, 0.6, 0.3, 0];
+// Passes of the seam's outer-radius fixed point (see `settleOuterRadius`).
+const STRONG_OUTER_PASSES = 6;
+// Slack on top of the running clearance between a joint's bar root and the gem
+// of the joint behind it, so the pair keeps its preset with room for the
+// spheres' faceting and for a spine that curves between the two pivots.
+const STRONG_BAR_CLEAR_MM = 0.3;
+
+/**
+ * The strong seam: a revolved wedge between two profile curves about the joint
+ * centre whose PER-RADIUS angular gap is ≥ bend + 3° everywhere (law 1), so the
+ * seam never limits the swing at any body width — no millimetre face gap is
+ * involved and `FLEXI_MAX_FACE_GAP_MM` never clips it. (What DOES set the first
+ * contact is the bar in its slot and the ball in its pocket: measured
+ * bend + 2.6° … + 5°.) The ramp slope is then eased back until the seam reads
+ * as an open gap at the skin — see the visible-gap constants above.
+ */
+type StrongSeamProfile = {
+  /** Head segment's tail face on the axis, at s = −faceOffset. */
+  faceOffset: number;
+  /** Radius where the head face leaves the flat land and starts to ramp. */
+  r1: number;
+  /** Outer radius (past the skin along the wedge's exit direction). */
+  r3: number;
+  /** Travel + seam overlap, radians. */
+  gap: number;
+  /** Rise slope dθ/dR of the ramp branch, rad/mm. */
+  slope: number;
+  clearance: number;
+  /** Ceiling on the head face angle (π/2 + gap/2). */
+  thetaCap: number;
+  /** Head face angle at r1 (the acos branch's end). */
+  headAtR1: number;
+  /** How deep the bar buries itself in the tail segment (s, negative). */
+  bladeRoot: number;
+};
+
+// Head face angle at radius R: the flat land plane s = −faceOffset near the
+// axis (so the seam can never cut into the socket), then a ramp toward the cut
+// plane so the visible band is centred on the station at the skin.
+//
+// The ramp is taken as a MAX against the plane, never a plain replacement. A
+// ramp gentler than the plane's own rise (which happens on a fat body, where r2
+// is far out) would let the head face dip TAILWARD of the land, wrapping head
+// material around the bar beyond the throat slot's reach — the bar then fuses to
+// the head segment and the cut silently fails to sever. Clamping to the plane
+// also keeps the face's tail-most depth exactly faceOffset, which is what the
+// slot is sized to clear. On the plane branch the normal gap between the two
+// faces works out to exactly rho·gap + clearance, so this never tightens travel.
+function strongHeadAngle(seam: StrongSeamProfile, radius: number): number {
+  const plane = Math.acos(
+    Math.min(1, seam.faceOffset / Math.max(radius, 1e-9)),
+  );
+  if (radius <= seam.r1) {
+    return plane;
+  }
+  const ramp = Math.min(
+    seam.thetaCap,
+    seam.headAtR1 + seam.slope * (radius - seam.r1),
+  );
+  return Math.max(plane, ramp);
+}
+
+// Angular gap between the two faces at radius R: the travel + seam overlap,
+// plus a term worth a full clearance of ARC at the head face's own cylindrical
+// radius, so the two faces are never closer than the clearance anywhere they
+// actually face each other. Extra angle only widens the gap, so travel (which
+// needs gap ≥ bend, not = bend) is unaffected.
+function strongGapAngle(seam: StrongSeamProfile, radius: number): number {
+  const head = strongHeadAngle(seam, radius);
+  const rho = Math.max(STRONG_SEAM_EPS_MILLIMETRES, radius * Math.sin(head));
+  return (
+    seam.gap + Math.min(STRONG_SEAM_EXTRA_MAX_RADIANS, seam.clearance / rho)
+  );
+}
+
+function strongTailAngle(seam: StrongSeamProfile, radius: number): number {
+  return Math.max(
+    0,
+    strongHeadAngle(seam, radius) - strongGapAngle(seam, radius),
+  );
+}
+
+// Axial reach of the seam BAND on each side of the cut plane, over the OUTER
+// radii only (cylindrical radius in [rhoLo, rhoHi]). That is the reach two
+// neighbouring joints could jointly use to shave a wide feature between them —
+// exactly what the rounded family's capRad clamp bounds. The wedge's deep
+// near-axis reach is not measured here: it is the land + anchor, which the
+// asymmetric footprint check budgets separately.
+function strongSeamBandReach(
+  seam: StrongSeamProfile,
+  rhoLo: number,
+  rhoHi: number,
+): { head: number; tail: number } {
+  let head = 0;
+  let tail = 0;
+  for (let i = 0; i <= STRONG_REACH_SAMPLES; i += 1) {
+    const radius =
+      seam.faceOffset +
+      ((seam.r3 - seam.faceOffset) * i) / STRONG_REACH_SAMPLES;
+    const thetaHead = strongHeadAngle(seam, radius);
+    const rhoHead = radius * Math.sin(thetaHead);
+    if (rhoHead >= rhoLo && rhoHead <= rhoHi) {
+      head = Math.max(head, -radius * Math.cos(thetaHead));
+    }
+    const thetaTail = strongTailAngle(seam, radius);
+    const rhoTail = radius * Math.sin(thetaTail);
+    if (rhoTail >= rhoLo && rhoTail <= rhoHi) {
+      tail = Math.max(tail, radius * Math.cos(thetaTail));
+    }
+  }
+  return { head, tail };
+}
+
+// The two seam faces sampled as (ρ, s) polylines, with each vertex flagged
+// `live` when the two segments actually face each other there. Inside the
+// slot's own footprint they do not: near the axis the head face IS the slot's
+// interior, and what the tail side sees there is the slot wall (a separate,
+// already-budgeted clearance), not the head face.
+type StrongSeamCurves = {
+  head: { rho: number; s: number; live: boolean }[];
+  tail: { rho: number; s: number; live: boolean }[];
+};
+
+function strongSeamCurves(
+  seam: StrongSeamProfile,
+  geometry: StrongJointGeometry,
+  rMax: number,
+): StrongSeamCurves | null {
+  // Sample at EXACTLY the radii the cutter polygon is built from (angle-bounded
+  // by CUTTER_ARC_STEP_DEG), so what is measured here is the gap of the solid
+  // that actually gets built.
+  //
+  // Sampling uniformly in radius instead — which is what shipped — silently
+  // fails whenever the ramp is steep relative to the span being sampled. The
+  // ramp climbs the whole way from headAtR1 to thetaCap inside r2 − r1 (0.75 mm
+  // when the body's own min extent is small next to the joint), while the outer
+  // sampling span runs out to ~1.15·maxExtent. On an eccentric body those are
+  // wildly different scales: at r = 10.17 on a bulged spindle (min extent 13.2,
+  // max extent 34.2) a 64-step uniform walk lands ~0.4 mm apart and puts barely
+  // one vertex on a 0.75 mm ramp. The chords then bear no relation to the real
+  // faces and the measured gap came back 0.730 mm where the built seam is
+  // 0.262 mm — so fitSlope kept the full slope ceiling and the printed joint
+  // shipped at 48 % of the requested clearance with no warning.
+  //
+  // At the ceiling the two faces are nearly concentric arcs (R·dθ/dR ≈ 26), so
+  // their separation is ≈ Δθ / slope and barely moves with the clearance preset
+  // — which is why raising the preset did not help either.
+  const radii = strongSeamRadii(seam, Math.max(seam.r1 + 0.5, rMax));
+  if (!radii) return null;
+  const gateBase = Math.min(geometry.throatBaseHalfMm, geometry.slotBaseHalfMm);
+  const sample = (
+    angleAt: (s: StrongSeamProfile, radius: number) => number,
+  ): { rho: number; s: number; live: boolean }[] =>
+    radii.map((radius) => {
+      const theta = angleAt(seam, radius);
+      const rho = radius * Math.sin(theta);
+      const s = -radius * Math.cos(theta);
+      const gate = gateBase + geometry.throatTaper * Math.max(0, -s);
+      return { rho, s, live: rho >= gate };
+    });
+  return { head: sample(strongHeadAngle), tail: sample(strongTailAngle) };
+}
+
+function pointSegmentDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = dx * dx + dy * dy;
+  let t = len > 1e-18 ? ((px - ax) * dx + (py - ay) * dy) / len : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// Smallest surface-to-surface separation between the two seam faces, over the
+// radii where both actually carry material.
+//
+// This REPLACES the shipped single-radius `slopeCap`. That cap set the law-3
+// normal gap to exactly the clearance at r1 and assumed the faces stayed
+// parallel — but the head face has a slope KINK at r1 (plane branch → ramp) and
+// Δθ(R) shrinks with radius, so the true minimum lands just OUTSIDE r1 and dips
+// below the requested preset (measured: 0.432 mm against a 0.55 mm preset).
+function strongSeamGap(
+  seam: StrongSeamProfile,
+  geometry: StrongJointGeometry,
+  rMax: number,
+): number {
+  const curves = strongSeamCurves(seam, geometry, rMax);
+  // Unsamplable seam ⇒ report zero clearance, so the slope fit backs off
+  // instead of trusting a cutter it could not measure.
+  if (!curves) return 0;
+  const { head, tail } = curves;
+  let best = Infinity;
+  const scan = (
+    from: { rho: number; s: number; live: boolean }[],
+    to: { rho: number; s: number; live: boolean }[],
+  ): void => {
+    for (const p of from) {
+      if (!p.live) continue;
+      for (let i = 1; i < to.length; i += 1) {
+        const a = to[i - 1];
+        const b = to[i];
+        if (!a.live || !b.live) continue;
+        const d = pointSegmentDistance(p.rho, p.s, a.rho, a.s, b.rho, b.s);
+        if (d < best) best = d;
+      }
+    }
+  };
+  scan(head, tail);
+  scan(tail, head);
+  return best;
+}
+
+// Radius R at which a seam face reaches cylindrical radius `rho`. Both faces
+// are monotone in rho — θ only ever climbs with R, and never past `thetaCap`,
+// whose sine is still ≈ 0.99 — so a bisection is exact. The faces are treated
+// as mathematical curves here (extended past r3 if need be); whether the built
+// wedge actually reaches the skin is the separate severance question the
+// caller checks.
+function strongFaceRadiusAt(
+  seam: StrongSeamProfile,
+  rho: number,
+  angleAt: (s: StrongSeamProfile, radius: number) => number,
+): number {
+  const rhoAt = (radius: number): number =>
+    radius * Math.sin(angleAt(seam, radius));
+  let lo = seam.faceOffset;
+  let hi = Math.max(lo + 1, 2 * (rho + seam.faceOffset));
+  for (let i = 0; i < 8 && rhoAt(hi) < rho; i += 1) hi *= 2;
+  for (let i = 0; i < STRONG_VISIBLE_RADIUS_STEPS; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (rhoAt(mid) < rho) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+// The AXIAL void between the two seam faces at cylindrical radius `rho` — what
+// a printed part reads as "the gap between the segments", and what the build
+// suite's visible-gap probe measures. Monotone decreasing in the ramp slope
+// (steeper faces trade axial void for normal clearance), which is what licenses
+// the bisection in `solveStrongSeam`.
+function strongVisibleGap(seam: StrongSeamProfile, rho: number): number {
+  const depth = (
+    angleAt: (s: StrongSeamProfile, radius: number) => number,
+  ): number => {
+    const radius = strongFaceRadiusAt(seam, rho, angleAt);
+    return -radius * Math.cos(angleAt(seam, radius));
+  };
+  return depth(strongHeadAngle) - depth(strongTailAngle);
+}
+
+// How wide the seam should READ at the probe radius (see the constants above).
+// `scale` is the caller's degradation knob: 1 asks for the full reference-share
+// gap, 0 asks for nothing and leaves the clearance-only seam alone.
+function strongVisibleTarget(
+  seam: StrongSeamProfile,
+  rho: number,
+  scale: number,
+): number {
+  if (!(rho > 0) || !(scale > 0)) return 0;
+  // The head face's own cylindrical radius at the probe IS rho, so this is
+  // exactly `strongGapAngle` there — without needing to solve for the radius.
+  const delta =
+    seam.gap +
+    Math.min(
+      STRONG_SEAM_EXTRA_MAX_RADIANS,
+      seam.clearance / Math.max(STRONG_SEAM_EPS_MILLIMETRES, rho),
+    );
+  const full = rho * delta;
+  const wanted = Math.min(
+    STRONG_VISIBLE_GAP_MAX_MM,
+    Math.max(STRONG_VISIBLE_GAP_MIN_MM, STRONG_VISIBLE_GAP_SHARE * full),
+  );
+  return scale * Math.min(wanted, STRONG_VISIBLE_HEADROOM * full);
+}
+
+// Deepest the tail face reaches on the tail side, counting only radii where it
+// carries real cylindrical radius. The wedge's near-axis stretch sits at ρ = 0
+// (θ_tail is clamped at 0 there) and removes nothing when revolved, so it must
+// not be allowed to dominate the neighbour clamp.
+function strongTailReach(
+  seam: StrongSeamProfile,
+  rMax: number,
+  rhoGate: number,
+): number {
+  let reach = 0;
+  for (let i = 0; i <= STRONG_REACH_SAMPLES; i += 1) {
+    const radius =
+      seam.faceOffset + ((rMax - seam.faceOffset) * i) / STRONG_REACH_SAMPLES;
+    const theta = strongTailAngle(seam, radius);
+    if (radius * Math.sin(theta) < rhoGate) continue;
+    const depth = radius * Math.cos(theta);
+    if (depth > reach) reach = depth;
+  }
+  return reach;
+}
+
+// Solve the seam profile for one joint. The outer radius uses the SAME 4-pass
+// fixed point as solveRoundedWedge: a body flaring steeply next to the cut can
+// otherwise outgrow a one-pass band, the cut fails to sever and the build has
+// to report 'uncut'.
+function solveStrongSeam(
+  geometry: StrongJointGeometry,
+  joint: FlexiJointPlan,
+  clearance: number,
+  bendAngleDeg: number,
+  measure: FlexiSectionSampler,
+  planeExtents: { minMm: number; maxMm: number },
+  maxTailReachMm: number,
+  visibleScale: number,
+): StrongSeamProfile {
+  const gap = ((bendAngleDeg + STRONG_SEAM_OVERLAP_DEGREES) * Math.PI) / 180;
+  const faceOffset = geometry.faceOffsetMm;
+  const r1 = faceOffset + STRONG_SEAM_INNER_PAD_MILLIMETRES;
+  const thetaCap = Math.PI / 2 + gap / 2;
+  const headAtR1 = Math.acos(Math.min(1, faceOffset / r1));
+  const seam: StrongSeamProfile = {
+    faceOffset,
+    r1,
+    r3: r1 + 2,
+    gap,
+    slope: 0,
+    clearance,
+    thetaCap,
+    headAtR1,
+    bladeRoot: -faceOffset,
+  };
+
+  // Ceiling 1 — the LAND PLATE must survive. Head material inside R ≤ r1 is
+  // exactly {s ≥ −faceOffset}; past r1 the ramp lifts the face headward and eats
+  // into the plate from the outside. The plate is only attached to the head
+  // segment if it reaches radially PAST the cavity, so require head material at
+  // the cavity's tail plane out to the cavity's own lateral extent plus a wall.
+  // A ramp steeper than this pinches the plate off between the cavity, the slot
+  // and the seam, and the orphan survives decompose() as a stray sliver body
+  // (measured: 4 extra bodies at jointScale 1.4 + bend 25° on a fat spindle).
+  //
+  // acos(cavityAx/R) is concave, and the ramp is a straight line starting BELOW
+  // it at r1, so pinning the line at R_plate keeps it below over the whole span.
+  //
+  // Read the pocket's OWN lateral reach at that plane rather than assuming it
+  // is a slab. The flat-rear gem's pocket flared to `r + c` sideways — well past
+  // the seam's inner radius — which is what let the ramp isolate a sliver. The
+  // concentric ball pocket closes to a point at its tail plane and sits entirely
+  // inside `faceOffset`, so nothing the ramp does can reach it and this ceiling
+  // correctly self-disables. Hard-coding the old slab reach here instead throttled
+  // the ramp so hard that every short-fat build at jointScale 1.4 came back
+  // 'rounded-uncut' while classic, rounded and shell all severed.
+  const plateRho =
+    strongCavityHalfWidthAt(geometry, geometry.cavityAxMm) +
+    FLEXI_MIN_SOCKET_WALL_MM;
+  const plateR = Math.hypot(geometry.cavityAxMm, plateRho);
+  const plateSlope =
+    plateR > r1 + 1e-6
+      ? Math.max(0, Math.atan2(plateRho, geometry.cavityAxMm) - headAtR1) /
+        (plateR - r1)
+      : Infinity;
+  // Ceiling 2 — the rise only has to reach the cut-plane band by the groove
+  // floor radius; climbing faster buys nothing and only steepens the seam.
+  const r2 = Math.max(r1 + 0.75, GROOVE_FLOOR_FACTOR * planeExtents.minMm);
+  const rampSlope = (thetaCap - headAtR1) / Math.max(0.01, r2 - r1);
+  const slopeCeiling = Math.min(plateSlope, rampSlope);
+
+  // Ceiling 3 — the printed gap. Solved by MEASURING the face-to-face distance
+  // (see strongSeamGap) and bisecting the slope down until it clears the
+  // requested clearance, rather than trusting a closed form at one radius.
+  const gapProbeRadius = Math.max(
+    r1 + 2,
+    GROOVE_OUT_FACTOR * planeExtents.maxMm + joint.faceGapMm,
+  );
+  const fitSlope = (probeRadius: number): number => {
+    seam.slope = slopeCeiling;
+    if (strongSeamGap(seam, geometry, probeRadius) >= clearance) {
+      return slopeCeiling;
+    }
+    let lo = 0;
+    let hi = slopeCeiling;
+    for (let i = 0; i < STRONG_SLOPE_STEPS; i += 1) {
+      const mid = (lo + hi) / 2;
+      seam.slope = mid;
+      if (strongSeamGap(seam, geometry, probeRadius) >= clearance) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  };
+  seam.slope = fitSlope(gapProbeRadius);
+
+  // Ceiling 4 — the VISIBLE gap. `fitSlope` returns the STEEPEST slope the
+  // running clearance allows, and at that slope the two faces are near
+  // concentric arcs: their NORMAL separation is the clearance, but the AXIAL
+  // void the eye reads is only about `clearance / cos θ`. Ease the slope back
+  // until the seam reads as the open gap this style promises.
+  //
+  // Lowering the slope only ever WIDENS both separations, so the clearance
+  // floor, law 1 (travel needs Δθ ≥ bend, and Δθ is untouched here) and the
+  // containment proof are all monotone-safe. What it costs is axial room — a
+  // flatter head face stays near the land plane further out, so the band
+  // reaches deeper on the tail side — which is why the caller walks
+  // `visibleScale` down before it ever touches the travel.
+  const rhoVisible = STRONG_VISIBLE_PROBE_FRACTION * planeExtents.minMm;
+  const openSeam = (): void => {
+    const target = strongVisibleTarget(seam, rhoVisible, visibleScale);
+    if (!(target > 0) || strongVisibleGap(seam, rhoVisible) >= target) return;
+    let lo = 0;
+    let hi = seam.slope;
+    for (let i = 0; i < STRONG_VISIBLE_SLOPE_STEPS; i += 1) {
+      const mid = (lo + hi) / 2;
+      seam.slope = mid;
+      if (strongVisibleGap(seam, rhoVisible) >= target) lo = mid;
+      else hi = mid;
+    }
+    seam.slope = lo;
+  };
+  openSeam();
+
+  const outerBase = GROOVE_OUT_FACTOR * planeExtents.maxMm + joint.faceGapMm;
+  // A shallower face exits the skin at a shallower angle, so the outer radius
+  // has to be settled AFTER every slope decision or the wedge stops short of
+  // the skin and the cut silently fails to sever.
+  // The iteration takes the RUNNING MAXIMUM rather than the last value. The
+  // band half-width it samples the body over is `r3·cos θ_tail`, so a shallow
+  // exit angle pulls in a much wider slice of a tapering body, which demands a
+  // bigger r3, which steepens the exit, which shrinks the slice again: plain
+  // substitution oscillates and lands wherever pass 4 happens to leave it
+  // (measured on the standard spindle at the opened seam: 12.88 against the
+  // 14.6 the cut actually needed, so the wedge sealed inside the body and the
+  // joint fell back). Growing only is safe — past the skin the wedge removes
+  // nothing — and the neighbour clamp below is what bounds it from above.
+  const settleOuterRadius = (): void => {
+    seam.r3 = Math.max(r1 + 2, outerBase);
+    for (let pass = 0; pass < STRONG_OUTER_PASSES; pass += 1) {
+      const bandHalfWidth =
+        seam.r3 * Math.cos(strongTailAngle(seam, seam.r3)) + 2;
+      const bandExtents = measure(bandHalfWidth);
+      const exit = Math.max(0.05, strongTailAngle(seam, seam.r3));
+      const next = Math.max(
+        r1 + 2,
+        GROOVE_OUT_FACTOR * Math.max(planeExtents.maxMm, bandExtents.maxMm) +
+          joint.faceGapMm,
+        (1.05 * bandExtents.maxMm) / Math.sin(exit),
+      );
+      if (next <= seam.r3 + 0.25) break;
+      seam.r3 = next;
+    }
+  };
+  settleOuterRadius();
+  // Re-fit the slope against the settled outer radius (the gap's tight spot can
+  // sit outside the first probe radius on a body that flares next to the cut).
+  // Only ever a reduction, so the visible target stays met. `fitSlope` leaves
+  // `seam.slope` on its last bisection probe, so the pre-refit value has to be
+  // captured before it is called.
+  const opened = seam.slope;
+  const refit = Math.min(opened, fitSlope(seam.r3));
+  seam.slope = refit;
+  if (refit < opened) settleOuterRadius();
+
+  // Never let the wedge reach into a neighbouring joint's cavity. Measure the
+  // tail face's ACTUAL axial reach rather than reading cos(θ_tail) at r3 through
+  // a 0.2 floor: on the near-90° plane branch that floor caps r3 at 5× the
+  // neighbour budget, the wedge lands short of a flattened body's widest radius
+  // and the cut silently fails to sever ('rounded-uncut' on inputs the other
+  // three styles all build).
+  if (Number.isFinite(maxTailReachMm)) {
+    const floorR3 = Math.max(r1 + 2, faceOffset + 0.5);
+    if (
+      strongTailReach(seam, seam.r3, STRONG_REACH_RHO_GATE_MM) > maxTailReachMm
+    ) {
+      let lo = floorR3;
+      let hi = Math.max(floorR3, seam.r3);
+      for (let i = 0; i < 12; i += 1) {
+        const mid = (lo + hi) / 2;
+        if (
+          strongTailReach(seam, mid, STRONG_REACH_RHO_GATE_MM) > maxTailReachMm
+        ) {
+          hi = mid;
+        } else {
+          lo = mid;
+        }
+      }
+      seam.r3 = Math.max(floorR3, lo);
+    }
+  }
+
+  // How deep the bar must go to fuse to the tail segment: the tail face at the
+  // bar's own cylindrical radius, plus the anchor. Four iterations, converging
+  // monotonically from the land plane outward; the anchor covers the residual,
+  // and probe S6 verifies the bar actually landed on the tail side.
+  const rhoBlade = Math.hypot(geometry.bladeHalfMm, geometry.bladeHeightHalfMm);
+  let s = -faceOffset;
+  for (let i = 0; i < 4; i += 1) {
+    const radius = Math.hypot(rhoBlade, s);
+    s = Math.min(
+      -faceOffset,
+      -radius * Math.cos(strongTailAngle(seam, radius)),
+    );
+  }
+  seam.bladeRoot = s - strongAnchorMm(joint.ballRadiusMm);
+  return seam;
+}
+
+// Radii the two seam faces are sampled at, chosen so NO chord ever spans more
+// than CUTTER_ARC_STEP_DEG of either face.
+//
+// The inner branch is parameterised by ANGLE (its dθ/dR is unbounded at the
+// apex). The outer branch steps by radius, but each step is sized from the
+// LOCAL angular rate of both faces: a uniform radial sampling is not enough,
+// because the ramp can climb 30°+ per millimetre just past r1 and then sit flat
+// at its cap. A chord across that knee falls INSIDE the true face, and on a
+// slim body it can miss the skin altogether — the cut then silently fails to
+// sever and the build has to report 'uncut'.
+//
+// The step budget is ADAPTIVE, and running out of it is a hard failure rather
+// than something to paper over. Every step is at least STRONG_SEAM_MIN_STEP_MM,
+// so `span / minStep` steps always suffice; a fixed 400 only covered a 20mm
+// span, and past that the walk stopped short and one long chord was pushed
+// straight to rOuter — a chord that can fall inside the true face and, on a
+// slim body, miss the skin entirely, which shows up as a silent
+// 'rounded-uncut'. Returning null instead routes the joint to the per-joint
+// rounded fallback (with its 'strong-joint-fallback' warning), and makes the
+// measured seam gap 0 so the slope fit backs off rather than trusting a
+// cutter it could not sample.
+function strongSeamRadii(
+  seam: StrongSeamProfile,
+  rOuter: number = seam.r3,
+): number[] | null {
+  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const radii: number[] = [];
+  const innerSteps = Math.max(2, Math.ceil(seam.headAtR1 / stepRad));
+  for (let i = 0; i <= innerSteps; i += 1) {
+    const theta = (seam.headAtR1 * i) / innerSteps;
+    radii.push(seam.faceOffset / Math.cos(theta));
+  }
+  radii[radii.length - 1] = seam.r1;
+
+  const budget = Math.min(
+    STRONG_SEAM_MAX_STEPS_HARD,
+    Math.max(
+      STRONG_SEAM_MAX_STEPS,
+      Math.ceil((rOuter - seam.r1) / STRONG_SEAM_MIN_STEP_MM) + 16,
+    ),
+  );
+  let radius = seam.r1;
+  let guard = 0;
+  for (; guard < budget && radius < rOuter - 1e-9; guard += 1) {
+    const probe = Math.min(rOuter, radius + STRONG_SEAM_PROBE_MM);
+    const span = probe - radius;
+    const rate =
+      span > 1e-9
+        ? Math.max(
+            Math.abs(
+              strongHeadAngle(seam, probe) - strongHeadAngle(seam, radius),
+            ),
+            Math.abs(
+              strongTailAngle(seam, probe) - strongTailAngle(seam, radius),
+            ),
+          ) / span
+        : 0;
+    const step =
+      rate > 1e-6
+        ? Math.max(STRONG_SEAM_MIN_STEP_MM, stepRad / rate)
+        : rOuter - radius;
+    radius = Math.min(rOuter, radius + Math.max(step, STRONG_SEAM_MIN_STEP_MM));
+    radii.push(radius);
+  }
+  if (radius < rOuter - 1e-9) return null;
+  if (radii[radii.length - 1] < rOuter) radii.push(rOuter);
+  return radii;
+}
+
+// Closed CCW profile polygon of the seam wedge, in (ρ, s).
+function strongSeamPolygon(seam: StrongSeamProfile): number[][] {
+  const stepRad = (CUTTER_ARC_STEP_DEG * Math.PI) / 180;
+  const point = (radius: number, theta: number): number[] => [
+    radius * Math.sin(theta),
+    -radius * Math.cos(theta),
+  ];
+  const radii = strongSeamRadii(seam);
+  if (!radii) return [];
+
+  const polygon: number[][] = [];
+  const push = (p: number[]): void => {
+    const last = polygon[polygon.length - 1];
+    if (
+      last &&
+      Math.abs(last[0] - p[0]) < 1e-9 &&
+      Math.abs(last[1] - p[1]) < 1e-9
+    ) {
+      return;
+    }
+    polygon.push(p);
+  };
+  for (const radius of radii) {
+    push(point(radius, strongHeadAngle(seam, radius)));
+  }
+  const thetaHeadOut = strongHeadAngle(seam, seam.r3);
+  const thetaTailOut = strongTailAngle(seam, seam.r3);
+  const arcSteps = Math.max(
+    1,
+    Math.ceil((thetaHeadOut - thetaTailOut) / stepRad),
+  );
+  for (let i = 1; i < arcSteps; i += 1) {
+    push(
+      point(
+        seam.r3,
+        thetaHeadOut + ((thetaTailOut - thetaHeadOut) * i) / arcSteps,
+      ),
+    );
+  }
+  for (let i = radii.length - 1; i >= 0; i -= 1) {
+    const radius = radii[i];
+    push(point(radius, strongTailAngle(seam, radius)));
+  }
+  // Drop a duplicated closing vertex (the apex is shared by both faces).
+  const first = polygon[0];
+  const last = polygon[polygon.length - 1];
+  if (
+    polygon.length > 2 &&
+    Math.abs(first[0] - last[0]) < 1e-9 &&
+    Math.abs(first[1] - last[1]) < 1e-9
+  ) {
+    polygon.pop();
+  }
+  for (const p of polygon) {
+    if (p[0] < 0) p[0] = 0;
+  }
+  fixWinding(polygon);
+  return polygon;
+}
+
+// Three-part cutter (native axis +Z = joint axis, +Y = frame e1, ±X = frame e2):
+// the revolved seam wedge, the concentric spherical pocket, and the tapered
+// throat slot through the land.
+function buildStrongCutter(
+  wasm: ManifoldToplevel,
+  joint: FlexiJointPlan,
+  geometry: StrongJointGeometry,
+  seam: StrongSeamProfile,
+): Manifold | null {
+  const { CrossSection, Manifold: ManifoldClass } = wasm;
+  const polygon = strongSeamPolygon(seam);
+  if (polygon.length < 3) return null;
+
+  const section = new CrossSection(polygon as [number, number][]);
+  const seamSolid = section.revolve(SHELL_REVOLVE_SEGMENTS);
+  section.delete();
+
+  // The pocket is a ball CONCENTRIC with the head, so a bend about the pivot
+  // slides the two surfaces over each other at a constant gap (law 2) and no
+  // swept-envelope budget is needed at all. It is inflated because manifold's
+  // geodesic sphere inscribes its facets and the pocket must be a superset.
+  const cavity = ManifoldClass.sphere(
+    geometry.cavityRadiusMm * STRONG_SPHERE_INFLATION,
+    STRONG_SPHERE_SEGMENTS,
+  );
+
+  // The slot runs from the PIVOT plane (not from just inside the cavity's tail
+  // wall) out past the head segment's tail face, and each seed is sized by the
+  // affine envelope AT ITS OWN DEPTH so the hull is exactly
+  // `base + taper·depth` everywhere.
+  //
+  // Anchoring it at the pivot is what makes the joint reach its full travel on
+  // an oblique bend: the pocket is sized for the swept HEAD and knows nothing
+  // about the bar, so wherever the bar leaves the pocket its own swept envelope
+  // has to be carved (measured on the earlier faceted pocket: up to 0.83 mm of
+  // interference at bend 25°, costing ~3.4° of travel at a 45° bend azimuth).
+  const slotOuterDepth = geometry.faceOffsetMm + STRONG_SLOT_OUTSET_MM;
+  const innerSeed = ManifoldClass.cube(
+    [
+      2 * geometry.throatBaseHalfMm,
+      2 * geometry.slotBaseHalfMm,
+      STRONG_SLOT_SEED_MM,
+    ],
+    true,
+  );
+  const innerAt = innerSeed.translate([0, 0, 0]);
+  innerSeed.delete();
+  const outerSeed = ManifoldClass.cube(
+    [
+      2 * (geometry.throatBaseHalfMm + geometry.throatTaper * slotOuterDepth),
+      2 * (geometry.slotBaseHalfMm + geometry.throatTaper * slotOuterDepth),
+      STRONG_SLOT_SEED_MM,
+    ],
+    true,
+  );
+  const outerAt = outerSeed.translate([0, 0, -slotOuterDepth]);
+  outerSeed.delete();
+  const slot = ManifoldClass.hull([innerAt, outerAt]);
+  innerAt.delete();
+  outerAt.delete();
+
+  const withCavity = seamSolid.add(cavity);
+  seamSolid.delete();
+  cavity.delete();
+  const cutter = withCavity.add(slot);
+  withCavity.delete();
+  slot.delete();
+  if (cutter.status() !== 'NoError' || cutter.isEmpty()) {
+    cutter.delete();
+    return null;
+  }
+  const oriented = cutter.transform(
+    orientationMatrix(joint.axis, joint.center),
+  );
+  cutter.delete();
+  return oriented;
+}
+
+// The male: a spherical bearing head at the pivot plus the rectangular bar that
+// crosses the visible gap into the tail segment. The head is left INSCRIBED in
+// its ideal ball (manifold's geodesic sphere puts its vertices on the sphere),
+// which only ever widens the running clearance — the conservative direction.
+function buildStrongMale(
+  wasm: ManifoldToplevel,
+  joint: FlexiJointPlan,
+  geometry: StrongJointGeometry,
+  seam: StrongSeamProfile,
+): Manifold | null {
+  const { Manifold: ManifoldClass } = wasm;
+  const gem = ManifoldClass.sphere(
+    geometry.headRadiusMm,
+    STRONG_SPHERE_SEGMENTS,
+  );
+
+  // The bar runs from just past the pivot (well inside the head, so the union is
+  // solid) out to its anchor in the tail segment.
+  const barHead = STRONG_GEM_UNION_OVERLAP_MILLIMETRES;
+  const barLength = barHead - seam.bladeRoot;
+  if (!(barLength > 0)) {
+    gem.delete();
+    return null;
+  }
+  const barBox = ManifoldClass.cube(
+    [2 * geometry.bladeHalfMm, 2 * geometry.bladeHeightHalfMm, barLength],
+    true,
+  );
+  const bar = barBox.translate([0, 0, (barHead + seam.bladeRoot) / 2]);
+  barBox.delete();
+  const male = gem.add(bar);
+  gem.delete();
+  bar.delete();
+  if (male.status() !== 'NoError' || male.isEmpty()) {
+    male.delete();
+    return null;
+  }
+  const oriented = male.transform(orientationMatrix(joint.axis, joint.center));
+  male.delete();
+  return oriented;
+}
+
+// Per-joint rounded fallback (§8): identical to the plain-rounded path in
+// buildRoundedSegments, including BOTH its dense-station travel clamp and its
+// 4-pass outer-radius fixed point. Always buildable because strong leaves
+// socketDepthMm and faceGapMm exactly as rounded needs them, and always has
+// room because minSegmentLengthFor('strong') is at least the rounded floor.
+//
+// The clamp is not optional here: the only thing that sends a joint down this
+// path is a station too dense for the strong solid, which is precisely the case
+// where two neighbouring bands would otherwise jointly shave a wide feature.
+function buildStrongRoundedFallback(
+  wasm: ManifoldToplevel,
+  joint: FlexiJointPlan,
+  clearance: number,
+  bendAngleDeg: number,
+  measure: FlexiSectionSampler,
+  planeExtents: { minMm: number; maxMm: number },
+  maxTailReach: number,
+  minNeighborDist: number,
+): Manifold | null {
+  let angles = roundedGapAngles(joint, clearance, bendAngleDeg);
+  if (!angles) return null;
+  if (Number.isFinite(minNeighborDist)) {
+    const outEstimate =
+      GROOVE_OUT_FACTOR * planeExtents.maxMm + joint.faceGapMm;
+    const halfWidthEstimate =
+      outEstimate * Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD) + 2;
+    const bandMax = Math.max(
+      planeExtents.maxMm,
+      measure(halfWidthEstimate).maxMm,
+    );
+    const budget = Math.max(0.05, (minNeighborDist - GAP_BAND_KEEP_MM) / 2);
+    const capDeg =
+      ((2 * Math.atan2(budget, bandMax) - SHELL_OVERLAP_RAD) * 180) / Math.PI;
+    if (capDeg < bendAngleDeg) {
+      const capped = roundedGapAngles(joint, clearance, Math.max(1, capDeg));
+      if (capped) angles = capped;
+    }
+  }
+  let wedge = solveRoundedWedge(angles, joint, clearance, {
+    floorMm: planeExtents.minMm,
+    outMm: planeExtents.maxMm,
+    maxTailReachMm: maxTailReach,
+  });
+  for (let pass = 0; pass < 4; pass += 1) {
+    const bandHalfWidth =
+      wedge.r3 *
+        Math.max(
+          Math.sin(angles.gapAngle / 2 + SHELL_OVERLAP_RAD),
+          Math.cos(wedge.thetaEnd),
+        ) +
+      2;
+    const bandExtents = measure(bandHalfWidth);
+    const next = solveRoundedWedge(angles, joint, clearance, {
+      floorMm: planeExtents.minMm,
+      outMm: Math.max(planeExtents.maxMm, bandExtents.maxMm),
+      maxTailReachMm: maxTailReach,
+    });
+    const settled = Math.abs(next.r3 - wedge.r3) < 0.25;
+    wedge = next;
+    if (settled) break;
+  }
+  return buildRoundedCutter(wasm, joint, clearance, angles, wedge);
+}
+
+// Subtract one strong cutter per live joint, then add every joint's male solid
+// back in ONE whole-body union, decompose, and group components into segment
+// intervals exactly as the rounded family does. The male fuses to its TAIL
+// segment (its bar is anchored there), so bodies == segments still holds.
+function buildStrongSegments(
+  wasm: ManifoldToplevel,
+  keep: (manifold: Manifold) => Manifold,
+  body: Manifold,
+  cutJoints: FlexiJointPlan[],
+  meshInput: FlexiMeshInput,
+  clearance: number,
+  bendAngleDeg: number,
+  notes: {
+    strongFallbackJoints: number;
+    travelClampedJoints: number;
+    minTravelDeg: number;
+  },
+): Manifold[][] | 'uncut' | null {
+  let cut = body;
+  const males: Manifold[] = [];
+  const abandon = (): null => {
+    if (cut !== body) cut.delete();
+    for (const male of males) male.delete();
+    return null;
+  };
+
+  for (let index = 0; index < cutJoints.length; index += 1) {
+    const joint = cutJoints[index];
+    // One profile pass per joint; every later query is a bin scan.
+    const measure = crossSectionExtentsSampler(
+      meshInput.positions,
+      joint.center,
+      joint.axis,
+    );
+    const planeExtents = measure();
+    if (!(planeExtents.maxMm > 0)) {
+      return abandon();
+    }
+
+    let maxTailReach = Infinity;
+    let minNeighborDist = Infinity;
+    for (const other of [cutJoints[index - 1], cutJoints[index + 1]]) {
+      if (!other) continue;
+      const dx = other.center[0] - joint.center[0];
+      const dy = other.center[1] - joint.center[1];
+      const dz = other.center[2] - joint.center[2];
+      const distance = Math.hypot(dx, dy, dz);
+      // What the neighbour needs kept clear is its own AXIAL footprint (the
+      // closed cavity plus a wall), not the rounded family's cup RADIUS: the
+      // strong cavity is wide (r + c) but short (≈0.6·r), so borrowing the
+      // lateral figure over-reserves by several millimetres and stops the wedge
+      // short of a fat body's skin.
+      const otherGeometry = solveStrongJointGeometry(
+        other.ballRadiusMm,
+        clearance,
+        bendAngleDeg,
+      );
+      const otherReach = otherGeometry
+        ? otherGeometry.cavityAxMm + FLEXI_MIN_SOCKET_WALL_MM
+        : other.ballRadiusMm + clearance + FLEXI_MIN_SOCKET_WALL_MM;
+      maxTailReach = Math.min(maxTailReach, distance - otherReach - 1);
+      minNeighborDist = Math.min(minNeighborDist, distance);
+    }
+
+    // How deep this joint's BAR may root before it runs into the previous
+    // joint's gem. The bar anchors in the tail segment at the seam's own tail
+    // face, so it gets deeper as the seam opens — and the gem of the joint
+    // behind sits on ITS pivot, a whole ball radius proud on this side, owned
+    // by the segment BEFORE this one. Two adjacent mechanisms therefore have to
+    // share the pitch, which nothing else budgets: the solid-footprint check
+    // below reserves `faceOffset + anchor` tailward, but the real root is the
+    // tail FACE at the bar's radius, which the opened seam pushes well past
+    // that. Measured without this: bar root 14.9mm back against a 22.2mm pitch
+    // with a 7.23mm gem behind it, leaving 0.07mm where the preset asked 0.40.
+    const behind = cutJoints[index - 1];
+    const barBudget = behind
+      ? Math.hypot(
+          behind.center[0] - joint.center[0],
+          behind.center[1] - joint.center[1],
+          behind.center[2] - joint.center[2],
+        ) -
+        behind.ballRadiusMm -
+        clearance -
+        STRONG_BAR_CLEAR_MM
+      : Infinity;
+
+    // Dense-station clamp: dragged cuts can sit tighter than any plan floor, so
+    // walk the travel down until this joint fits its neighbours. Two separate
+    // budgets, because the strong joint's footprint is ASYMMETRIC:
+    //  · the SOLID footprint (pocket + wall headward, land + bar anchor
+    //    tailward) — the same expression minSegmentLengthFor('strong') budgets,
+    //    checked against the WHOLE neighbour distance. The pocket is a
+    //    concentric ball sized by the radius and clearance ALONE, so this
+    //    budget does not move with the bend angle: it is a straight
+    //    fits/does-not-fit decision, hoisted out of the travel walk below
+    //    rather than re-tested at every step it cannot change.
+    //  · the seam BAND at the widest feature is checked against HALF the pitch
+    //    minus a keep slab, mirroring the rounded family's capRad, because both
+    //    neighbours claim their own half there. This one DOES move with the
+    //    bend, and is what the walk exists for (together with the predictive
+    //    severance check).
+    // The VISIBLE-gap target is walked down INSIDE each travel step, because a
+    // narrower seam is a cosmetic loss and a shorter swing is a functional one:
+    // a joint whose band budget cannot afford the open gap degrades to the
+    // narrow clearance-only seam at full travel rather than the other way
+    // round, and only falls back to the rounded cutter if even that will not
+    // fit. If even 1° does not fit, hand the joint to the rounded cutter (whose
+    // own capRad clamp then takes over).
+    const footprintGeometry = solveStrongJointGeometry(
+      joint.ballRadiusMm,
+      clearance,
+      bendAngleDeg,
+    );
+    const solidFootprint = footprintGeometry
+      ? footprintGeometry.cavityAxMm +
+        FLEXI_MIN_SOCKET_WALL_MM +
+        footprintGeometry.faceOffsetMm +
+        strongAnchorMm(joint.ballRadiusMm) +
+        STRONG_OVERLAP_MARGIN_MM
+      : Infinity;
+    const footprintFits =
+      footprintGeometry !== null &&
+      (!Number.isFinite(minNeighborDist) || solidFootprint <= minNeighborDist);
+    const bandBudget = Number.isFinite(minNeighborDist)
+      ? Math.max(0.05, (minNeighborDist - GAP_BAND_KEEP_MM) / 2)
+      : Infinity;
+    const bandMax = Number.isFinite(bandBudget)
+      ? Math.max(planeExtents.maxMm, measure(bandBudget + 2).maxMm)
+      : planeExtents.maxMm;
+
+    let solved: {
+      geometry: StrongJointGeometry;
+      seam: StrongSeamProfile;
+      travelDeg: number;
+    } | null = null;
+    for (let step = 0; footprintFits && step < STRONG_CLAMP_STEPS; step += 1) {
+      const travelDeg =
+        bendAngleDeg - ((bendAngleDeg - 1) * step) / (STRONG_CLAMP_STEPS - 1);
+      if (travelDeg < 1) break;
+      const stepGeometry = solveStrongJointGeometry(
+        joint.ballRadiusMm,
+        clearance,
+        travelDeg,
+      );
+      if (!stepGeometry) break;
+      for (const visibleScale of STRONG_VISIBLE_SCALES) {
+        const seam = solveStrongSeam(
+          stepGeometry,
+          joint,
+          clearance,
+          travelDeg,
+          measure,
+          planeExtents,
+          maxTailReach,
+          visibleScale,
+        );
+        if (Number.isFinite(bandBudget)) {
+          const reach = strongSeamBandReach(
+            seam,
+            STRONG_BAND_REACH_INNER_FRACTION * bandMax,
+            bandMax,
+          );
+          if (Math.max(reach.head, reach.tail) > bandBudget) continue;
+        }
+        // Predictive severance check: both seam faces must clear the skin over
+        // the band the wedge actually crosses. When the neighbour clamp has
+        // held the outer radius in, the wedge seals inside the body, the cut
+        // does not separate and the build can only report the hard
+        // 'rounded-uncut' error. Narrowing the seam (and ultimately dropping
+        // the travel, and ultimately falling back to the rounded cutter) is a
+        // far better answer than a dead end.
+        const exitAngle = strongTailAngle(seam, seam.r3);
+        const skin = measure(seam.r3 * Math.cos(exitAngle) + 2).maxMm;
+        const faceReach = Math.min(
+          seam.r3 * Math.sin(strongHeadAngle(seam, seam.r3)),
+          seam.r3 * Math.sin(exitAngle),
+        );
+        if (faceReach < skin) continue;
+        if (-seam.bladeRoot > barBudget) continue;
+        solved = { geometry: stepGeometry, seam, travelDeg };
+        break;
+      }
+      if (solved) break;
+    }
+    // A joint built below the requested bend still articulates, but it does NOT
+    // deliver what the user asked for. Record it so the caller can say so —
+    // probe S2's `bendAngleDeg + STRONG_SEAM_OVERLAP_DEG` cushion hides
+    // reductions up to 3°, so a silent clamp here is invisible to every test.
+    if (solved && solved.travelDeg < bendAngleDeg - 1e-9) {
+      notes.travelClampedJoints += 1;
+      notes.minTravelDeg = Math.min(notes.minTravelDeg, solved.travelDeg);
+    }
+
+    let cutter: Manifold | null = null;
+    let male: Manifold | null = null;
+    if (solved) {
+      cutter = buildStrongCutter(wasm, joint, solved.geometry, solved.seam);
+      if (cutter) {
+        male = buildStrongMale(wasm, joint, solved.geometry, solved.seam);
+      }
+      if (!cutter || !male) {
+        if (cutter) cutter.delete();
+        if (male) male.delete();
+        cutter = null;
+        male = null;
+      }
+    }
+    if (!cutter) {
+      notes.strongFallbackJoints += 1;
+      cutter = buildStrongRoundedFallback(
+        wasm,
+        joint,
+        clearance,
+        bendAngleDeg,
+        measure,
+        planeExtents,
+        maxTailReach,
+        minNeighborDist,
+      );
+    }
+    if (!cutter) {
+      return abandon();
+    }
+
+    const next = cut.subtract(cutter);
+    cutter.delete();
+    if (cut !== body) cut.delete();
+    cut = next;
+    if (male) males.push(male);
+  }
+
+  // ORPHANED-MALE GUARD. A male is only a joint if its bar reaches live tail
+  // material; if the seam failed to sever, the bar's anchor can land in the void
+  // the wedge carved and the head drops out of the print as a LOOSE PART. The
+  // severance guard below cannot see this — an orphan is its own component and
+  // lands in some segment group, so every group stays non-empty and the build
+  // reports 'ok'. Measured on the torus fixture (a closed loop no vertical cut
+  // can sever): three free males, ~617–714mm³ each, sitting on their pivots.
+  //
+  // Checked against the FINAL cut solid, not the intermediate one: a later
+  // joint's cutter can still remove an earlier male's anchor. Costs one boolean
+  // per joint against an already-evaluated tree.
+  for (const male of males) {
+    const anchored = male.intersect(cut);
+    const orphan = anchored.isEmpty();
+    anchored.delete();
+    if (orphan) {
+      if (cut !== body) cut.delete();
+      for (const other of males) other.delete();
+      return 'uncut';
+    }
+  }
+
+  // ORDER MATTERS: the pocket is by construction a superset of the head's swept
+  // envelope, so the males can only be added AFTER the whole subtract chain.
+  // One whole-body union for the entire build, not one per joint.
+  if (males.length > 0) {
+    let union = males[0];
+    for (let i = 1; i < males.length; i += 1) {
+      const merged = union.add(males[i]);
+      union.delete();
+      males[i].delete();
+      union = merged;
+    }
+    const joined = cut.add(union);
+    union.delete();
+    if (cut !== body) cut.delete();
+    cut = joined;
+  }
+
+  // Manifold booleans are lazy — one status check evaluates the whole tree.
+  if (cut !== body && (cut.status() !== 'NoError' || cut.isEmpty())) {
+    cut.delete();
+    return null;
+  }
+
+  const components = cut.decompose();
+  if (cut !== body) cut.delete();
+  for (const component of components) {
+    keep(component);
+  }
+  if (components.length === 0) {
+    return null;
+  }
+
+  const segmentCount = cutJoints.length + 1;
+  const groups: Manifold[][] = Array.from({ length: segmentCount }, () => []);
+  for (const component of components) {
+    const centroid = componentVolumeCentroid(component);
+    let segment = 0;
+    for (const joint of cutJoints) {
+      const dx = centroid[0] - joint.center[0];
+      const dy = centroid[1] - joint.center[1];
+      const dz = centroid[2] - joint.center[2];
+      if (dx * joint.axis[0] + dy * joint.axis[1] + dz * joint.axis[2] > 0) {
+        segment += 1;
+      }
+    }
+    groups[Math.min(segment, segmentCount - 1)].push(component);
+  }
+  if (groups.some((group) => group.length === 0)) {
+    return 'uncut';
+  }
+  return groups;
 }
 
 // --- Overlapping-shell (scale) cutter --------------------------------------
@@ -1897,6 +3198,53 @@ function orientationMatrix(
     center[2],
     1,
   ];
+}
+
+// True VOLUME centroid of a closed component (divergence theorem over the
+// triangles), as opposed to `componentCentroid`'s vertex average. The strong
+// cutter tessellates its seam, cavity and slot densely right at the cut, so on
+// a short tapering piece the vertex average is dragged to the cut plane and can
+// land on the wrong side of it — which silently misgroups the piece and trips
+// the severance guard. Volume weighting cannot be fooled by tessellation
+// density. Falls back to the vertex average on a degenerate (zero-volume) mesh.
+function componentVolumeCentroid(
+  component: Manifold,
+): [number, number, number] {
+  const mesh = component.getMesh();
+  const numProp = mesh.numProp;
+  const properties = mesh.vertProperties;
+  const triangles = mesh.triVerts;
+  let total = 0;
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  for (let t = 0; t < triangles.length; t += 3) {
+    const ia = triangles[t] * numProp;
+    const ib = triangles[t + 1] * numProp;
+    const ic = triangles[t + 2] * numProp;
+    const ax = properties[ia];
+    const ay = properties[ia + 1];
+    const az = properties[ia + 2];
+    const bx = properties[ib];
+    const by = properties[ib + 1];
+    const bz = properties[ib + 2];
+    const cx = properties[ic];
+    const cy = properties[ic + 1];
+    const cz = properties[ic + 2];
+    // Signed volume of the tetrahedron (origin, a, b, c), times 6.
+    const v =
+      ax * (by * cz - bz * cy) -
+      ay * (bx * cz - bz * cx) +
+      az * (bx * cy - by * cx);
+    total += v;
+    sx += v * (ax + bx + cx);
+    sy += v * (ay + by + cy);
+    sz += v * (az + bz + cz);
+  }
+  if (!(Math.abs(total) > 1e-12)) {
+    return componentCentroid(component);
+  }
+  return [sx / (4 * total), sy / (4 * total), sz / (4 * total)];
 }
 
 function componentCentroid(component: Manifold): [number, number, number] {

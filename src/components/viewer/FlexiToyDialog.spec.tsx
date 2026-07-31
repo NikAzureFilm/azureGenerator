@@ -176,6 +176,7 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByText('Joint style')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Rounded/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Classic/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Strong/ })).toBeInTheDocument();
     expect(screen.getByText('Segments')).toBeInTheDocument();
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
     expect(screen.getByText('Toy length')).toBeInTheDocument();
@@ -224,6 +225,27 @@ describe('FlexiToyDialog', () => {
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
     expect(settingsArg.jointStyle).toBe('classic');
+    expect(settingsArg.jointPositions).toHaveLength(
+      fakeResult.plan.joints.length,
+    );
+  });
+
+  it('switches to the strong joint style with one recompute and keeps dragged positions', async () => {
+    renderDialog();
+    await settle();
+
+    const ring = document.querySelector('[name="flexi-ring-0"]');
+    fireEvent.pointerDown(ring as Element);
+    fireEvent.pointerUp(ring as Element);
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Strong/ }));
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointStyle).toBe('strong');
     expect(settingsArg.jointPositions).toHaveLength(
       fakeResult.plan.joints.length,
     );

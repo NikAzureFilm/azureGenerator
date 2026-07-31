@@ -53,14 +53,39 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   bendAngleDeg; the cut shows as a narrow rounded groove.
  * - 'classic': flat ring cuts (fishing-lure look) — visible flat gaps between
  *   segments; bend is limited by the faces meeting, so travel is smaller.
+ * - 'strong': visibly separated segments bridged by a captive spherical head on
+ *   a visible bar that crosses the gap (the "strong joints" mechanism). The
+ *   seam is a revolved wedge whose per-radius angular gap is ≥ bend + 3° (plus
+ *   a clearance term), so the seam never limits the swing at any body width and
+ *   travel is at least bendAngleDeg — measured first contact, which the bar in
+ *   its slot and the ball in its pocket set rather than the seam, lands at
+ *   bend + 2.6° … + 5°. The wedge is opened until the seam READS as a gap at
+ *   the skin, not merely clears the running clearance; the male (head + bar) is
+ *   added back into its TAIL segment after the cut, and a throat land with a
+ *   tapered slot passes the bar. The head and its pocket are CONCENTRIC balls
+ *   (`r` and `r + c`), so the running clearance is the same at every bend angle
+ *   and the joint cannot be pulled, tilted or rolled apart: a ball of radius `r`
+ *   does not fit through a throat narrower than `r`. Play is the clearance in
+ *   five directions and at most one capture margin more in pull-out; the twist
+ *   key is the bar in its slot, which is deliberately loose (see
+ *   `StrongJointGeometry`).
  */
-export type FlexiJointStyle = 'shell' | 'rounded' | 'classic';
+export type FlexiJointStyle = 'shell' | 'rounded' | 'classic' | 'strong';
 
 export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'shell';
 
 /** Styles that share the rounded family's sizing (cup containment, bowl gap). */
 export function isRoundedFamilyJointStyle(style: FlexiJointStyle): boolean {
   return style === 'rounded' || style === 'shell';
+}
+
+/**
+ * Exhaustiveness guard for `switch (jointStyle)` dispatch. Adding a style to
+ * `FlexiJointStyle` without handling it becomes a compile error at every
+ * dispatch site that ends in `default: assertNever(style)`.
+ */
+export function assertNever(value: never, context: string): never {
+  throw new Error(`${context}: unhandled value ${JSON.stringify(value)}`);
 }
 
 export type FlexiToySettings = {
@@ -117,6 +142,14 @@ export type FlexiWarningCode =
   | 'cuts-not-vertical'
   | 'joint-positions-adjusted'
   | 'shell-joint-fallback'
+  | 'strong-joint-fallback'
+  /**
+   * A strong joint's seam had to be built at LESS than the requested
+   * `bendAngleDeg` (its neighbour or its own skin left no room for the full
+   * band). The joint still articulates, just not as far. Never silent: the
+   * build reduces travel only when the alternative is a failed cut.
+   */
+  | 'strong-travel-reduced'
   | 'mesh-repaired';
 
 export type FlexiToyWarning = {
@@ -147,6 +180,9 @@ export type FlexiJointPlan = {
    *   `center − (socketDepthMm + faceGapMm) × axis`. Derived from bendAngleDeg.
    * - 'rounded': the constant bowl gap g_b (= max(clearanceMm, 0.55mm)) between
    *   the concentric shoulder and cup; travel is gap-independent by design.
+   * - 'strong': the same constant bowl gap as 'rounded'. The strong seam's own
+   *   gap is ANGULAR, not a stored millimetre value; this field is used only as
+   *   the seam wedge's outer-radius pad and by the per-joint rounded fallback.
    */
   faceGapMm: number;
   /** This joint's station along the spine as an arc-length fraction (0..1). */
