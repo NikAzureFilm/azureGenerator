@@ -24,17 +24,17 @@ import {
 import { processUserModelForDownload } from '@/utils/meshPrintProcessUtils';
 
 // The r3f Canvas renders its children into plain DOM (no WebGL context in
-// jsdom): the mesh + cut-ring subtree mounts so the ring handles are queryable,
-// while OrbitControls/Environment are inert.
+// jsdom): the mesh + cut-ring subtree mounts so the rings are queryable, while
+// OrbitControls is inert. `useThree` only ever feeds the invalidate bridge.
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="flexi-canvas">{children}</div>
   ),
+  useThree: (selector: (state: { invalidate: () => void }) => unknown) =>
+    selector({ invalidate: () => {} }),
 }));
 vi.mock('@react-three/drei', () => ({
-  Environment: () => null,
   OrbitControls: () => null,
-  Stage: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('@/utils/flexiToyClient', () => ({
@@ -62,6 +62,18 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver =
   globalThis.ResizeObserver ?? (ResizeObserverStub as typeof ResizeObserver);
+// jsdom ships no PointerEvent, so testing-library would fall back to a plain
+// Event and drop `clientX` — which the strip's drag maths depends on.
+class PointerEventStub extends window.MouseEvent {
+  readonly pointerId: number;
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+  }
+}
+globalThis.PointerEvent =
+  globalThis.PointerEvent ??
+  (PointerEventStub as unknown as typeof PointerEvent);
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
     matches: false,
@@ -136,15 +148,52 @@ function renderDialog() {
   );
 }
 
-// Advances the debounce + flushes the async derive/compute microtasks. Called
-// a couple times because the length-derivation promise and the compute timer
-// resolve across separate ticks.
+// Advances the debounce + flushes the async mesh-input/compute microtasks.
+// Looped because the warm-up promise and the compute timer resolve across
+// separate ticks.
 async function settle() {
   for (let i = 0; i < 3; i += 1) {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
   }
+}
+
+function jointHandle(index: number): HTMLElement {
+  return screen.getByTestId(`flexi-joint-handle-${index}`);
+}
+
+// jsdom gives every element a zero-sized rect, so the track has to be stubbed
+// before a drag can map a clientX onto a spine fraction.
+const TRACK_WIDTH = 1000;
+
+function stubTrackRect(handle: HTMLElement): void {
+  const track = handle.parentElement;
+  if (!track) {
+    throw new Error('joint handle is not inside a track');
+  }
+  track.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: TRACK_WIDTH,
+      bottom: 40,
+      width: TRACK_WIDTH,
+      height: 40,
+      toJSON: () => ({}),
+    }) as DOMRect;
+}
+
+/** Press, move past the drag threshold to `fraction`, release. */
+function dragHandleTo(index: number, fraction: number): void {
+  const handle = jointHandle(index);
+  stubTrackRect(handle);
+  const clientX = fraction * TRACK_WIDTH;
+  fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+  fireEvent.pointerMove(handle, { pointerId: 1, clientX });
+  fireEvent.pointerUp(handle, { pointerId: 1, clientX });
 }
 
 beforeEach(() => {
@@ -174,8 +223,7 @@ describe('FlexiToyDialog', () => {
     await settle();
 
     expect(screen.getByText('Joint style')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Rounded/ })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Classic/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Shell/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Strong/ })).toBeInTheDocument();
     expect(screen.getByText('Segments')).toBeInTheDocument();
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
@@ -192,51 +240,54 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByRole('button', { name: '.3MF' })).toBeInTheDocument();
   });
 
-  it('sends the flexibility angle and loose default in the compute settings', async () => {
+  it('offers only the Shell and Strong joint styles', async () => {
+    renderDialog();
+    await settle();
+
+    expect(screen.getAllByRole('radio', { name: /Shell|Strong/ })).toHaveLength(
+      2,
+    );
+    expect(
+      screen.queryByRole('radio', { name: /Rounded/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('radio', { name: /Classic/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens with the shell defaults in the compute settings', async () => {
     renderDialog();
     await settle();
 
     expect(computeFlexiToy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        bendAngleDeg: 12,
-        clearanceMm: 0.55,
         jointStyle: 'shell',
+        segmentCount: 5,
+        clearanceMm: 0.3,
+        targetLengthMm: 400,
+        bendAngleDeg: 8,
+        jointScale: 1,
+        axisOverride: 'auto',
       }),
     );
+    // Even spacing on open: no pinned stations are sent.
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointPositions).toBeUndefined();
   });
 
-  it('switches joint style with one recompute and keeps dragged positions', async () => {
+  it('opens with original colors shown', async () => {
     renderDialog();
     await settle();
 
-    // Pin explicit stations via a drag first.
-    const ring = document.querySelector('[name="flexi-ring-0"]');
-    fireEvent.pointerDown(ring as Element);
-    fireEvent.pointerUp(ring as Element);
-    await settle();
-    (computeFlexiToy as Mock).mockClear();
-
-    fireEvent.click(screen.getByRole('radio', { name: /Classic/ }));
-    await settle();
-
-    // Exactly one recompute, now in the classic style, and the dragged
-    // positions survive the style switch (stations keep their meaning).
-    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
-    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
-    expect(settingsArg.jointStyle).toBe('classic');
-    expect(settingsArg.jointPositions).toHaveLength(
-      fakeResult.plan.joints.length,
-    );
+    expect(screen.getByRole('switch')).toBeChecked();
   });
 
   it('switches to the strong joint style with one recompute and keeps dragged positions', async () => {
     renderDialog();
     await settle();
 
-    const ring = document.querySelector('[name="flexi-ring-0"]');
-    fireEvent.pointerDown(ring as Element);
-    fireEvent.pointerUp(ring as Element);
+    dragHandleTo(0, 0.4);
     await settle();
     (computeFlexiToy as Mock).mockClear();
 
@@ -259,8 +310,9 @@ describe('FlexiToyDialog', () => {
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     (computeFlexiToy as Mock).mockClear();
 
-    // Three quick changes with no timer advance between them.
-    fireEvent.click(screen.getByRole('radio', { name: 'Tight' }));
+    // Three quick changes with no timer advance between them (Tight is the
+    // open default, so it would be a no-op — use the other two presets).
+    fireEvent.click(screen.getByRole('radio', { name: 'Standard' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
     fireEvent.click(screen.getByRole('radio', { name: 'X' }));
 
@@ -271,24 +323,24 @@ describe('FlexiToyDialog', () => {
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
   });
 
-  it('renders one draggable cut ring per joint in the plan', async () => {
+  it('renders one cut ring and one strip handle per joint in the plan', async () => {
     renderDialog();
     await settle();
 
     // The dialog content is portaled to document.body, so query the document.
     const rings = document.querySelectorAll('[name^="flexi-ring-"]');
     expect(rings).toHaveLength(fakeResult.plan.joints.length);
+    expect(
+      document.querySelectorAll('[data-testid^="flexi-joint-handle-"]'),
+    ).toHaveLength(fakeResult.plan.joints.length);
   });
 
-  it('pins positions on ring drag and the reset button restores even spacing', async () => {
+  it('pins positions on a strip drag and the reset button restores even spacing', async () => {
     renderDialog();
     await settle();
 
-    // A drag (down then up) commits the current stations as explicit positions.
-    const ring = document.querySelector('[name="flexi-ring-0"]');
-    expect(ring).not.toBeNull();
-    fireEvent.pointerDown(ring as Element);
-    fireEvent.pointerUp(ring as Element);
+    // A real drag commits the moved station as an explicit position.
+    dragHandleTo(0, 0.4);
     await settle();
 
     // Positions are now explicit → the recompute must carry jointPositions with
@@ -303,14 +355,70 @@ describe('FlexiToyDialog', () => {
     expect(settingsArg.jointPositions).toHaveLength(
       fakeResult.plan.joints.length,
     );
-    const resetButton = screen.getByRole('button', { name: 'Even spacing' });
+    expect(settingsArg.jointPositions[0]).toBeCloseTo(0.4, 5);
 
+    const resetButton = screen.getByRole('button', { name: 'Even spacing' });
     fireEvent.click(resetButton);
     await settle();
 
     expect(
       screen.queryByRole('button', { name: 'Even spacing' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('clamps a dragged cut inside the spine and between its neighbours', async () => {
+    renderDialog();
+    await settle();
+
+    // Cut 0 sits at 0.25 and cut 1 at 0.5, so dragging past its neighbour stops
+    // one margin (0.01) short of it.
+    dragHandleTo(0, 0.9);
+    await settle();
+    let settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointPositions[0]).toBeCloseTo(0.49, 5);
+    expect(settingsArg.jointPositions).toHaveLength(
+      settingsArg.segmentCount - 1,
+    );
+
+    // Dragging off the head end stops at the spine-tip bound instead.
+    dragHandleTo(0, -0.1);
+    await settle();
+    settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointPositions[0]).toBeCloseTo(0.02, 5);
+  });
+
+  it('does not commit or recompute when a strip handle is only tapped', async () => {
+    renderDialog();
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    // Press and release without moving: not an edit.
+    const handle = jointHandle(0);
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 250 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 250 });
+    await settle();
+
+    expect(computeFlexiToy).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('button', { name: 'Even spacing' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('commits a keyboard nudge of a strip handle after the key debounce', async () => {
+    renderDialog();
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    fireEvent.keyDown(jointHandle(1), { key: 'ArrowLeft' });
+    await settle();
+
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointPositions).toHaveLength(
+      settingsArg.segmentCount - 1,
+    );
+    // The nudged station moved one step towards the head, clamped between its
+    // neighbours.
+    expect(settingsArg.jointPositions[1]).toBeCloseTo(0.49, 5);
   });
 
   it('renders warnings returned by the core as amber helper text', async () => {
@@ -320,7 +428,8 @@ describe('FlexiToyDialog', () => {
     expect(
       screen.getByText('1 joint is too thin to move — it stays rigid.'),
     ).toBeInTheDocument();
-    expect(screen.getByText(/1 fused/)).toBeInTheDocument();
+    // The stats line (segments · joints · mm) sits with the joints strip.
+    expect(screen.getByText(/\(1 fused\)/)).toBeInTheDocument();
   });
 
   it('invokes the export helpers when the download buttons are clicked', async () => {
@@ -354,7 +463,7 @@ describe('FlexiToyDialog', () => {
       code: 'not-watertight',
       message: 'open mesh',
     });
-    fireEvent.click(screen.getByRole('radio', { name: 'Tight' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
     await settle();
 
     expect(
@@ -380,9 +489,9 @@ describe('FlexiToyDialog', () => {
     expect(screen.queryByRole('button', { name: '.3MF' })).toBeDisabled();
   });
 
-  it('offers a Classic recovery path when the rounded cut fails', async () => {
-    // First compute fails with the rounded-specific error; later computes (after
-    // the user switches style) fall back to the default ok mock.
+  it('offers a Strong recovery path when the cut fails on the shell style', async () => {
+    // First compute fails with the uncut error; later computes (after the user
+    // switches style) fall back to the default ok mock.
     (computeFlexiToy as Mock).mockResolvedValueOnce({
       status: 'error',
       code: 'rounded-uncut',
@@ -393,20 +502,20 @@ describe('FlexiToyDialog', () => {
     await settle();
 
     expect(
-      screen.getByText("Rounded joints don't fit this shape"),
+      screen.getByText("These joints don't fit this shape"),
     ).toBeInTheDocument();
 
-    const recover = screen.getByRole('button', { name: 'Switch to Classic' });
+    const recover = screen.getByRole('button', { name: 'Switch to Strong' });
     (computeFlexiToy as Mock).mockClear();
     fireEvent.click(recover);
     await settle();
 
-    // Style switched to classic and the recompute (now succeeding) cleared it.
+    // Style switched to strong and the recompute (now succeeding) cleared it.
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
-    expect(settingsArg.jointStyle).toBe('classic');
+    expect(settingsArg.jointStyle).toBe('strong');
     expect(
-      screen.queryByText("Rounded joints don't fit this shape"),
+      screen.queryByText("These joints don't fit this shape"),
     ).not.toBeInTheDocument();
   });
 });
