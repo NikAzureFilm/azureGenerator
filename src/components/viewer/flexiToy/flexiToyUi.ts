@@ -22,6 +22,9 @@ import {
  */
 export type FlexiUiJointStyle = Extract<FlexiJointStyle, 'shell' | 'strong'>;
 
+/** The style the dialog opens with. */
+export const DEFAULT_JOINT_STYLE: FlexiUiJointStyle = 'strong';
+
 // Cut-station palette: blue = a live articulating joint, amber = a fused
 // (rigid) station; the *_HOVER variants light up under the cursor / drag.
 export const RING_BLUE = '#3B82F6';

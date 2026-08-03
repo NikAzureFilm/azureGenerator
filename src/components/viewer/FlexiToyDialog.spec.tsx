@@ -255,14 +255,14 @@ describe('FlexiToyDialog', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('opens with the shell defaults in the compute settings', async () => {
+  it('opens with the strong style and the default settings', async () => {
     renderDialog();
     await settle();
 
     expect(computeFlexiToy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        jointStyle: 'shell',
+        jointStyle: 'strong',
         segmentCount: 5,
         clearanceMm: 0.3,
         targetLengthMm: 400,
@@ -283,7 +283,7 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByRole('switch')).toBeChecked();
   });
 
-  it('switches to the strong joint style with one recompute and keeps dragged positions', async () => {
+  it('switches to the shell joint style with one recompute and keeps dragged positions', async () => {
     renderDialog();
     await settle();
 
@@ -291,12 +291,12 @@ describe('FlexiToyDialog', () => {
     await settle();
     (computeFlexiToy as Mock).mockClear();
 
-    fireEvent.click(screen.getByRole('radio', { name: /Strong/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Shell/ }));
     await settle();
 
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
-    expect(settingsArg.jointStyle).toBe('strong');
+    expect(settingsArg.jointStyle).toBe('shell');
     expect(settingsArg.jointPositions).toHaveLength(
       fakeResult.plan.joints.length,
     );
@@ -490,15 +490,17 @@ describe('FlexiToyDialog', () => {
   });
 
   it('offers a Strong recovery path when the cut fails on the shell style', async () => {
-    // First compute fails with the uncut error; later computes (after the user
-    // switches style) fall back to the default ok mock.
+    renderDialog();
+    await settle();
+
+    // Switching to shell fails with the uncut error; later computes (after the
+    // user recovers back to strong) fall back to the default ok mock.
     (computeFlexiToy as Mock).mockResolvedValueOnce({
       status: 'error',
       code: 'rounded-uncut',
       message: 'off-axis feature',
     });
-
-    renderDialog();
+    fireEvent.click(screen.getByRole('radio', { name: /Shell/ }));
     await settle();
 
     expect(
@@ -510,10 +512,11 @@ describe('FlexiToyDialog', () => {
     fireEvent.click(recover);
     await settle();
 
-    // Style switched to strong and the recompute (now succeeding) cleared it.
-    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
-    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
-    expect(settingsArg.jointStyle).toBe('strong');
+    // Style switched back to strong; the open compute already cached that
+    // result, so recovery is instant (cache hit, no new compute) and clears
+    // the error.
+    expect(computeFlexiToy).not.toHaveBeenCalled();
+    expect(screen.getByRole('radio', { name: /Strong/ })).toBeChecked();
     expect(
       screen.queryByText("These joints don't fit this shape"),
     ).not.toBeInTheDocument();

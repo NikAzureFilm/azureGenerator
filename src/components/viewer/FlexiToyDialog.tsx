@@ -56,6 +56,7 @@ import {
   AXIS_OPTIONS,
   CLEARANCE_PRESET_LABELS,
   CLEARANCE_PRESET_ORDER,
+  DEFAULT_JOINT_STYLE,
   FLEXI_ERROR_COPY,
   SHELL_DEFAULTS,
   clamp,
@@ -109,7 +110,8 @@ export function FlexiToyDialog({
   );
   const [jointScale, setJointScale] = useState(SHELL_DEFAULTS.jointScale);
   const [bendAngleDeg, setBendAngleDeg] = useState(SHELL_DEFAULTS.bendAngleDeg);
-  const [jointStyle, setJointStyle] = useState<FlexiUiJointStyle>('shell');
+  const [jointStyle, setJointStyle] =
+    useState<FlexiUiJointStyle>(DEFAULT_JOINT_STYLE);
   const [axisOverride, setAxisOverride] = useState<FlexiAxisOverride>(
     SHELL_DEFAULTS.axisOverride,
   );
@@ -225,7 +227,7 @@ export function FlexiToyDialog({
     setTargetLengthMm(SHELL_DEFAULTS.targetLengthMm);
     setJointScale(SHELL_DEFAULTS.jointScale);
     setBendAngleDeg(SHELL_DEFAULTS.bendAngleDeg);
-    setJointStyle('shell');
+    setJointStyle(DEFAULT_JOINT_STYLE);
     setAxisOverride(SHELL_DEFAULTS.axisOverride);
     setJointPositions(SHELL_DEFAULTS.jointPositions);
     setStationEditToken((token) => token + 1);
