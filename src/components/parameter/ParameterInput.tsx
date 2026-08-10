@@ -49,6 +49,7 @@ export function ParameterInput({
       <div className="grid w-full grid-cols-[80px_1fr] items-center gap-3">
         <Label
           id={labelId}
+          title={paramState.description}
           className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
         >
           {paramState.displayName}
@@ -87,6 +88,7 @@ export function ParameterInput({
     return (
       <div className="grid w-full grid-cols-[80px_1fr] items-center gap-3">
         <Label
+          title={paramState.description}
           className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
           htmlFor={paramState.name}
         >
@@ -114,8 +116,9 @@ export function ParameterInput({
                 );
               }}
             />
-            <span className="ml-1 w-6 text-left text-xs text-adam-neutral-300">
-              {isMeasurementParameter(paramState) ? 'mm' : ''}
+            <span className="ml-1 min-w-6 max-w-12 truncate text-left text-xs text-adam-neutral-300">
+              {paramState.unit ??
+                (isMeasurementParameter(paramState) ? 'mm' : '')}
             </span>
           </div>
         </div>
@@ -126,6 +129,7 @@ export function ParameterInput({
     return (
       <div className="grid w-full grid-cols-[80px_1fr] items-center gap-3">
         <Label
+          title={paramState.description}
           className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
           htmlFor={paramState.name}
         >
@@ -156,7 +160,7 @@ export function ParameterInput({
           <Label
             className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
             htmlFor={paramState.name}
-            title={paramState.displayName}
+            title={paramState.description || paramState.displayName}
           >
             {labelText}
           </Label>
@@ -170,6 +174,7 @@ export function ParameterInput({
     return (
       <div className="grid w-full grid-cols-[80px_1fr] items-center gap-3">
         <Label
+          title={paramState.description}
           className="overflow-hidden text-ellipsis text-xs font-normal text-adam-neutral-300"
           htmlFor={paramState.name}
         >
@@ -194,6 +199,7 @@ export function ParameterInput({
       return (
         <div className="grid w-full grid-cols-[80px_1fr] items-start gap-3">
           <Label
+            title={paramState.description}
             className="overflow-hidden text-ellipsis pt-2 text-xs font-normal text-adam-neutral-300"
             htmlFor={paramState.name}
           >
@@ -238,6 +244,7 @@ export function ParameterInput({
       return (
         <div className="grid w-full grid-cols-[80px_1fr] items-start gap-3">
           <Label
+            title={paramState.description}
             className="overflow-hidden text-ellipsis pt-2 text-xs font-normal text-adam-neutral-300"
             htmlFor={paramState.name}
           >
@@ -308,8 +315,9 @@ export function ParameterInput({
                         handleValueCommit(updatedValue as Parameter['value']);
                       }}
                     />
-                    <span className="w-6 text-left text-xs text-adam-neutral-300">
-                      {isMeasurementParameter(paramState) ? 'mm' : ''}
+                    <span className="min-w-6 max-w-12 truncate text-left text-xs text-adam-neutral-300">
+                      {paramState.unit ??
+                        (isMeasurementParameter(paramState) ? 'mm' : '')}
                     </span>
                   </div>
                 </div>
@@ -325,6 +333,7 @@ export function ParameterInput({
       return (
         <div className="grid w-full grid-cols-[80px_1fr] items-start gap-3">
           <Label
+            title={paramState.description}
             className="overflow-hidden text-ellipsis pt-2 text-xs font-normal text-adam-neutral-300"
             htmlFor={paramState.name}
           >

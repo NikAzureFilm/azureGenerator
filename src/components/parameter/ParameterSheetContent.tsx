@@ -1,5 +1,5 @@
 import { Download, ChevronUp, Loader2 } from 'lucide-react';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Message, Parameter } from '@shared/types';
@@ -10,7 +10,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ParameterInput } from '@/components/parameter/ParameterInput';
-import { validateParameterValue } from '@/utils/parameterUtils';
+import {
+  isColorParameter,
+  validateParameterValue,
+} from '@/utils/parameterUtils';
 import { useCurrentMessage } from '@/contexts/CurrentMessageContext';
 import {
   downloadSTLFile,
@@ -21,6 +24,8 @@ import {
   DxfExporter,
 } from '@/utils/downloadUtils';
 import { useToast } from '@/hooks/use-toast';
+import parseDesignTree from '@shared/parseDesignTree';
+import { DesignTreeViewer } from '@/components/design-tree/DesignTreeViewer';
 
 interface ParameterSheetContentProps {
   parameters: Parameter[];
@@ -41,6 +46,32 @@ export function ParameterSheetContent({
   const { toast } = useToast();
   const [selectedFormat, setSelectedFormat] = useState<DownloadFormat>('stl');
   const [isExporting, setIsExporting] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const sourceCode = currentMessage?.content.artifact?.code ?? '';
+  const designTree = useMemo(() => parseDesignTree(sourceCode), [sourceCode]);
+  const selectedNode = designTree.nodes.find(
+    (node) => node.id === selectedNodeId,
+  );
+  const visibleParameters = useMemo(() => {
+    if (!selectedNode?.params?.length) return parameters;
+    const names = new Set(selectedNode.params);
+    return parameters.filter((parameter) => names.has(parameter.name));
+  }, [parameters, selectedNode]);
+  const parameterGroups = useMemo(() => {
+    const groups = new Map<string, Parameter[]>();
+    for (const parameter of visibleParameters) {
+      const name =
+        parameter.group?.trim() ||
+        (isColorParameter(parameter) ? 'Colors' : 'Dimensions');
+      const group = groups.get(name);
+      if (group) group.push(parameter);
+      else groups.set(name, [parameter]);
+    }
+    return Array.from(groups, ([name, groupedParameters]) => ({
+      name,
+      parameters: groupedParameters,
+    }));
+  }, [visibleParameters]);
 
   // Debounce timer for compilation
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -208,13 +239,34 @@ export function ParameterSheetContent({
     <>
       <ScrollArea className="h-full w-full px-4">
         <div className="flex flex-col gap-6 pb-4 pt-2">
-          {parameters.map((param) => (
-            <ParameterInput
-              key={param.name}
-              param={param}
-              handleCommit={handleCommit}
-            />
+          <DesignTreeViewer
+            nodes={designTree.nodes}
+            warnings={designTree.warnings}
+            selectedNodeId={selectedNode?.id ?? null}
+            onSelectNode={setSelectedNodeId}
+          />
+          {parameterGroups.map((group) => (
+            <section key={group.name} className="flex flex-col gap-4">
+              <h3 className="text-xs font-semibold text-adam-text-primary">
+                {group.name}
+                <span className="ml-2 text-[10px] font-normal text-adam-neutral-400">
+                  {group.parameters.length}
+                </span>
+              </h3>
+              {group.parameters.map((param) => (
+                <ParameterInput
+                  key={param.name}
+                  param={param}
+                  handleCommit={handleCommit}
+                />
+              ))}
+            </section>
           ))}
+          {selectedNode?.params?.length && visibleParameters.length === 0 ? (
+            <p className="rounded-md bg-adam-neutral-900/60 px-3 py-2 text-[11px] text-adam-neutral-400">
+              This tree item has no editable controls.
+            </p>
+          ) : null}
         </div>
       </ScrollArea>
       <div className="flex w-full flex-col gap-4 p-4">

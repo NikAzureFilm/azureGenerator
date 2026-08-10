@@ -42,6 +42,8 @@ import {
 } from '@/utils/downloadUtils';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import parseDesignTree from '@shared/parseDesignTree';
+import { DesignTreeViewer } from '@/components/design-tree/DesignTreeViewer';
 
 interface ParameterSectionProps {
   parameters: Parameter[];
@@ -61,6 +63,77 @@ interface ParameterSectionProps {
 
 type DownloadFormat = 'stl' | 'scad' | 'dxf' | 'step' | 'obj';
 
+type ParameterGroup = { name: string; parameters: Parameter[] };
+
+function groupParameters(parameters: Parameter[]): ParameterGroup[] {
+  const groups = new Map<string, Parameter[]>();
+  for (const parameter of parameters) {
+    const name =
+      parameter.group?.trim() ||
+      (isColorParameter(parameter) ? 'Colors' : 'Dimensions');
+    const group = groups.get(name);
+    if (group) group.push(parameter);
+    else groups.set(name, [parameter]);
+  }
+  return Array.from(groups, ([name, groupedParameters]) => ({
+    name,
+    parameters: groupedParameters,
+  }));
+}
+
+function ParameterGroupControls({
+  name,
+  parameters,
+  separated,
+  handleCommit,
+}: {
+  name: string;
+  parameters: Parameter[];
+  separated: boolean;
+  handleCommit: (param: Parameter, value: Parameter['value']) => void;
+}) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={cn(
+        separated && 'mt-3 border-t border-adam-neutral-700/60 pt-3',
+      )}
+    >
+      <CollapsibleTrigger
+        aria-label={`${open ? 'Collapse' : 'Expand'} ${name} parameters`}
+        className="group flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs font-semibold text-adam-text-primary transition-colors focus:outline-none"
+      >
+        <span className="flex items-center gap-2">
+          {name}
+          <span className="text-[10px] text-adam-neutral-400">
+            {parameters.length}
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-3.5 w-3.5 text-adam-neutral-400 transition-all duration-200 group-hover:text-adam-text-primary',
+            open && 'rotate-180',
+          )}
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
+        <div className="mt-3 flex flex-col gap-3">
+          {parameters.map((param) => (
+            <ParameterInput
+              key={param.name}
+              param={param}
+              handleCommit={handleCommit}
+            />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 export function ParameterSection({
   parameters,
   onSubmit,
@@ -74,21 +147,23 @@ export function ParameterSection({
   const { toast } = useToast();
   const [selectedFormat, setSelectedFormat] = useState<DownloadFormat>('stl');
   const [isExporting, setIsExporting] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // Split params into the main list (non-color, shown by default) and a
-  // collapsible Colors group below it. Keeps the dimensions the user
-  // usually wants front-and-center while colors stay one click away.
-  const { mainParameters, colorParameters } = useMemo(() => {
-    const main: Parameter[] = [];
-    const color: Parameter[] = [];
-    for (const p of parameters) {
-      if (isColorParameter(p)) color.push(p);
-      else main.push(p);
-    }
-    return { mainParameters: main, colorParameters: color };
-  }, [parameters]);
-  const [colorsOpen, setColorsOpen] = useState(true);
-  const [dimensionsOpen, setDimensionsOpen] = useState(true);
+  const sourceCode =
+    artifactCode ?? currentMessage?.content.artifact?.code ?? '';
+  const designTree = useMemo(() => parseDesignTree(sourceCode), [sourceCode]);
+  const selectedNode = designTree.nodes.find(
+    (node) => node.id === selectedNodeId,
+  );
+  const visibleParameters = useMemo(() => {
+    if (!selectedNode?.params?.length) return parameters;
+    const names = new Set(selectedNode.params);
+    return parameters.filter((parameter) => names.has(parameter.name));
+  }, [parameters, selectedNode]);
+  const parameterGroups = useMemo(
+    () => groupParameters(visibleParameters),
+    [visibleParameters],
+  );
 
   // Debounce timer for compilation
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -293,81 +368,32 @@ export function ParameterSection({
               latest version to edit parameters.
             </div>
           )}
+          <DesignTreeViewer
+            nodes={designTree.nodes}
+            warnings={designTree.warnings}
+            selectedNodeId={selectedNode?.id ?? null}
+            onSelectNode={setSelectedNodeId}
+          />
           <div
             className={cn(
               'flex flex-col gap-3',
               editingDisabled && 'pointer-events-none opacity-60',
             )}
           >
-            {mainParameters.length > 0 && (
-              <Collapsible
-                open={dimensionsOpen}
-                onOpenChange={setDimensionsOpen}
-              >
-                <CollapsibleTrigger
-                  aria-label={`${dimensionsOpen ? 'Collapse' : 'Expand'} dimension parameters`}
-                  className="group flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs font-semibold text-adam-text-primary transition-colors focus:outline-none"
-                >
-                  <span className="flex items-center gap-2">
-                    Dimensions
-                    <span className="text-[10px] text-adam-neutral-400">
-                      {mainParameters.length}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    className={`h-3.5 w-3.5 text-adam-neutral-400 transition-all duration-200 group-hover:text-adam-text-primary ${
-                      dimensionsOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
-                  <div className="mt-3 flex flex-col gap-3">
-                    {mainParameters.map((param) => (
-                      <ParameterInput
-                        key={param.name}
-                        param={param}
-                        handleCommit={handleCommit}
-                      />
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            )}
-            {colorParameters.length > 0 && (
-              <Collapsible
-                open={colorsOpen}
-                onOpenChange={setColorsOpen}
-                className="mt-3 border-t border-adam-neutral-700/60 pt-3"
-              >
-                <CollapsibleTrigger
-                  aria-label={`${colorsOpen ? 'Collapse' : 'Expand'} color parameters`}
-                  className="group flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs font-semibold text-adam-text-primary transition-colors focus:outline-none"
-                >
-                  <span className="flex items-center gap-2">
-                    Colors
-                    <span className="text-[10px] text-adam-neutral-400">
-                      {colorParameters.length}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    className={`h-3.5 w-3.5 text-adam-neutral-400 transition-all duration-200 group-hover:text-adam-text-primary ${
-                      colorsOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
-                  <div className="mt-3 flex flex-col gap-3">
-                    {colorParameters.map((param) => (
-                      <ParameterInput
-                        key={param.name}
-                        param={param}
-                        handleCommit={handleCommit}
-                      />
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            )}
+            {parameterGroups.map((group, index) => (
+              <ParameterGroupControls
+                key={group.name}
+                name={group.name}
+                parameters={group.parameters}
+                separated={index > 0}
+                handleCommit={handleCommit}
+              />
+            ))}
+            {selectedNode?.params?.length && visibleParameters.length === 0 ? (
+              <p className="rounded-md bg-adam-neutral-900/60 px-3 py-2 text-[11px] text-adam-neutral-400">
+                This tree item has no editable controls.
+              </p>
+            ) : null}
           </div>
         </ScrollArea>
         <div className="flex flex-col gap-4 border-t border-adam-neutral-700 px-6 py-6">

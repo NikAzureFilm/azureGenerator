@@ -4,6 +4,10 @@ import {
   ParameterRange,
   ParameterType,
 } from '@shared/types.ts';
+import {
+  applyParameterSpecs,
+  parseParameterSpecs,
+} from '@shared/parameterSpecs.ts';
 
 export default function parseParameters(script: string): Parameter[] {
   // Limit the script to the upper part of the file. We don't want to parse the
@@ -144,7 +148,12 @@ export default function parseParameters(script: string): Parameter[] {
       const splitted = above.split('\n').reverse();
 
       const lastLineBeforeDefinition = splitted[0];
-      if (lastLineBeforeDefinition.trim().startsWith('//')) {
+      if (
+        lastLineBeforeDefinition.trim().startsWith('//') &&
+        !/^\s*\/\/\s*@(adam|cadam)-(param|node)\b/.test(
+          lastLineBeforeDefinition,
+        )
+      ) {
         description = lastLineBeforeDefinition.replace(/^\/\/\/*\s*/, '');
         if (description.length === 0) {
           description = undefined;
@@ -174,7 +183,10 @@ export default function parseParameters(script: string): Parameter[] {
     }
   });
 
-  return Object.values(parameters);
+  return applyParameterSpecs(
+    Object.values(parameters),
+    parseParameterSpecs(script),
+  );
 }
 
 function convertType(rawValue: string): {

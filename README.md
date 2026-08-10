@@ -159,6 +159,23 @@ npx supabase start
 npx supabase functions serve --no-verify-jwt
 ```
 
+### OpenSCAD UI annotations
+
+Generated or hand-written models can provide structured parameter controls and
+a navigable design tree while remaining valid OpenSCAD:
+
+```scad
+// @adam-param {"name":"width","label":"Width","type":"number","min":10,"max":200,"step":1,"unit":"mm","group":"Body"}
+width = 50; // [10:1:200]
+
+// @adam-node {"id":"body","kind":"part","name":"Main body","params":["width"],"moduleName":"body"}
+```
+
+Parameter annotations may include `label`, `description`, `group`, `unit`,
+`min`, `max`, `step`, and `options`. Tree nodes support `part`, `group`,
+`operation`, and `parameter` kinds with optional `parentId`, `params`, and
+`moduleName`. Legacy `@cadam-param` and `@cadam-node` prefixes are also read.
+
 ## 🛠️ Built With
 
 - **Frontend:** React 19 + TypeScript + TanStack Start + Vite

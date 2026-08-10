@@ -222,9 +222,60 @@ export type Parameter = {
   type?: ParameterType;
   description?: string;
   group?: string;
+  unit?: string;
   range?: ParameterRange;
   options?: ParameterOption[];
   maxLength?: number;
+};
+
+// Optional model-authored presentation metadata. The OpenSCAD variable remains
+// the source of truth for the parameter's existence, type, and current value;
+// these fields make the generated controls predictable and human-friendly.
+export type ParameterSpec = {
+  name: string;
+  label?: string;
+  type?: 'number' | 'string' | 'boolean';
+  description?: string;
+  group?: string;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: ParameterOption[];
+};
+
+export type DesignTreeNodeKind = 'part' | 'operation' | 'group' | 'parameter';
+
+export type DesignTreeNode = {
+  id: string;
+  kind: DesignTreeNodeKind;
+  name: string;
+  parentId?: string;
+  params?: string[];
+  moduleName?: string;
+};
+
+export type DesignTreeParseWarning = {
+  code:
+    | 'invalid-json'
+    | 'missing-id'
+    | 'missing-kind'
+    | 'duplicate-id'
+    | 'unknown-kind'
+    | 'invalid-param-entry'
+    | 'missing-parent'
+    | 'circular-parent';
+  message: string;
+  line: number;
+  raw: string;
+  id?: string;
+  kind?: string;
+  parentId?: string;
+};
+
+export type DesignTreeParseResult = {
+  nodes: DesignTreeNode[];
+  warnings: DesignTreeParseWarning[];
 };
 
 export type Conversation = Omit<
