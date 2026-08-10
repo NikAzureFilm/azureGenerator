@@ -69,8 +69,39 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   five directions and at most one capture margin more in pull-out; the twist
  *   key is the bar in its slot, which is deliberately loose (see
  *   `StrongJointGeometry`).
+ * - 'link': a print-in-place CHAIN LINK. The tail body carries a round HOOP
+ *   whose two legs root in it and whose crown rises through a hole (the EYE) in
+ *   a flat BLADE plate rooted in the head body, so the two bodies are two
+ *   threaded closed loops and are topologically interlocked — there is no ball,
+ *   no socket, no throat and no capture margin anywhere in this style. The
+ *   bodies are separated by a FLAT ANNULAR KERF of constant thickness on the cut
+ *   plane, which is what the eye reads as the joint and what limits the bend
+ *   (`bend ≈ kerf / body radius`, exactly as the reference toy does it), so on a
+ *   chunky model the requested angle saturates before the slider does and the
+ *   build says so with 'link-travel-reduced'. Clearance is correct BY
+ *   CONSTRUCTION rather than by algebra: the eye is not computed, it is CARVED —
+ *   `blade = plate − hoopEnvelope`, where the envelope is the hoop's own solid
+ *   grown by `clearanceMm` and swept over the travel — so
+ *   `dist(blade, hoop) ≥ clearanceMm` is a property of a boolean subtraction,
+ *   and a solver slip can only produce a rounded fallback, never a fused part.
+ *   Pitch is free of the MECHANISM (the crown is a rod ON the pivot axis, and
+ *   rotation about that axis preserves every radius — law 1), so the kerf alone
+ *   limits it. Yaw closes that same flat kerf at the ±v̂ rim, so it equals the
+ *   pitch on a round body and would be far less on a finned one — which is why
+ *   the kerf carries a SECOND budget, `LINK_SECONDARY_FLOOR_DEG` of sideways
+ *   travel measured at that lateral rim, inert wherever the two rims agree.
+ *   `LinkSeamProfile.secondaryTravelDeg` is the delivered number; when the look
+ *   ceiling refuses the wider gap it lands below the floor and the build says so
+ *   with 'link-sideways-reduced', so neither motion is ever silently reduced.
+ *   Roll does not close the kerf at all and is keyed by the legs against the
+ *   blade (measured 10–23°).
  */
-export type FlexiJointStyle = 'shell' | 'rounded' | 'classic' | 'strong';
+export type FlexiJointStyle =
+  | 'shell'
+  | 'rounded'
+  | 'classic'
+  | 'strong'
+  | 'link';
 
 export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'shell';
 
@@ -150,6 +181,34 @@ export type FlexiWarningCode =
    * build reduces travel only when the alternative is a failed cut.
    */
   | 'strong-travel-reduced'
+  /**
+   * A joint was too small for the link hoop-and-blade solid (or could not fit it
+   * beside its neighbours) and was built with the rounded groove instead. Named
+   * separately from `strong-joint-fallback` on purpose: that code's message
+   * names "a strong hinge", so reusing it would make the code lie about which
+   * mechanism could not be realised.
+   */
+  | 'link-joint-fallback'
+  /**
+   * A link joint's ring gap had to be built NARROWER than the requested
+   * `bendAngleDeg` needs — the gap would otherwise exceed the style's absolute
+   * ceiling or its share of the local body radius. The joint still bends, just
+   * not as far. Never silent: on a chunky body this is the only thing that tells
+   * a user why the Flexibility slider stopped doing anything.
+   */
+  | 'link-travel-reduced'
+  /**
+   * A link joint's SIDEWAYS travel came out below what its mechanism was carved
+   * for, because the flat ring gap closes at the widest rim and the body is much
+   * wider there than it is deep. Separate from 'link-travel-reduced' because it
+   * is a different motion about a different axis with a different cause: the
+   * up-and-down bend can be at the full requested angle while this one is not,
+   * which is precisely the case that used to be silent (measured: a finned body
+   * at Flexibility 5° bending 7.6° up-and-down and 3.3° sideways, with no
+   * warning at all). Never raised for link's deliberate `LINK_SECONDARY_MAX_DEG`
+   * cap — only when the BODY takes it below that.
+   */
+  | 'link-sideways-reduced'
   | 'mesh-repaired';
 
 export type FlexiToyWarning = {
@@ -183,6 +242,12 @@ export type FlexiJointPlan = {
    * - 'strong': the same constant bowl gap as 'rounded'. The strong seam's own
    *   gap is ANGULAR, not a stored millimetre value; this field is used only as
    *   the seam wedge's outer-radius pad and by the per-joint rounded fallback.
+   * - 'link': the same constant bowl gap as 'rounded', and ONLY as the rounded
+   *   fallback's carrier. Link's own visible gap is the flat annular KERF, which
+   *   depends on the skin half-extent in the bend direction — a quantity the
+   *   build re-measures in its own in-plane frame anyway (see the
+   *   `crossSectionExtentsAt` note about the two frames differing slightly), so
+   *   storing a planner-side value here would only invite the two to drift.
    */
   faceGapMm: number;
   /** This joint's station along the spine as an arc-length fraction (0..1). */

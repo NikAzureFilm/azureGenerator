@@ -172,6 +172,171 @@ const strongPullBudget = (clearanceMm: number): number =>
   clearanceMm + FLEXI_CAPTURE_MARGIN_MM;
 /** How far past the tail face the bar buries itself so it fuses to the tail segment. */
 const strongAnchor = (r: number): number => Math.max(2.0, 0.5 * r);
+// --- Link ("chain link") style tunables ------------------------------------
+// The male pair is a round HOOP rooted at both ends in the TAIL body whose crown
+// passes through the EYE of a flat BLADE plate rooted in the HEAD body. Both are
+// closed circuits, so the two segments are threaded and cannot come apart. These
+// live here — not in the build — because both stages walk the same hoop
+// centreline (`linkHoopPolyline`), so the two cannot drift.
+//
+// THE ONE IDEA. The eye is never COMPUTED, it is CARVED:
+//   blade = bladePlate − hoopEnvelope,   hoopEnvelope ⊇ hoop ⊕ ball(c) swept
+// so `dist(blade, hoop) ≥ clearanceMm` at rest AND through the whole travel is a
+// theorem about a boolean subtraction rather than an inequality anyone can
+// mis-derive. Everything the solver below computes (`eyeOuterMm`, `ringWallMm`,
+// reaches, footprint) is a CONSERVATIVE ESTIMATE used for feasibility and
+// containment only — a wrong estimate produces a rounded fallback, never a fused
+// part. That is the whole reason this style is safe to ship.
+const LINK_MIN_HEAD_RADIUS_MM = 3.2; // below this the solver returns null
+const LINK_TUBE_FRACTION = 0.22; // hoop tube radius a = 0.22·r
+const LINK_TUBE_MIN_MM = 0.8; // printable rod floor: Ø1.6mm
+const LINK_BLADE_FRACTION = 0.42; // blade thickness t = 0.42·r
+const LINK_BLADE_MIN_MM = 1.6; // plate thickness floor
+const LINK_ARC_HEADROOM_FRACTION = 0.12; // arc clears the fat blade by this …
+const LINK_ARC_HEADROOM_MIN_MM = 0.5; // … or this. Keeps the eye open.
+/** Tilt of the hoop's plane away from the joint axis (reference: 37.1–38.1°). */
+export const LINK_TILT_DEG = 38;
+/**
+ * The yaw/roll the KEY (and so the carved envelope) deliberately allows. A
+ * CEILING on the secondary travel, not a promise — the promise is
+ * `LINK_SECONDARY_FLOOR_DEG`, which the seam budgets for explicitly, and the
+ * delivered figure is always `LinkSeamProfile.secondaryTravelDeg`.
+ */
+export const LINK_SECONDARY_MAX_DEG = 6;
+/**
+ * The sideways travel the FLAT KERF is budgeted to deliver, over and above the
+ * pitch budget — the published floor.
+ *
+ * Why a second budget exists at all: the envelope is carved for
+ * `geometry.secondaryTravelDeg` of yaw, but carving relief the SEAM then forbids
+ * is an internal inconsistency, and it is what let a finned body deliver 3.34°
+ * of yaw against a 5° slider with nothing said. The kerf is sized by the ±û
+ * (bend) rim — that is what keeps the Flexibility slider alive on a shallow,
+ * wide body — so yaw, which closes the same kerf at the ±v̂ rim, has to be
+ * budgeted there explicitly or it is whatever the pitch budget happens to leave.
+ *
+ * It costs NOTHING on an isotropic station: the budget is taken at
+ * `min(secondaryTravelDeg, this, travel)`, and with `rhoLat == rhoBend` that
+ * demand is a subset of the pitch demand at every ladder step. It is also travel
+ * -capped rather than constant so the build's travel ladder keeps its relief —
+ * a joint clamped to 2° of pitch must not be held to a 4° yaw budget.
+ *
+ * 4°, not `LINK_SECONDARY_MAX_DEG`, because budgeting the full 6° at a lateral
+ * rim 3× the bend one would triple the visible gap on a finned body at the
+ * LOWEST Flexibility setting — the exact look the ±û sizing exists to protect.
+ */
+export const LINK_SECONDARY_FLOOR_DEG = 4;
+/** Cap on the per-sphere secondary-travel allowance (mm). Build-side too. */
+export const LINK_SECONDARY_INFLATE_MAX_MM = 0.45;
+// KEY_PAD_MIN is exactly SECONDARY_INFLATE_MAX + LEG_SLAB_MARGIN, which is what
+// makes `legSlabClearMm ≥ 0` hold by construction: the legs' envelope never
+// reaches the blade slab, so `eyeOuterMm` may be computed from the ARC alone and
+// is therefore independent of the kerf (and so of the travel).
+const LINK_KEY_PAD_MIN_MM = 0.5;
+const LINK_KEY_PAD_FRACTION = 0.11; // keyGap grows with r so twist stays available
+const LINK_KEY_MARGIN_MM = 0.1;
+const LINK_LEG_SLAB_MARGIN_MM = 0.05;
+const LINK_EYE_MARGIN_MM = 0.1; // safety added to the solver's eye estimate
+/** Blade material that must survive around the eye. Build-side and probe-side. */
+export const LINK_RING_WALL_MM = FLEXI_MIN_SOCKET_WALL_MM;
+const LINK_RING_SLACK_MM = 0.3;
+const LINK_BLADE_REACH_FRACTION = 0.95; // blade disc radius floor (buys interleave)
+const LINK_ANCHOR_MIN_MM = 1.5; // buried leg run
+const LINK_ANCHOR_FRACTION = 0.35;
+/** How far past the tail rim the leg goes horizontal, i.e. how deep it buries. */
+export const LINK_BURY_MM = 0.6;
+const LINK_KERF_MIN_MM = 0.8;
+const LINK_KERF_CLEAR_MM = 0.25; // kerf floor is also c + this
+/**
+ * Absolute ceiling on the visible ring gap (mm), and its share of the local body
+ * radius. NB deliberately NOT `FLEXI_MAX_FACE_GAP_MM`: that governs the rounded
+ * family's `faceGapMm`, a different quantity. This is link's own look ceiling
+ * and is the number to change if the gap ever needs re-tuning.
+ */
+export const LINK_KERF_MAX_MM = 4.5;
+export const LINK_KERF_MAX_FRACTION = 0.3;
+/**
+ * The kerf disc's outer radius clears the widest local half-extent by this
+ * factor (plus 1mm) so the flat ring always punches through the skin, fins
+ * included. Mirrors the build's `GROOVE_OUT_FACTOR`, which cannot be imported
+ * here without a cycle.
+ */
+const LINK_KERF_OUT_FACTOR = 1.15;
+/** Floor on male reach past the rim — property L3, the deep-interleave look. */
+export const LINK_ENGAGE_MIN_MM = 1;
+const LINK_SOLVE_ITERATIONS = 8; // keyGap ↔ bladeReach fixed point
+/**
+ * Hoop centreline resolution: points per HALF arc. The polyline has 2n+5 points.
+ * 5 rather than 10 because halving it halves the hull count in both the core and
+ * the envelope for a chord sag of `Rm·(1−cos(φend/2n))` = 0.021mm at r=5 — two
+ * orders under the 0.4mm clearance — which is in any case PAID BACK into every
+ * envelope radius by `chordSagMm`, so the built envelope still contains the
+ * ideal swept tube.
+ *
+ * WHAT IT ACTUALLY COSTS. Measured on FULL `buildFlexiToy` runs — an earlier
+ * revision of this comment quoted 532ms from a STUB harness that skipped the
+ * ladder, the per-joint sampler passes, the neighbour budget, the two body-scale
+ * orphan intersects, the rounded fallbacks and mesh packaging, and then compared
+ * that against a full-build `strong` baseline, which understated link by about
+ * half.
+ *
+ * The figures below are FULL `buildFlexiToy` runs on `tmp/pig-timing.mjs` —
+ * canonical spindle scaled to 150mm, n=5, c=0.4, bend=12 — four consecutive
+ * runs on an otherwise idle machine:
+ *
+ *     classic  100–105ms   strong  465–473ms   link  649–656ms
+ *     rounded  748–757ms   shell   765–799ms
+ *
+ *     link / strong 1.38–1.40×   ·   / rounded 0.86×   ·   / shell 0.83×
+ *
+ * So the design's "≤1.5× strong" gate IS met on the canonical fixture, and link
+ * is CHEAPER than both rounded and shell — the latter of which ships as
+ * `FLEXI_DEFAULT_JOINT_STYLE`. The cheap cutter (a 64-segment right cylinder in
+ * place of a ~6k-triangle revolved wedge) more than pays for the ~50 small hulls
+ * the two males cost; link's output here is 11.8k triangles against rounded's
+ * 99.8k.
+ *
+ * A previous revision of this comment reported 764–803ms and "1.60–1.86×, gate
+ * NOT met", and explained it by saying two of the fixture's four joints take the
+ * shared rounded fallback. BOTH halves were wrong and neither reproduces: on
+ * this fixture all four live joints are link-solvable (ballR 4.83/6.74/6.28/3.97
+ * against LINK_MIN_HEAD_RADIUS_MM = 3.2), the build raises no warning at all, and
+ * there is no rounded fallback anywhere in it. The likely cause of the inflated
+ * numbers is that they were taken while a build suite was running in the
+ * background; treat any timing taken next to a `flexiToyBuild.test.mjs` run as
+ * unusable.
+ *
+ * What remains true from that revision, and is worth keeping: the distance to
+ * `strong` is made of the shared rounded-family machinery link is built on, not
+ * of link's own solids, so tuning THIS constant is not the lever if the gate is
+ * ever missed on some other body.
+ */
+export const LINK_ARC_SEGMENTS = 5;
+/**
+ * Facet count of the envelope/core spheres, and the inflation that compensates
+ * for manifold's geodesic sphere inscribing its facets. Same reasoning (and the
+ * same measured `1 − 13.5/n²` law) as `STRONG_SPHERE_INRADIUS_RATIO`: a faceted
+ * sphere is not its ideal ball and the difference is the same order as the
+ * clearance this style is stated to. Measured directly on `Manifold.sphere` at
+ * n = 24: true inradius ratio 0.977663 vs this bound's 0.976563 — conservative.
+ */
+export const LINK_SPHERE_SEGMENTS = 24;
+export const LINK_SPHERE_INFLATION =
+  1 / (1 - 13.5 / (LINK_SPHERE_SEGMENTS * LINK_SPHERE_SEGMENTS));
+/** Tessellation of the blade disc and of the flat kerf ring (build-side). */
+export const LINK_BLADE_SEGMENTS = 48;
+export const LINK_KERF_SEGMENTS = 64;
+/** Steps in the build's per-joint travel ladder. */
+export const LINK_CLAMP_STEPS = 8;
+/** Law 7: clear space demanded between this joint's reach and its neighbour's. */
+export const LINK_NEIGHBOUR_CLEAR_MM = 0.3;
+/** Inset of the skin clip cylinder from the local thinnest half-extent. */
+export const LINK_CLIP_MARGIN_MM = 0.3;
+/**
+ * Half-width, in `dirProfile` sectors, of the ±û fan the bend half-extent is
+ * read over (sectorCount = 64, so 4 sectors ≈ ±22.5°).
+ */
+export const LINK_BEND_SECTOR_HALF = 4;
 // Rounded-style joint: cup wall thickness and the constant bowl (outer) gap. The
 // concentric dome-in-dish makes travel gap-independent, so the printed groove is
 // just this fixed gap; faceGapMm carries it (see FlexiJointPlan JSDoc).
@@ -518,6 +683,28 @@ export function minSegmentLengthFor(
         maxStationExtentMm,
       );
       const footprint = strongFootprintMm(
+        maxBallRadius,
+        clearance,
+        bendAngleDeg,
+        maxStationExtentMm,
+      );
+      return footprint === null ? rounded : Math.max(rounded, footprint);
+    }
+    case 'link': {
+      // Link, unlike strong, does NOT usually bind the pitch: swept over
+      // r ∈ [2.5, 12] × c ∈ {0.3, 0.4, 0.55, 0.8} × bend ∈ {5, 8, 12, 25} its
+      // own footprint runs 8.1–18.0mm against a rounded floor of 10.6–20.8mm,
+      // so the `max` is nearly always the ROUNDED term. Taking it anyway is what
+      // keeps the build's per-joint rounded fallback guaranteed to have room,
+      // and it is the one safe direction the plan suite pins (link ≥ rounded).
+      const rounded = roundedFamilyMinSegmentLength(
+        maxBallRadius,
+        clearance,
+        0,
+        bendAngleDeg,
+        maxStationExtentMm,
+      );
+      const footprint = linkFootprintMm(
         maxBallRadius,
         clearance,
         bendAngleDeg,
@@ -1111,13 +1298,16 @@ function sizeJoint(
     if (socketDepthMm === null) {
       return fused(ballRadiusMm);
     }
-    // Rounded family and strong both carry the constant bowl gap; classic's is
-    // the bend-driven flat ring gap.
+    // Rounded family, strong and link all carry the constant bowl gap (link's
+    // is purely the rounded fallback's carrier — its own visible gap is the
+    // kerf, which the build measures in its own frame); classic's is the
+    // bend-driven flat ring gap.
     const faceGapMm = ((): number => {
       switch (jointStyle) {
         case 'shell':
         case 'rounded':
         case 'strong':
+        case 'link':
           return roundedBowlGap(clearance);
         case 'classic':
           return computeFaceGap(
@@ -1146,6 +1336,7 @@ function sizeJoint(
       case 'rounded':
       case 'classic':
       case 'strong':
+      case 'link':
         return true;
       case 'shell': {
         const cs = roundedBowlGap(clearance);
@@ -1161,6 +1352,57 @@ function sizeJoint(
         return assertNever(jointStyle, 'shellShelfFits');
     }
   };
+  const roundedCupContained = (ballRadiusMm: number): boolean =>
+    socketContainedAlongReach(
+      profile,
+      ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
+      0,
+    );
+  // A REAL link joint at this radius: the solver must realise the hoop AND the
+  // carved cavity must stay inside the skin at every station it reaches.
+  const linkJointContained = (ballRadiusMm: number): boolean =>
+    solveLinkJointGeometry(ballRadiusMm, clearance, bendAngleDeg)
+      ? linkCavityFits(profile, ballRadiusMm, clearance, bendAngleDeg, rho0)
+      : false;
+  // Link's containment predicate has to be an INTERVAL in `r`, and picking the
+  // criterion PER RADIUS does not give one. The link cavity is strictly more
+  // demanding than the rounded cup (the legs run off-axis AND tail-ward, so they
+  // ask for more local half-extent than a cup of the same radius), while below
+  // LINK_MIN_HEAD_RADIUS_MM the criterion used to flip to the rounded cup, which
+  // is LOOSER. That put an accepted band BELOW a rejected band, and the shrink
+  // loop takes the FIRST — i.e. largest — accepted radius, so it walked straight
+  // past the rejected band and settled just under the flip point: on a 150mm
+  // spindle it sized joint 0 at r = 3.03 where every other style sized it 3.63,
+  // then took the rounded fallback anyway — a 17% smaller ball than simply
+  // picking Rounded would have given, for the same printed groove.
+  //
+  // So decide the criterion ONCE, over the same ladder the loop walks:
+  //   • some radius admits a real link joint  → judge by the LINK cavity, and
+  //     the loop returns the largest radius that is genuinely a link joint;
+  //   • none does                             → this joint is going to be built
+  //     with the rounded fallback whatever we pick, so size it exactly as
+  //     Rounded would and hand the build the same ball it would have had.
+  // Both branches are single-criterion, so each is as interval-shaped as the
+  // criterion it uses. Neither can fuse a joint the old code sized (the second
+  // branch is strictly more permissive than before; the first only applies when
+  // a link radius exists for the loop to find), so the V2-1 regression stays shut.
+  const startRadiusMm = clamp(
+    jointScale * BALL_SIZE_FACTOR * rho0,
+    FLEXI_MIN_BALL_RADIUS_MM,
+    rho0 - clearance - FLEXI_MIN_SOCKET_WALL_MM,
+  );
+  const linkRealisableSomewhere =
+    jointStyle === 'link' &&
+    ((): boolean => {
+      for (
+        let r = startRadiusMm;
+        r >= FLEXI_MIN_BALL_RADIUS_MM;
+        r -= SIZING_SHRINK_STEP_MM
+      ) {
+        if (linkJointContained(r)) return true;
+      }
+      return false;
+    })();
   // Rounded family must keep the whole socket CUP (radius r+c+w) inside the
   // skin; classic keeps the ball's clearance shell (r+c) inside with a socket
   // wall; strong keeps its closed cavity AND its throat slot inside.
@@ -1194,15 +1436,22 @@ function sizeJoint(
               ballRadiusMm + clearance + ROUNDED_CUP_WALL_MM,
               0,
             );
+      case 'link':
+        // Same rule, same reason as the strong arm above — judge containment by
+        // whichever cavity will ACTUALLY be carved — but with the criterion
+        // chosen ONCE for the whole ladder rather than per radius, so the
+        // accepted set stays an interval. See `linkRealisableSomewhere` above.
+        // A joint that lands in the second branch is still a perfectly good
+        // ROUNDED joint and the build falls back per joint (reporting
+        // 'link-joint-fallback'). Fusing here is the V2-1 regression.
+        return linkRealisableSomewhere
+          ? linkJointContained(ballRadiusMm)
+          : roundedCupContained(ballRadiusMm);
       default:
         return assertNever(jointStyle, 'sizeJoint containment');
     }
   };
-  let ballRadiusMm = clamp(
-    jointScale * BALL_SIZE_FACTOR * rho0,
-    FLEXI_MIN_BALL_RADIUS_MM,
-    rho0 - clearance - FLEXI_MIN_SOCKET_WALL_MM,
-  );
+  let ballRadiusMm = startRadiusMm;
   let containedFallback: number | null = null;
   while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
     const contained = cavityContained(ballRadiusMm);
@@ -1395,6 +1644,7 @@ function capJointBall(
       case 'shell':
       case 'rounded':
       case 'strong':
+      case 'link':
         return roundedBowlGap(clearance);
       case 'classic':
         return Math.min(
@@ -1473,6 +1723,39 @@ function jointOverlapCap(
           strongAnchor(radius) +
           OVERLAP_MARGIN_MM;
         return footprint <= minStationGap;
+      };
+      let lo = FLEXI_MIN_BALL_RADIUS_MM;
+      let hi = maxLiveRadius(joints);
+      if (!(hi > lo)) {
+        return Math.min(roundedCap, fits(lo) ? hi : 0);
+      }
+      if (fits(hi)) return Math.min(roundedCap, hi);
+      if (!fits(lo)) return 0;
+      for (let i = 0; i < 16; i += 1) {
+        const mid = (lo + hi) / 2;
+        if (fits(mid)) lo = mid;
+        else hi = mid;
+      }
+      return Math.min(roundedCap, lo);
+    }
+    case 'link': {
+      // Same bisection and the same well-posedness trick as the strong arm:
+      // `linkFootprintMm` is monotone increasing in r (it is a SUM of two
+      // `max()` terms, each individually non-decreasing), and an INFEASIBLE
+      // radius counts as fitting so the infeasible prefix leaves the predicate
+      // monotone. The rounded cap is taken too, so the per-joint rounded
+      // fallback always has room.
+      const fits = (radius: number): boolean => {
+        // The station extent is deliberately omitted (as the strong arm omits
+        // its band term): the gap-band budget is what `roundedCap` below covers,
+        // and this predicate is only about the SOLID footprint.
+        const footprint = linkFootprintMm(
+          radius,
+          clearance,
+          bendAngleDeg,
+          undefined,
+        );
+        return footprint === null || footprint <= minStationGap;
       };
       let lo = FLEXI_MIN_BALL_RADIUS_MM;
       let hi = maxLiveRadius(joints);
@@ -1907,6 +2190,619 @@ function strongFootprintMm(
     geometry.faceOffsetMm + strongAnchor(maxBallRadius),
     band,
   );
+  return head + tail + OVERLAP_MARGIN_MM;
+}
+
+// --- Link ("chain link") solved geometry -----------------------------------
+
+/**
+ * Solved link geometry, in the joint's NATIVE build frame
+ * (`v` = native +X = lateral, `u` = native +Y = up, `s` = native +Z = the joint
+ * axis, tail negative, zero on the cut plane). Every link solid is
+ * MIRROR-SYMMETRIC in `v`, so the sign ambiguity between `buildAxisFrame`'s `e2`
+ * and the build's `orientationMatrix` X column is harmless.
+ *
+ * Male A (TAIL) = HOOP: a rod of radius `a` on a circular arc of radius
+ *   `hoopRadiusMm` tilted `tiltRad` off the axis, whose crown sits ON the pin
+ *   axis at `s = pivotOffsetMm` and whose two legs descend at exactly the tilt
+ *   angle, cross the kerf and bury themselves `LINK_BURY_MM + anchorMm` into
+ *   tail material.
+ * Male B (HEAD) = BLADE: a flat disc of radius `bladeReachMm` and thickness
+ *   `bladeThicknessMm` on the sagittal mid-plane, centred on the pivot, pierced
+ *   by the EYE the hoop's own swept envelope carves out of it.
+ *
+ * NB `headRadiusMm` is the planner's ball radius echoed back. Link has NO ball —
+ * here `r` means "mechanism scale". The outer envelope it produces is comparable
+ * to the other styles (measured `hoopOuter ≈ 1.0·r`), but do not read the named
+ * number as a ball radius across styles.
+ *
+ * Three facts this construction buys, each of which a plan probe pins:
+ *  1. `ringWallMm ≥ LINK_RING_WALL_MM` ALWAYS, because `bladeReachMm` is
+ *     *defined* as `eyeOuter + wall + slack` (or larger). The eye ring can never
+ *     open.
+ *  2. `legSlabClearMm ≥ 0` ALWAYS, because `keyGapMm ≥ c + LINK_KEY_PAD_MIN_MM`
+ *     and that constant is exactly `SECONDARY_INFLATE_MAX + LEG_SLAB_MARGIN`.
+ *     The legs' envelope never reaches the blade slab, so `eyeOuterMm` comes
+ *     from the arc alone and is KERF- and TRAVEL-INDEPENDENT.
+ *  3. `pivotOffsetMm` is a function of `r` and `c` only. That is what makes the
+ *     build's travel ladder monotone (every gated quantity moves the right way
+ *     as travel drops), which in turn is what lets the suite assert that a dense
+ *     station degrades by losing travel rather than by falling back.
+ */
+export type LinkJointGeometry = {
+  /** The planner's ball radius, echoed. See the note above: link has no ball. */
+  headRadiusMm: number;
+  /** Hoop tube radius `a`. */
+  tubeRadiusMm: number;
+  /** Blade plate thickness `t`. */
+  bladeThicknessMm: number;
+  /** Radius of the hoop's centreline arc. */
+  hoopRadiusMm: number;
+  /** Tilt of the hoop plane off the joint axis (`LINK_TILT_DEG`). */
+  tiltRad: number;
+  /** Half-angle of the arc, i.e. the arc runs φ ∈ [−this, +this]. */
+  arcHalfAngleRad: number;
+  /** Leg ↔ blade lateral gap. This IS the joint's lateral free play. */
+  keyGapMm: number;
+  /** |v| of a leg centreline. */
+  legOffsetMm: number;
+  /** ≥ 0 by construction; exposed so a probe can assert it. */
+  legSlabClearMm: number;
+  /** Conservative max carve radius from the pin axis (the eye's outer bound). */
+  eyeOuterMm: number;
+  /** Blade disc radius. */
+  bladeReachMm: number;
+  /** `bladeReach − eyeOuter`, ≥ LINK_RING_WALL_MM by construction. */
+  ringWallMm: number;
+  /** `q`: the pivot sits this far HEAD-ward of the cut plane. Kerf- and
+   *  travel-INDEPENDENT — this is what makes the build's ladder monotone. */
+  pivotOffsetMm: number;
+  /** Buried horizontal leg run. */
+  anchorMm: number;
+  /** The yaw/roll the envelope is carved for (≤ LINK_SECONDARY_MAX_DEG). */
+  secondaryTravelDeg: number;
+  /** Chord sag paid back into every envelope radius (see LINK_ARC_SEGMENTS). */
+  chordSagMm: number;
+};
+
+/** The flat annular seam: constant thickness, on a plane of constant `s`. */
+export type LinkSeamProfile = {
+  /** Flat annular gap, constant all the way round. */
+  kerfMm: number;
+  /** DELIVERED pitch travel, ≤ requested; the exact inverse of the kerf law. */
+  travelDeg: number;
+  /**
+   * DELIVERED yaw (and the floor on roll): the SAME flat-kerf law, evaluated at
+   * the LATERAL half-extent instead of the bend one, capped by what the envelope
+   * was actually carved for (`geometry.secondaryTravelDeg`).
+   *
+   * WHY THIS IS NOT A CONSTANT. Yaw and pitch are both rotations about an
+   * in-plane axis, so both close the same flat kerf at the skin — pitch at the
+   * ±û rim, yaw at the ±v̂ rim. On a round body the two rims are the same
+   * distance out and yaw comes free with the bend; on a body far wider than it
+   * is deep (a finned tube, a fish on its side) the kerf is sized for the
+   * SHALLOW direction — which is what keeps the Flexibility slider alive there —
+   * and yaw closes first. Measured on an eccentric fin at bend 5° BEFORE the
+   * kerf carried a lateral budget: pitch stopped at 7.56°, yaw at 3.34°, on the
+   * same joint, and nothing told the user.
+   *
+   * So `solveLinkSeam` now budgets `LINK_SECONDARY_FLOOR_DEG` here explicitly,
+   * and this value drops below that floor only when the LOOK CEILING
+   * (`LINK_KERF_MAX_MM` / `LINK_KERF_MAX_FRACTION`) refuses the wider gap — a
+   * body so wide that a printable ring gap cannot open it. The build compares
+   * this against `secondaryTargetDeg` (NOT against
+   * `geometry.secondaryTravelDeg`) and raises 'link-sideways-reduced' whenever
+   * it falls short, so the number is never silent.
+   *
+   * Rolling about the joint axis does NOT close the kerf, so roll is bounded
+   * below by this too (measured 10–23° against a 4–6° value here).
+   */
+  secondaryTravelDeg: number;
+  /**
+   * What the kerf was actually BUDGETED to deliver sideways —
+   * `min(geometry.secondaryTravelDeg, LINK_SECONDARY_FLOOR_DEG, travelDeg)`.
+   *
+   * This is the honest baseline for 'link-sideways-reduced', and comparing
+   * against anything else makes the warning fire by construction. The kerf is
+   * never sized to give `min(bendAngleDeg, LINK_SECONDARY_MAX_DEG)` of yaw at
+   * the LATERAL rim — only the floor — so on any body wider than it is deep
+   * `secondaryTravelDeg` sits below `geometry.secondaryTravelDeg` at every bend
+   * whose budget the ceiling can afford, which is the normal, healthy case.
+   *
+   * Measured before this field existed: wingedEccentric c=0.30 bend=5 raised
+   * "2 joints only twist about 4° side to side" while the BUILT solids yawed
+   * 5.80° and 5.62° — above the published figure and above the 5° requested.
+   * The warning was firing on joints that met the request. It now fires only
+   * when the delivered yaw is under the floor the style publishes (§4.5), which
+   * is the case a user can actually act on.
+   */
+  secondaryTargetDeg: number;
+  /** Male reach past the head rim == female reach past the tail rim. */
+  engagementMm: number;
+  /** Radius of the kerf disc. */
+  outerRadiusMm: number;
+};
+
+/** The hoop centreline the plan and the build both walk, so they cannot drift. */
+export type LinkHoopPolyline = {
+  /** Native frame `[v, u, s]`, mirror-symmetric in v, tail → head → tail. */
+  points: Vec3[];
+  /** Core tube radius. */
+  coreRadiusMm: number;
+  /** Per-point FAT radius — the only place clearance enters the geometry. */
+  envRadiusMm: number[];
+  pivotOffsetMm: number;
+};
+
+/**
+ * Solve the link hoop/blade for a mechanism scale, clearance and bend angle.
+ * Pure — the plan and the build both call it. Returns null when infeasible (the
+ * plan then judges containment by the rounded cup and the build carves the
+ * rounded groove); it never clamps a floor away silently.
+ *
+ * Feasibility is a THRESHOLD in `r` (`r ≥ LINK_MIN_HEAD_RADIUS_MM`, everything
+ * else being affine-with-floors), so it is monotone increasing in `r` — the
+ * obligation `jointOverlapCap`'s bisection and `sizeJoint`'s hard-stop rule both
+ * depend on.
+ */
+export function solveLinkJointGeometry(
+  ballRadiusMm: number,
+  clearanceMm: number,
+  bendAngleDeg: number,
+): LinkJointGeometry | null {
+  const r = ballRadiusMm;
+  const c = clearanceMm;
+  if (!(r >= LINK_MIN_HEAD_RADIUS_MM)) return null;
+  if (!(c > 0) || !(bendAngleDeg > 0) || !Number.isFinite(bendAngleDeg)) {
+    return null;
+  }
+  const a = Math.max(LINK_TUBE_MIN_MM, LINK_TUBE_FRACTION * r);
+  const t = Math.max(LINK_BLADE_MIN_MM, LINK_BLADE_FRACTION * r);
+  const secDeg = Math.min(bendAngleDeg, LINK_SECONDARY_MAX_DEG);
+  const halfFace = t / 2 + c;
+  const headroom = Math.max(
+    LINK_ARC_HEADROOM_MIN_MM,
+    LINK_ARC_HEADROOM_FRACTION * r,
+  );
+  // `Rm − (a + c) = halfFace + headroom > halfFace`, so the FAT arc can never
+  // close across the blade slab: this single inequality is why the eye is
+  // guaranteed open at every lateral station, with no containment algebra.
+  const hoopRadius = halfFace + headroom + a + c;
+  const tiltRad = (LINK_TILT_DEG * Math.PI) / 180;
+  const sinHalfSec = Math.sin((secDeg * Math.PI) / 360);
+  const sinSec = Math.sin((secDeg * Math.PI) / 180);
+  const sagK = 1 - Math.cos((bendAngleDeg * Math.PI) / 360);
+
+  // Short fixed point: the key gap depends on the blade reach, which depends on
+  // the eye, which depends on where the legs leave the arc, which depends on the
+  // key gap. A contraction — it settles in three passes in practice.
+  let keyGap = c + LINK_KEY_PAD_MIN_MM;
+  let bladeReach = LINK_BLADE_REACH_FRACTION * r;
+  let legOffset = t / 2 + keyGap + a;
+  let arcHalf = 0;
+  let eyeOuter = 0;
+  let legSagitta = 0;
+  const chordSagOf = (half: number): number =>
+    hoopRadius * (1 - Math.cos(half / (2 * LINK_ARC_SEGMENTS)));
+  for (let i = 0; i < LINK_SOLVE_ITERATIONS; i += 1) {
+    legOffset = t / 2 + keyGap + a;
+    if (!(legOffset < 0.95 * hoopRadius)) return null;
+    arcHalf = Math.asin(legOffset / hoopRadius);
+    // The eye's outer bound, from the ARC spheres only (the legs are held out of
+    // the blade slab by the keyGap floor — see `legSlabClearMm`).
+    eyeOuter = 0;
+    for (let k = 0; k <= LINK_ARC_SEGMENTS; k += 1) {
+      const phi = (arcHalf * k) / LINK_ARC_SEGMENTS;
+      const v = hoopRadius * Math.sin(phi);
+      const d = hoopRadius * (1 - Math.cos(phi)); // distance from the pin axis
+      const chord = 2 * hoopRadius * Math.sin(phi / 2); // distance from the pivot
+      const radius =
+        a +
+        c +
+        Math.min(2 * chord * sinHalfSec, LINK_SECONDARY_INFLATE_MAX_MM) +
+        d * sagK;
+      const excess = Math.max(0, v - t / 2);
+      if (excess >= radius) continue; // this sphere never reaches the slab
+      eyeOuter = Math.max(
+        eyeOuter,
+        d + Math.sqrt(radius * radius - excess * excess),
+      );
+    }
+    eyeOuter += LINK_EYE_MARGIN_MM;
+    bladeReach = Math.max(
+      eyeOuter + LINK_RING_WALL_MM + LINK_RING_SLACK_MM,
+      LINK_BLADE_REACH_FRACTION * r,
+    );
+    // How far the legs reach from the PIN AXIS in the worst case this joint can
+    // ever be built at — evaluated at the kerf CEILING, which is the widest gap
+    // any station can ask for, so this estimate is non-circular (it never reads
+    // the station's own kerf) and conservative.
+    //
+    // WHY IT IS HERE AT ALL. The design's `legSlabClear` counted only the
+    // secondary allowance, and that is not the whole envelope: every sphere also
+    // carries a pitch SAGITTA proportional to its distance from the pin axis,
+    // and the leg tip is the furthest point of the whole polyline. Measured at
+    // r=3.2, c=0.3, bend 25 the knee's envelope overshot the key gap by 0.06mm
+    // and reached into the blade slab — which would quietly invalidate the ONE
+    // claim the eye estimate rests on, that `eyeOuterMm` may be maximised over
+    // the ARC alone. Paying for it in the key gap keeps that claim true.
+    const q = (bladeReach - a) / 2;
+    const anchor = Math.max(LINK_ANCHOR_MIN_MM, LINK_ANCHOR_FRACTION * r);
+    const arcEndAxial = hoopRadius * (1 - Math.cos(arcHalf));
+    const endU = -arcEndAxial * Math.sin(tiltRad);
+    const endS = q - arcEndAxial * Math.cos(tiltRad);
+    const kneeS = -(LINK_KERF_MAX_MM / 2 + LINK_BURY_MM);
+    const drop = Math.max(0.2, endS - kneeS) * Math.tan(tiltRad);
+    // Capped at the blade's own reach for the reason `linkHoopPolyline` caps it:
+    // past that radius from the pivot, on the tail side, there is no head
+    // material for the swept leg to meet.
+    const legAxisDistance = Math.min(
+      bladeReach,
+      Math.max(
+        Math.hypot(endU, endS - q),
+        Math.hypot(endU - drop, kneeS - q),
+        Math.hypot(endU - drop, kneeS - anchor - q),
+      ),
+    );
+    legSagitta = legAxisDistance * sagK + chordSagOf(arcHalf);
+    const nextKey =
+      c +
+      Math.max(
+        LINK_KEY_PAD_MIN_MM + legSagitta,
+        bladeReach * sinSec + LINK_KEY_MARGIN_MM,
+        LINK_KEY_PAD_FRACTION * r,
+      );
+    const settled = Math.abs(nextKey - keyGap) < 1e-9;
+    keyGap = nextKey;
+    if (settled) break;
+  }
+  legOffset = t / 2 + keyGap + a;
+  if (!(legOffset < 0.95 * hoopRadius)) return null;
+  arcHalf = Math.asin(legOffset / hoopRadius);
+
+  return {
+    headRadiusMm: r,
+    tubeRadiusMm: a,
+    bladeThicknessMm: t,
+    hoopRadiusMm: hoopRadius,
+    tiltRad,
+    arcHalfAngleRad: arcHalf,
+    keyGapMm: keyGap,
+    legOffsetMm: legOffset,
+    // ≥ 0 by construction: keyGap ≥ c + LINK_KEY_PAD_MIN_MM + legSagitta and
+    // LINK_KEY_PAD_MIN_MM is exactly SECONDARY_INFLATE_MAX + LEG_SLAB_MARGIN.
+    legSlabClearMm:
+      legOffset -
+      a -
+      c -
+      LINK_SECONDARY_INFLATE_MAX_MM -
+      legSagitta -
+      t / 2 -
+      LINK_LEG_SLAB_MARGIN_MM,
+    eyeOuterMm: eyeOuter,
+    bladeReachMm: bladeReach,
+    ringWallMm: bladeReach - eyeOuter,
+    pivotOffsetMm: (bladeReach - a) / 2,
+    anchorMm: Math.max(LINK_ANCHOR_MIN_MM, LINK_ANCHOR_FRACTION * r),
+    secondaryTravelDeg: secDeg,
+    chordSagMm: chordSagOf(arcHalf),
+  };
+}
+
+/**
+ * The angle a flat kerf of thickness `kerfMm` allows about an in-plane axis
+ * through a pivot `pivotOffsetMm` head-ward of the cut plane, for a rim
+ * `rhoMm` out in the direction that closes.
+ *
+ * Exact inverse of the kerf law `kerf = 2·y·(rho − q·y) + c`, `y = tan(θ/2)`:
+ * `2q·y² − 2ρ·y + (kerf − c) = 0`. Shared by the pitch and the secondary so the
+ * two provably obey the same law and cannot drift apart — the only difference
+ * between them is WHICH half-extent is handed in.
+ */
+export function linkFlatKerfAngleDeg(
+  pivotOffsetMm: number,
+  rhoMm: number,
+  kerfMm: number,
+  clearanceMm: number,
+): number {
+  const q = pivotOffsetMm;
+  const rho = Math.max(0, rhoMm);
+  const k = Math.max(0, kerfMm - clearanceMm);
+  let y: number;
+  if (q > 1e-6) {
+    const disc = rho * rho - 2 * q * k;
+    y = disc <= 0 ? Infinity : (rho - Math.sqrt(disc)) / (2 * q);
+  } else {
+    y = rho > 1e-9 ? k / (2 * rho) : Infinity;
+  }
+  return Number.isFinite(y) ? (2 * Math.atan(y) * 180) / Math.PI : Infinity;
+}
+
+/**
+ * The flat kerf, the pitch it actually delivers, and the yaw it actually
+ * delivers.
+ *
+ * `rhoBendMm` is the skin half-extent in the BEND direction (±û); `rhoLatMm` is
+ * the half-extent in the LATERAL direction (±v̂); `rhoMaxMm` is the widest,
+ * used only for the look ceiling and the disc radius.
+ *
+ * Splitting bend from max is what keeps the Flexibility slider alive on a flat,
+ * wide body: a fish is wide and shallow and its bend closes at the SHALLOW
+ * radius, so sizing the gap by the widest direction would throw most of the
+ * range away. The price of that choice — and it is a real price, not an
+ * oversight — is that YAW then closes at the wide radius. So the kerf carries
+ * TWO budgets: the full requested pitch at `rhoBendMm`, and
+ * `LINK_SECONDARY_FLOOR_DEG` of sideways travel at `rhoLatMm`. Whatever survives
+ * the look ceiling is reported in `secondaryTravelDeg`, which is measured rather
+ * than assumed. `rhoLatMm` defaults to `rhoBendMm`, i.e. the isotropic
+ * assumption, under which the lateral budget is a strict subset of the pitch one
+ * and this function is unchanged; the build measures it for real.
+ *
+ * Total: the floor always wins the clamp, so `rhoMax = 0` (which
+ * `PlacedJoints.maxStationExtentMm` documents as reachable) still yields a
+ * finite kerf and a finite travel.
+ */
+export function solveLinkSeam(
+  geometry: LinkJointGeometry,
+  rhoBendMm: number,
+  rhoMaxMm: number,
+  clearanceMm: number,
+  travelDeg: number,
+  rhoLatMm: number = rhoBendMm,
+): LinkSeamProfile {
+  const q = geometry.pivotOffsetMm;
+  const rhoBend = Math.max(0, rhoBendMm);
+  const rhoMax = Math.max(0, rhoMaxMm);
+  const kerfFloor = Math.max(
+    LINK_KERF_MIN_MM,
+    clearanceMm + LINK_KERF_CLEAR_MM,
+  );
+  const kerfCeil = Math.max(
+    kerfFloor,
+    Math.min(LINK_KERF_MAX_MM, LINK_KERF_MAX_FRACTION * rhoMax),
+  );
+  // Rims still `c` apart at full travel: the head rim swings down by
+  // `2·y·(rhoBend − q·y)` about a pivot `q` head-ward of the plane, `y =
+  // tan(θ/2)`. That parabola turns over at `y = rhoBend/(2q)`; past the vertex
+  // the expression is no longer the rim drop (it would need the rim to be inside
+  // the pivot's own rotation), and — because the build's ladder relies on the
+  // kerf being MONOTONE NON-DECREASING in the travel — letting it fall off the
+  // far side would break the one property that makes the ladder a genuine relief
+  // mechanism. So clamp to the vertex, which is exactly the largest rim drop
+  // this joint can ever ask for. (Reachable in principle at a large pivot offset
+  // on a very thin station; the exact inverse below agrees, since its
+  // discriminant vanishes at precisely the same point.)
+  const raw = Math.tan((Math.max(0, travelDeg) * Math.PI) / 360);
+  const half = q > 1e-6 ? Math.min(raw, rhoBend / (2 * q)) : raw;
+  const want = 2 * half * (rhoBend - q * half) + clearanceMm;
+  // The SAME law at the LATERAL rim, for the sideways floor. Without this term
+  // the kerf budgets pitch only, and yaw is left with whatever that happens to
+  // leave at a rim that can be three times further out — measured 3.34° against
+  // a 5° slider on a finned body, with no warning, because nothing had asked for
+  // it. Three properties make it safe to add here rather than anywhere else:
+  //   • it is capped at `travelDeg`, so it is non-decreasing in the travel like
+  //     `want` is, and the build's ladder stays a genuine relief mechanism;
+  //   • with `rhoLat === rhoBend` (every round body, and every plan-side call,
+  //     which has no lateral measurement) it is a SUBSET of `want` at every
+  //     ladder step, so isotropic geometry is bit-for-bit unchanged;
+  //   • it is a floor on the SEAM, not on the mechanism — the envelope was
+  //     already carved for `geometry.secondaryTravelDeg` ≥ this.
+  const secTarget = Math.min(
+    geometry.secondaryTravelDeg,
+    LINK_SECONDARY_FLOOR_DEG,
+    Math.max(0, travelDeg),
+  );
+  const rhoLat = Math.max(0, rhoLatMm);
+  const latRaw = Math.tan((secTarget * Math.PI) / 360);
+  const latHalf = q > 1e-6 ? Math.min(latRaw, rhoLat / (2 * q)) : latRaw;
+  const wantLateral = 2 * latHalf * (rhoLat - q * latHalf) + clearanceMm;
+  const kerf = Math.min(
+    Math.max(want, wantLateral, kerfFloor),
+    Math.max(kerfCeil, kerfFloor),
+  );
+  const delivered = Math.min(
+    travelDeg,
+    linkFlatKerfAngleDeg(q, rhoBend, kerf, clearanceMm),
+  );
+  // What that kerf actually delivers sideways, capped by what the envelope is
+  // carved for. Equal to the pitch on a round body; smaller on a finned one, and
+  // smaller than `secTarget` only when the LOOK CEILING refused the budget above
+  // — which is exactly when the build must say so ('link-sideways-reduced').
+  const secondary = Math.min(
+    geometry.secondaryTravelDeg,
+    linkFlatKerfAngleDeg(q, rhoLat, kerf, clearanceMm),
+  );
+  return {
+    kerfMm: kerf,
+    travelDeg: delivered,
+    secondaryTravelDeg: secondary,
+    secondaryTargetDeg: secTarget,
+    engagementMm: q + geometry.tubeRadiusMm - kerf / 2,
+    outerRadiusMm: LINK_KERF_OUT_FACTOR * rhoMax + 1,
+  };
+}
+
+/**
+ * The hoop's centreline and its per-point envelope radii, shared byte-for-byte
+ * between the solver (which walks it for containment and the clip gate) and the
+ * build (which walks it to emit hulls). Nothing is revolved, so there is no
+ * partial-sweep arithmetic to get wrong, and the arc→leg knee needs no basis
+ * mapping.
+ *
+ * The envelope radius is `a + c`, plus the secondary-travel allowance
+ * (a rotation by `sec` about the pivot moves a point at distance `L` by
+ * `2L·sin(sec/2)`), plus the pitch SAGITTA — the chord error of approximating
+ * the continuous pitch sweep by three rotation samples, which is exactly
+ * `dist(p, pin axis)·(1 − cos(travel/2))` — plus the polyline's own chord sag.
+ * With those terms the union of the three hulls is a PROVEN SUPERSET of the
+ * continuously swept fat hoop.
+ */
+export function linkHoopPolyline(
+  geometry: LinkJointGeometry,
+  seam: LinkSeamProfile,
+  clearanceMm: number,
+): LinkHoopPolyline {
+  const {
+    hoopRadiusMm: hoopRadius,
+    tiltRad: tilt,
+    arcHalfAngleRad: arcHalf,
+    tubeRadiusMm: a,
+    pivotOffsetMm: q,
+  } = geometry;
+  const sinTilt = Math.sin(tilt);
+  const cosTilt = Math.cos(tilt);
+  const arc: Vec3[] = [];
+  for (let i = -LINK_ARC_SEGMENTS; i <= LINK_ARC_SEGMENTS; i += 1) {
+    const phi = (arcHalf * i) / LINK_ARC_SEGMENTS;
+    arc.push([
+      hoopRadius * Math.sin(phi),
+      hoopRadius * (Math.cos(phi) - 1) * sinTilt,
+      q + hoopRadius * (Math.cos(phi) - 1) * cosTilt,
+    ]);
+  }
+  // The arc END is at |v| = legOffset exactly, by construction of arcHalf. From
+  // there each leg descends at EXACTLY the tilt angle (a 52° overhang, inside
+  // the normal FDM window) until it is LINK_BURY_MM inside tail material, then
+  // runs horizontally for the anchor — a run that unions with solid body and so
+  // is not an unsupported feature at all.
+  const end = arc[arc.length - 1];
+  const kneeS = -(seam.kerfMm / 2 + LINK_BURY_MM);
+  const drop = Math.max(0.2, end[2] - kneeS) * Math.tan(tilt);
+  const knee: Vec3 = [geometry.legOffsetMm, end[1] - drop, kneeS];
+  const tip: Vec3 = [
+    geometry.legOffsetMm,
+    end[1] - drop,
+    kneeS - geometry.anchorMm,
+  ];
+  const points: Vec3[] = [
+    [-tip[0], tip[1], tip[2]],
+    [-knee[0], knee[1], knee[2]],
+    ...arc,
+    knee,
+    tip,
+  ];
+
+  const sinHalfSec = Math.sin((geometry.secondaryTravelDeg * Math.PI) / 360);
+  const sagK = 1 - Math.cos((Math.max(0, seam.travelDeg) * Math.PI) / 360);
+  const envRadiusMm = points.map((p) => {
+    const chord = Math.hypot(p[0], p[1], p[2] - q);
+    // The sagitta covers the chord error of the three-sample pitch sweep WHERE
+    // THE TWO BODIES CAN MEET. Past `bladeReachMm` from the pivot there is no
+    // head material on the tail side to meet — the blade disc is that radius and
+    // the head body itself starts beyond the kerf — so charging the leg tip its
+    // full 6mm lever arm would only inflate the key gap (and shrink the legal
+    // radius range) to guard a collision that has no second party. The cap never
+    // touches the ARC: `hoopRadiusMm < bladeReachMm` across the whole box, which
+    // plan probe P1 asserts.
+    const axisDistance = Math.min(
+      geometry.bladeReachMm,
+      Math.hypot(p[1], p[2] - q),
+    );
+    return (
+      a +
+      clearanceMm +
+      Math.min(2 * chord * sinHalfSec, LINK_SECONDARY_INFLATE_MAX_MM) +
+      axisDistance * sagK +
+      geometry.chordSagMm
+    );
+  });
+  return { points, coreRadiusMm: a, envRadiusMm, pivotOffsetMm: q };
+}
+
+/** Largest `hypot(u, v) + envelope` over the hoop — what the skin clip must clear. */
+export function linkHoopOuterMm(poly: LinkHoopPolyline): number {
+  let outer = 0;
+  for (let i = 0; i < poly.points.length; i += 1) {
+    const p = poly.points[i];
+    outer = Math.max(outer, Math.hypot(p[0], p[1]) + poly.envRadiusMm[i]);
+  }
+  return outer;
+}
+
+/**
+ * Containment gate for the link style. Conservative and ISOTROPIC (it reads the
+ * same thinnest-direction reducer `socketContainedAlongReach` uses, so a thin
+ * fin cannot fool it), and — unlike a single worst-case station — it contains
+ * EVERY hoop sphere at ITS OWN axial station, because a tapering body narrows
+ * exactly where the leg anchor lands.
+ */
+function linkCavityFits(
+  profile: CrossSectionProfile,
+  ballRadiusMm: number,
+  clearanceMm: number,
+  bendAngleDeg: number,
+  rhoMm: number,
+  wallMm: number = FLEXI_MIN_SOCKET_WALL_MM,
+): boolean {
+  const geometry = solveLinkJointGeometry(
+    ballRadiusMm,
+    clearanceMm,
+    bendAngleDeg,
+  );
+  if (!geometry) return false;
+  // The planner does not know the build's `rhoBend`, and a WIDER kerf pushes the
+  // legs further tailward, so judge with the widest kerf this station could ask
+  // for rather than the optimistic one.
+  const seam = solveLinkSeam(geometry, rhoMm, rhoMm, clearanceMm, bendAngleDeg);
+  const poly = linkHoopPolyline(geometry, seam, clearanceMm);
+  for (let i = 0; i < poly.points.length; i += 1) {
+    const [v, u, s] = poly.points[i];
+    if (
+      Math.hypot(u, v) + poly.envRadiusMm[i] + wallMm >
+      crossSectionAt(profile, s) + 1e-6
+    ) {
+      return false;
+    }
+  }
+  for (let j = 0; j <= CONTAINMENT_SAMPLES; j += 1) {
+    const d =
+      geometry.pivotOffsetMm -
+      geometry.bladeReachMm +
+      (2 * geometry.bladeReachMm * j) / CONTAINMENT_SAMPLES;
+    const dv = d - geometry.pivotOffsetMm;
+    const needed =
+      Math.sqrt(
+        Math.max(0, geometry.bladeReachMm * geometry.bladeReachMm - dv * dv),
+      ) + wallMm;
+    if (needed > crossSectionAt(profile, d) + 1e-6) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Axial footprint one link joint claims along the spine. A SUM of two `max()`
+ * terms rather than a `max` of two sums, which is what keeps it monotone in `r`
+ * — the precondition `jointOverlapCap`'s bisection needs. (A
+ * `max(mechanism, kerf + keep)` form is V-shaped in general and would break it.)
+ */
+function linkFootprintMm(
+  maxBallRadius: number,
+  clearance: number,
+  bendAngleDeg: number | undefined,
+  maxStationExtentMm: number | undefined,
+): number | null {
+  if (bendAngleDeg === undefined) return null;
+  const geometry = solveLinkJointGeometry(
+    maxBallRadius,
+    clearance,
+    bendAngleDeg,
+  );
+  if (!geometry) return null;
+  const extent = maxStationExtentMm ?? 0;
+  const seam = solveLinkSeam(geometry, extent, extent, clearance, bendAngleDeg);
+  const q = geometry.pivotOffsetMm;
+  const head =
+    Math.max(
+      seam.kerfMm / 2,
+      q + geometry.tubeRadiusMm + clearance + LINK_SECONDARY_INFLATE_MAX_MM,
+    ) + FLEXI_MIN_SOCKET_WALL_MM;
+  const tail =
+    Math.max(
+      seam.kerfMm / 2 + LINK_BURY_MM + geometry.anchorMm,
+      geometry.bladeReachMm - q + clearance,
+    ) + FLEXI_MIN_SOCKET_WALL_MM;
   return head + tail + OVERLAP_MARGIN_MM;
 }
 

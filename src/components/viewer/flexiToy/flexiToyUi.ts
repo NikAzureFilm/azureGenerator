@@ -20,7 +20,10 @@ import {
  * makes any stray reference to a hidden style a compile error rather than a
  * silently dead branch.
  */
-export type FlexiUiJointStyle = Extract<FlexiJointStyle, 'shell' | 'strong'>;
+export type FlexiUiJointStyle = Extract<
+  FlexiJointStyle,
+  'shell' | 'strong' | 'link'
+>;
 
 /** The style the dialog opens with. */
 export const DEFAULT_JOINT_STYLE: FlexiUiJointStyle = 'strong';
@@ -88,6 +91,12 @@ export type FlexiStyleDefaults = {
   showOriginalColors: boolean;
 };
 
+/**
+ * NB no LINK_DEFAULTS. The reference chain-link look — a ring gap that is
+ * 0.10–0.13 of the local body radius — lands at `bendAngleDeg ≈ 8`, which is
+ * exactly what `SHELL_DEFAULTS` already opens with, so Link needs no literal of
+ * its own until the product wants the styles to re-seed the controls.
+ */
 export const SHELL_DEFAULTS: FlexiStyleDefaults = {
   segmentMode: 'custom',
   segmentCountCustom: 5,

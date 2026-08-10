@@ -634,7 +634,7 @@ export function FlexiToyDialog({
               <div
                 role="radiogroup"
                 aria-label="Joint style"
-                className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2"
+                className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 min-[560px]:grid-cols-3"
               >
                 <StyleCard
                   selected={jointStyle === 'shell'}
@@ -647,6 +647,12 @@ export function FlexiToyDialog({
                   title="Strong"
                   description="Open gaps and a hinge bar — captive joint"
                   onSelect={() => setJointStyle('strong')}
+                />
+                <StyleCard
+                  selected={jointStyle === 'link'}
+                  title="Link"
+                  description="Threaded rings — a hoop through a slot, with a flat gap"
+                  onSelect={() => setJointStyle('link')}
                 />
               </div>
             </div>
@@ -808,10 +814,19 @@ export function FlexiToyDialog({
                 defaultValue={[SHELL_DEFAULTS.bendAngleDeg]}
                 onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
               />
+              {/* A switch, not a ternary, so a fourth style is a
+                  compile-visible edit rather than a silent fall-through. */}
               <p className="mt-1 text-xs text-adam-text-secondary/80">
-                {jointStyle === 'strong'
-                  ? 'How far each joint can bend. Bigger bends open the gap between segments wider.'
-                  : 'How far each joint can bend.'}
+                {((): string => {
+                  switch (jointStyle) {
+                    case 'strong':
+                      return 'How far each joint can bend. Bigger bends open the gap between segments wider.';
+                    case 'link':
+                      return 'How far each joint bends up and down. Link shows the bend as a flat ring gap, so on a chunky model the gap — and the bend — stop growing before the slider does, and each joint only twists a few degrees side to side.';
+                    case 'shell':
+                      return 'How far each joint can bend.';
+                  }
+                })()}
               </p>
             </div>
 

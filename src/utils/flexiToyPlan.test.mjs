@@ -7,6 +7,21 @@ import {
   minSegmentLengthFor,
   solveStrongJointGeometry,
   strongPullPlay,
+  solveLinkJointGeometry,
+  solveLinkSeam,
+  linkHoopPolyline,
+  linkHoopOuterMm,
+  linkFlatKerfAngleDeg,
+  LINK_SECONDARY_MAX_DEG,
+  LINK_SECONDARY_FLOOR_DEG,
+  LINK_RING_WALL_MM,
+  LINK_ENGAGE_MIN_MM,
+  LINK_TILT_DEG,
+  LINK_ARC_SEGMENTS,
+  LINK_SECONDARY_INFLATE_MAX_MM,
+  LINK_KERF_MAX_MM,
+  LINK_KERF_MAX_FRACTION,
+  LINK_CLAMP_STEPS,
 } from './flexiToyPlan.ts';
 import {
   FLEXI_MIN_BALL_RADIUS_MM,
@@ -1348,6 +1363,829 @@ for (const r of STRONG_RADII) {
     maxAxial < 1.11,
     `pull-out slop over the legal box tops out at the loosest budget (got ${maxAxial.toFixed(3)})`,
   );
+}
+
+// --- LINK style: solver invariants ----------------------------------------
+
+// (P0) Link shares neither the rounded cup-containment gate nor the bowl gap
+// (its faceGapMm is only the fallback's carrier), so the decision that it is not
+// a rounded-family style is RECORDED here rather than inherited by accident.
+assert.equal(
+  isRoundedFamilyJointStyle('link'),
+  false,
+  'link is not a rounded-family style',
+);
+
+const LINK_RADII = [3.2, 3.5, 4, 5, 6, 8, 10, 12];
+const LINK_CLEARANCES = [0.3, 0.4, 0.55, 0.8];
+const LINK_BENDS = [5, 8, 12, 25];
+const LINK_KEY_PAD_MIN_MM = 0.5;
+const LINK_BLADE_MIN_MM = 1.6;
+// The DELIVERED ring wall is checked against this hard-coded literal, never
+// against the imported `LINK_RING_WALL_MM`. Comparing solver output to the
+// constant that produced it moves together under mutation: zeroing the constant
+// zeroes the threshold and the assertion passes vacuously. That is not
+// hypothetical here — `bladeReachMm = max(eyeOuter + wall + slack, 0.95·r)`, and
+// the 0.95·r floor dominates everywhere EXCEPT r ≈ 3.2–3.5, so the constant is
+// the only thing holding the contract in exactly the band this sweep visits
+// first. With the constant zeroed the delivered wall falls to 1.188mm at
+// r = 3.2, c = 0.55 — under the published 1.2mm — and every imported-constant
+// assertion still passes. This literal is what actually catches that.
+const LINK_RING_WALL_CONTRACT_MM = 1.2;
+const LINK_TUBE_MIN_MM = 0.8;
+
+// The published contract constants, pinned to LITERALS. Every other assertion
+// below (and every built-solid probe in the build suite) compares against the
+// IMPORTED constants — which is right, because a solver-vs-solver comparison
+// moves together and would survive gutting the geometry. But it leaves one hole:
+// zeroing a constant makes every assertion that reads it VACUOUSLY true. These
+// three literals close it, so a mutation to any of them fails here in one second
+// rather than passing a seven-minute build suite unnoticed.
+assert.equal(LINK_RING_WALL_MM, 1.2, 'link ring wall contract is 1.2mm');
+assert.equal(
+  LINK_RING_WALL_MM,
+  FLEXI_MIN_SOCKET_WALL_MM,
+  'link ring wall tracks the shared printable wall floor',
+);
+assert.equal(LINK_ENGAGE_MIN_MM, 1, 'link engagement floor contract is 1.0mm');
+assert.equal(
+  LINK_TILT_DEG,
+  38,
+  'link hoop tilt contract is 38° (52° overhang)',
+);
+assert.equal(
+  LINK_SECONDARY_INFLATE_MAX_MM,
+  0.45,
+  'link secondary allowance cap contract is 0.45mm',
+);
+assert.equal(LINK_KERF_MAX_MM, 4.5, 'link kerf ceiling contract is 4.5mm');
+assert.equal(
+  LINK_KERF_MAX_FRACTION,
+  0.3,
+  'link kerf share of the local radius contract is 0.30',
+);
+
+// (P1) The solver's own contracts, over the whole legal box. Every one of these
+// is a property the CARVED eye and the ladder's monotonicity rest on.
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      assert.ok(
+        g,
+        `link solves inside the box (r=${r} c=${c} b=${bendAngleDeg})`,
+      );
+      const where = `r=${r} c=${c} b=${bendAngleDeg}`;
+      assert.ok(
+        g.ringWallMm >= LINK_RING_WALL_CONTRACT_MM - 1e-9,
+        `link keeps blade material round the eye (${where}: ${g.ringWallMm.toFixed(4)} < ${LINK_RING_WALL_CONTRACT_MM})`,
+      );
+      assert.ok(
+        g.legSlabClearMm >= -1e-9,
+        `link legs stay out of the blade slab (${where}: ${g.legSlabClearMm.toFixed(4)})`,
+      );
+      assert.ok(
+        g.bladeThicknessMm >= LINK_BLADE_MIN_MM - 1e-9,
+        `link blade is printable (${where}: ${g.bladeThicknessMm.toFixed(3)})`,
+      );
+      assert.ok(
+        g.tubeRadiusMm >= LINK_TUBE_MIN_MM - 1e-9,
+        `link rod is printable (${where}: ${g.tubeRadiusMm.toFixed(3)})`,
+      );
+      assert.ok(
+        g.pivotOffsetMm > 0,
+        `link pivot sits head-ward of the cut plane (${where})`,
+      );
+      assert.ok(
+        g.keyGapMm >= c + LINK_KEY_PAD_MIN_MM - 1e-9,
+        `link key gap keeps its floor (${where}: ${g.keyGapMm.toFixed(4)})`,
+      );
+      // The eye-open inequality: the FAT arc's inner face clears the FAT blade
+      // slab, which is why the ring can never close across the plate.
+      assert.ok(
+        g.hoopRadiusMm - (g.tubeRadiusMm + c) >
+          g.bladeThicknessMm / 2 + c + 1e-9,
+        `link arc clears the fat blade slab (${where})`,
+      );
+      // Every ARC point lies within the blade's own reach of the pin axis (an
+      // arc point at φ sits exactly `Rm·(1 − cos φ)` from it), which is what
+      // licenses `linkHoopPolyline` to cap the pitch sagitta at that radius: the
+      // cap then provably only ever touches the LEGS, which are buried in tail
+      // material where there is no head material to collide with.
+      const arcAxisMax = g.hoopRadiusMm * (1 - Math.cos(g.arcHalfAngleRad));
+      assert.ok(
+        arcAxisMax < g.bladeReachMm,
+        `link arc lies inside the blade reach (${where}: ${arcAxisMax.toFixed(3)} vs ${g.bladeReachMm.toFixed(3)})`,
+      );
+    }
+  }
+}
+
+// (P2) The build's travel ladder solves the GEOMETRY once and then walks only
+// the seam, so what the ladder's monotonicity actually needs is:
+//   (a) `solveLinkSeam` never moves the pivot offset (or any other geometry
+//       field) — it is a pure function of a frozen geometry, and
+//   (b) with the geometry frozen, the kerf is MONOTONE NON-DECREASING in the
+//       travel, which is what makes every gated quantity (engagement, envelope
+//       radius, both neighbour reaches, the anchor depth) move the right way as
+//       the ladder steps down.
+//
+// SPEC DEVIATION, recorded here rather than hidden: the design also claimed
+// `pivotOffsetMm` is identical for every bend angle. It is not — `eyeOuterMm`
+// carries a bend-driven sagitta term and, on small joints, that term is what
+// binds `bladeReachMm` (measured: r=3.2, c=0.3 gives q = 1.1415 at bend 5 and
+// 1.1625 at bend 8). Nothing depends on the stronger claim; the ladder holds the
+// geometry FIXED, which is the property asserted below.
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      const frozen = JSON.stringify(g);
+      for (const rho of [0, 1.5, 4, 12, 30]) {
+        let previousKerf = -Infinity;
+        for (let step = 0; step < 8; step += 1) {
+          const travel = 1 + ((bendAngleDeg - 1) * step) / 7; // the ladder, walked upward
+          const seam = solveLinkSeam(g, rho, rho, c, travel);
+          assert.ok(
+            Number.isFinite(seam.kerfMm) && seam.kerfMm > 0,
+            `link seam is finite (r=${r} c=${c} travel=${travel} rho=${rho})`,
+          );
+          assert.ok(
+            seam.kerfMm >= previousKerf - 1e-12,
+            `link kerf is monotone in travel (r=${r} c=${c} rho=${rho} travel=${travel.toFixed(2)}: ${seam.kerfMm} < ${previousKerf})`,
+          );
+          previousKerf = seam.kerfMm;
+          assert.equal(
+            JSON.stringify(g),
+            frozen,
+            'solveLinkSeam never mutates the geometry it is handed',
+          );
+        }
+      }
+    }
+  }
+}
+
+// (P3) Feasibility is MONOTONE INCREASING in r — same obligation as strong's.
+for (const c of LINK_CLEARANCES) {
+  for (const bendAngleDeg of LINK_BENDS) {
+    for (let r = 2.5; r <= 12.0001; r += 0.05) {
+      if (!solveLinkJointGeometry(r, c, bendAngleDeg)) continue;
+      assert.ok(
+        solveLinkJointGeometry(r + 0.2, c, bendAngleDeg) !== null,
+        `link feasibility is monotone in r (r=${r.toFixed(2)} c=${c} b=${bendAngleDeg})`,
+      );
+    }
+  }
+}
+
+// (P4) Link never spaces TIGHTER than rounded — what makes the build's per-joint
+// rounded fallback always fit. (Measured: link's own footprint essentially never
+// binds for r ≤ 12; the `max` is kept as the safety net this pins.)
+for (const r of [2.5, 3, 4, 5, 6, 8, 10, 12]) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      for (const extent of [0, 6, 10, 26]) {
+        const link = minSegmentLengthFor(r, c, 'link', bendAngleDeg, extent);
+        const rounded = minSegmentLengthFor(
+          r,
+          c,
+          'rounded',
+          bendAngleDeg,
+          extent,
+        );
+        assert.ok(
+          link >= rounded - 1e-9,
+          `link pitch floor >= rounded (r=${r} c=${c} b=${bendAngleDeg} rho=${extent}: ${link} vs ${rounded})`,
+        );
+      }
+    }
+  }
+}
+
+// (P5) The footprint is MONOTONE NON-DECREASING in r. `jointOverlapCap`'s
+// bisection is only well posed because of this; a V-shaped footprint would make
+// the cap it returns meaningless.
+for (const c of LINK_CLEARANCES) {
+  for (const bendAngleDeg of LINK_BENDS) {
+    for (const extent of [0, 6, 12, 26]) {
+      let previous = -Infinity;
+      for (let r = 3.2; r <= 12.0001; r += 0.05) {
+        const floor = minSegmentLengthFor(r, c, 'link', bendAngleDeg, extent);
+        assert.ok(
+          floor >= previous - 1e-9,
+          `link pitch floor is monotone in r (r=${r.toFixed(2)} c=${c} b=${bendAngleDeg} rho=${extent}: ${floor} < ${previous})`,
+        );
+        previous = floor;
+      }
+    }
+  }
+}
+
+// (P6) The eye estimate is CONSERVATIVE, and — the claim it rests on — the LEGS
+// never reach the blade slab at all, so maximising over the ARC alone is sound.
+// Walked on the very polyline the build emits, at every kerf from the floor to
+// the ceiling (the legs move with the kerf; the arc does not).
+//
+// A wrong estimate here can only cost a rounded fallback, never a fused part —
+// but if it were OPTIMISTIC the ring-wall contract would be a fiction, and
+// nothing downstream would notice.
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      for (const rho of [1, 4, 10, 30]) {
+        const seam = solveLinkSeam(g, rho, rho, c, bendAngleDeg);
+        const poly = linkHoopPolyline(g, seam, c);
+        let worst = 0;
+        for (let i = 0; i < poly.points.length; i += 1) {
+          const [v, u, s] = poly.points[i];
+          const radius = poly.envRadiusMm[i];
+          const excess = Math.max(0, Math.abs(v) - g.bladeThicknessMm / 2);
+          const arc = i >= 2 && i < poly.points.length - 2;
+          if (!arc) {
+            // A LEG sphere. It must miss the blade slab outright — that is the
+            // hypothesis `eyeOuterMm` is computed under.
+            assert.ok(
+              excess >= radius - 1e-9,
+              `link legs never reach the blade slab (r=${r} c=${c} b=${bendAngleDeg} rho=${rho} i=${i}: excess ${excess.toFixed(4)} < radius ${radius.toFixed(4)})`,
+            );
+            continue;
+          }
+          if (excess >= radius) continue;
+          const d = Math.hypot(u, s - g.pivotOffsetMm);
+          worst = Math.max(
+            worst,
+            d + Math.sqrt(radius * radius - excess * excess),
+          );
+        }
+        assert.ok(
+          worst <= g.eyeOuterMm + 1e-9,
+          `link eye estimate is conservative (r=${r} c=${c} b=${bendAngleDeg} rho=${rho}: ${worst.toFixed(4)} vs ${g.eyeOuterMm.toFixed(4)})`,
+        );
+      }
+    }
+  }
+}
+
+// (P7 / P-CLIMB) Printability of the hoop centreline. Every span outside the two
+// buried anchor runs either climbs at the tilt angle (a 52° overhang, inside the
+// normal FDM window) or is in the arch-apex window near the crown, where the
+// feature is geometrically the top of a horizontal hole; and that hole never
+// exceeds 15mm across on the largest body the sizing can produce.
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      const seam = solveLinkSeam(g, 10, 10, c, bendAngleDeg);
+      const poly = linkHoopPolyline(g, seam, c);
+      const points = poly.points;
+      const n = LINK_ARC_SEGMENTS;
+      const climbOf = (i) => {
+        const previous = points[i - 1];
+        const current = points[i];
+        const rise = Math.abs(current[1] - previous[1]);
+        const run = Math.hypot(
+          current[0] - previous[0],
+          current[2] - previous[2],
+        );
+        return (Math.atan2(rise, run) * 180) / Math.PI;
+      };
+      const where = `r=${r} c=${c} b=${bendAngleDeg}`;
+      // The two buried anchors run horizontally: they union with solid tail
+      // material and are not an unsupported feature at all.
+      for (const i of [1, points.length - 1]) {
+        assert.ok(
+          climbOf(i) < 1e-6,
+          `link anchor runs horizontal (${where} i=${i}: ${climbOf(i).toFixed(3)}°)`,
+        );
+      }
+      // The two legs descend at EXACTLY the tilt angle — a 52° overhang, inside
+      // the normal FDM window.
+      for (const i of [2, points.length - 2]) {
+        assert.ok(
+          Math.abs(climbOf(i) - LINK_TILT_DEG) < 0.5,
+          `link leg descends at the tilt angle (${where} i=${i}: ${climbOf(i).toFixed(2)}° vs ${LINK_TILT_DEG})`,
+        );
+      }
+      // SPEC DEVIATION, recorded: the design asserted every non-anchor span
+      // climbs at ≥ tilt unless it is in an arch-apex window. That is false — the
+      // arc's climb rises smoothly from 0° at the crown to ~33° at its ends (it
+      // only approaches the tilt as φ → 90°), so at r=3.2 span 3 measures 31.2°.
+      // The statement that is both TRUE and the one printability actually cares
+      // about is asserted instead: NO span is steeper than the legs, i.e. the
+      // hoop never presents an overhang worse than the 52° the legs already do,
+      // and the arch is a plain horizontal-hole roof whose span stays printable.
+      for (let i = 3; i <= 2 + 2 * n; i += 1) {
+        assert.ok(
+          climbOf(i) <= LINK_TILT_DEG + 0.5,
+          `link arc is never steeper than the legs (${where} i=${i}: ${climbOf(i).toFixed(2)}°)`,
+        );
+      }
+      assert.ok(
+        climbOf(2 + n) < 12,
+        `link arc is near-flat at the crown, i.e. a bridged arch (${where}: ${climbOf(2 + n).toFixed(2)}°)`,
+      );
+      assert.ok(
+        2 * g.legOffsetMm <= 15,
+        `link arch span stays printable (r=${r} c=${c} b=${bendAngleDeg}: ${(2 * g.legOffsetMm).toFixed(2)}mm)`,
+      );
+      assert.equal(
+        points.length,
+        2 * LINK_ARC_SEGMENTS + 5,
+        'link polyline has 2n+5 points',
+      );
+    }
+  }
+}
+
+// (P8) `solveLinkSeam` is TOTAL. The degenerate station (`maxStationExtentMm`
+// documents 0 as reachable) must not produce a negative or infinite travel.
+for (const c of LINK_CLEARANCES) {
+  const g = solveLinkJointGeometry(5, c, 12);
+  const seam = solveLinkSeam(g, 0, 0, c, 12);
+  assert.equal(
+    seam.kerfMm,
+    Math.max(0.8, c + 0.25),
+    `link kerf falls back to its floor at rho = 0 (c=${c})`,
+  );
+  assert.ok(
+    Number.isFinite(seam.travelDeg) &&
+      seam.travelDeg > 0 &&
+      seam.travelDeg <= 12,
+    `link travel stays finite and positive at rho = 0 (c=${c}: ${seam.travelDeg})`,
+  );
+  assert.ok(
+    Number.isFinite(seam.engagementMm) && Number.isFinite(seam.outerRadiusMm),
+    'link seam reports finite engagement and outer radius at rho = 0',
+  );
+  // And the look ceiling really does bind on a chunky body.
+  const chunky = solveLinkSeam(g, 40, 40, c, 25);
+  assert.ok(
+    chunky.kerfMm <= LINK_KERF_MAX_MM + 1e-9,
+    'link kerf respects its absolute ceiling',
+  );
+  assert.ok(
+    chunky.travelDeg < 25 - 1e-9,
+    'link reports a REDUCED travel when the ceiling binds (never silently full)',
+  );
+  const narrow = solveLinkSeam(g, 6, 6, c, 25);
+  assert.ok(
+    narrow.kerfMm <= LINK_KERF_MAX_FRACTION * 6 + 1e-9 ||
+      narrow.kerfMm <= Math.max(0.8, c + 0.25) + 1e-9,
+    'link kerf respects its share of the local radius',
+  );
+}
+
+// (P12) The SECONDARY (yaw) travel is derived, not assumed.
+//
+// Round 1 published a flat "yaw ≥ 4°" floor. That is false on a body much wider
+// laterally than it is deep: yaw closes the same flat kerf as pitch, just at the
+// ±v̂ rim instead of the ±û one, and the kerf is deliberately sized by the ±û
+// extent (that is what keeps the Flexibility slider alive on a shallow, wide
+// body). Measured on built solids, an eccentric fin at bend 5° pitches 7.56° and
+// yaws 3.34° on the SAME joint, and the shipped 4° assertion interpenetrated.
+//
+// So the contract is now `LinkSeamProfile.secondaryTravelDeg`, and these are the
+// properties the build and the build suite rely on. The published cap is pinned
+// to a LITERAL 6 so shrinking `LINK_SECONDARY_MAX_DEG` cannot quietly relax it.
+assert.equal(
+  LINK_SECONDARY_MAX_DEG,
+  6,
+  'link secondary-travel cap contract is 6°',
+);
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      if (!g) continue;
+      // The cap the envelope is carved for, written out of LITERALS and the
+      // caller's own bend angle rather than read back off the geometry.
+      const cap = Math.min(6, bendAngleDeg);
+      for (const rhoBend of [1.5, 6, 12, 30]) {
+        // (a) Isotropic station: yaw IS the pitch, capped. This is what makes a
+        //     broken lateral measurement (one that returned 0, or the bend
+        //     extent, or a constant) visible rather than conveniently generous.
+        const round = solveLinkSeam(g, rhoBend, rhoBend, c, bendAngleDeg);
+        assert.ok(
+          Math.abs(round.secondaryTravelDeg - Math.min(cap, round.travelDeg)) <
+            1e-9,
+          `link yaw equals the pitch on a round station (r=${r} c=${c} b=${bendAngleDeg} rho=${rhoBend}: ${round.secondaryTravelDeg} vs ${round.travelDeg})`,
+        );
+        // (b) The default IS the isotropic assumption — a call site that forgets
+        //     to measure the lateral extent gets the round-body answer, never a
+        //     silently optimistic one.
+        const explicit = solveLinkSeam(
+          g,
+          rhoBend,
+          rhoBend,
+          c,
+          bendAngleDeg,
+          rhoBend,
+        );
+        assert.equal(
+          explicit.secondaryTravelDeg,
+          round.secondaryTravelDeg,
+          'link seam defaults the lateral extent to the bend extent',
+        );
+        // (c) Wider laterally ⇒ less yaw, and never more than the cap. `rhoMax`
+        //     is held at the widest case throughout so the kerf (and with it the
+        //     look ceiling) is IDENTICAL across the sweep and the only thing
+        //     moving is the rim the yaw closes against.
+        let previous = Infinity;
+        for (const ratio of [1, 1.5, 2.5, 4]) {
+          const seam = solveLinkSeam(
+            g,
+            rhoBend,
+            rhoBend * 4,
+            c,
+            bendAngleDeg,
+            rhoBend * ratio,
+          );
+          assert.ok(
+            seam.secondaryTravelDeg > 0 &&
+              seam.secondaryTravelDeg <= cap + 1e-9,
+            `link yaw is a positive angle inside the cap (r=${r} c=${c} b=${bendAngleDeg} ratio=${ratio}: ${seam.secondaryTravelDeg})`,
+          );
+          assert.ok(
+            seam.secondaryTravelDeg <= previous + 1e-9,
+            `link yaw shrinks as the body widens laterally (r=${r} c=${c} b=${bendAngleDeg} ratio=${ratio})`,
+          );
+          previous = seam.secondaryTravelDeg;
+          // (d) …and it is EXACTLY the same flat-kerf law the pitch obeys, read
+          //     at the lateral rim. One law, two half-extents.
+          assert.ok(
+            Math.abs(
+              seam.secondaryTravelDeg -
+                Math.min(
+                  cap,
+                  linkFlatKerfAngleDeg(
+                    g.pivotOffsetMm,
+                    rhoBend * ratio,
+                    seam.kerfMm,
+                    c,
+                  ),
+                ),
+            ) < 1e-9,
+            'link yaw is the flat-kerf law at the lateral rim',
+          );
+        }
+      }
+      // (e) Total at the degenerate station, like the pitch.
+      const degenerate = solveLinkSeam(g, 0, 0, c, bendAngleDeg, 0);
+      assert.ok(
+        Number.isFinite(degenerate.secondaryTravelDeg) &&
+          degenerate.secondaryTravelDeg > 0,
+        `link yaw stays finite and positive at rho = 0 (r=${r} c=${c} b=${bendAngleDeg})`,
+      );
+    }
+  }
+}
+
+// (P13) The kerf carries a LATERAL budget, and it costs nothing where it is not
+// needed.
+//
+// Round 1 sized the kerf for the pitch alone. Yaw was then whatever that left at
+// a rim up to 3× further out — measured on built solids, a finned body at
+// Flexibility 5° bent 7.56° up and down and 3.34° sideways, below both the
+// published 4° floor and the user's own slider, with no warning of any kind.
+// Three properties make the second budget correct rather than merely bigger, and
+// all three are load-bearing for the build:
+//   (a) it DELIVERS the floor wherever the look ceiling can serve it;
+//   (b) it is INERT on an isotropic station — same kerf, bit for bit — which is
+//       what lets every plan-side caller (which has no lateral measurement) keep
+//       passing the bend extent for both and be unchanged;
+//   (c) the kerf stays monotone NON-DECREASING in the travel, which is the one
+//       property the build's relief ladder is built on. That needs the budget to
+//       be travel-capped, not constant.
+assert.equal(
+  LINK_SECONDARY_FLOOR_DEG,
+  4,
+  'link sideways-travel floor contract is 4°',
+);
+assert.ok(
+  LINK_SECONDARY_FLOOR_DEG <= LINK_SECONDARY_MAX_DEG,
+  'the sideways floor never exceeds what the envelope is carved for',
+);
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    for (const bendAngleDeg of LINK_BENDS) {
+      const g = solveLinkJointGeometry(r, c, bendAngleDeg);
+      if (!g) continue;
+      for (const rhoBend of [1.5, 6, 12, 30]) {
+        for (const ratio of [1, 1.5, 2.5, 4, 8]) {
+          const rhoLat = rhoBend * ratio;
+          const rhoMax = Math.max(rhoBend, rhoLat);
+          const seam = solveLinkSeam(
+            g,
+            rhoBend,
+            rhoMax,
+            c,
+            bendAngleDeg,
+            rhoLat,
+          );
+          // (a) The floor is delivered unless the LOOK CEILING refused the gap.
+          const ceiling = Math.max(
+            Math.max(0.8, c + 0.25),
+            Math.min(LINK_KERF_MAX_MM, LINK_KERF_MAX_FRACTION * rhoMax),
+          );
+          const target = Math.min(
+            LINK_SECONDARY_FLOOR_DEG,
+            g.secondaryTravelDeg,
+            bendAngleDeg,
+          );
+          assert.ok(
+            seam.secondaryTravelDeg >= target - 1e-9 ||
+              seam.kerfMm >= ceiling - 1e-9,
+            `link delivers the sideways floor unless the ceiling binds (r=${r} c=${c} b=${bendAngleDeg} rhoBend=${rhoBend} ratio=${ratio}: ${seam.secondaryTravelDeg.toFixed(3)}° at kerf ${seam.kerfMm.toFixed(3)} vs ceiling ${ceiling.toFixed(3)})`,
+          );
+          // (b) Inert when the two rims agree.
+          if (ratio === 1) {
+            const pitchOnly = solveLinkSeam(
+              g,
+              rhoBend,
+              rhoMax,
+              c,
+              bendAngleDeg,
+              rhoBend,
+            );
+            assert.equal(
+              seam.kerfMm,
+              pitchOnly.kerfMm,
+              `link lateral budget is inert on a round station (r=${r} c=${c} b=${bendAngleDeg} rho=${rhoBend})`,
+            );
+          }
+          // (c) Kerf monotone non-decreasing in the travel, WITH the lateral
+          //     budget in play — the ladder's whole premise.
+          let previousKerf = 0;
+          for (let step = LINK_CLAMP_STEPS - 1; step >= 0; step -= 1) {
+            const travelDeg =
+              bendAngleDeg -
+              ((bendAngleDeg - 1) * step) / (LINK_CLAMP_STEPS - 1);
+            const walked = solveLinkSeam(
+              g,
+              rhoBend,
+              rhoMax,
+              c,
+              travelDeg,
+              rhoLat,
+            );
+            assert.ok(
+              walked.kerfMm >= previousKerf - 1e-9,
+              `link kerf is monotone in the travel with a lateral rim (r=${r} c=${c} b=${bendAngleDeg} ratio=${ratio} travel=${travelDeg.toFixed(2)}: ${walked.kerfMm.toFixed(4)} < ${previousKerf.toFixed(4)})`,
+            );
+            previousKerf = walked.kerfMm;
+          }
+        }
+      }
+    }
+  }
+}
+
+// The envelope radii are ≥ the core plus clearance everywhere — the one number
+// the whole clearance contract reduces to once the eye is carved rather than
+// computed.
+for (const r of LINK_RADII) {
+  for (const c of LINK_CLEARANCES) {
+    const g = solveLinkJointGeometry(r, c, 25);
+    const seam = solveLinkSeam(g, 12, 12, c, 25);
+    const poly = linkHoopPolyline(g, seam, c);
+    for (let i = 0; i < poly.envRadiusMm.length; i += 1) {
+      assert.ok(
+        poly.envRadiusMm[i] >= poly.coreRadiusMm + c - 1e-9,
+        `link envelope is at least core + clearance (r=${r} c=${c} i=${i})`,
+      );
+      assert.ok(
+        poly.envRadiusMm[i] <=
+          poly.coreRadiusMm + c + LINK_SECONDARY_INFLATE_MAX_MM + 2,
+        'link envelope stays bounded',
+      );
+    }
+    assert.ok(
+      linkHoopOuterMm(poly) > 0,
+      'link reports a positive hoop outer radius',
+    );
+  }
+}
+
+// (P14) The sideways floor is a BUDGET, and 'link-sideways-reduced' fires against
+// that budget — never against `geometry.secondaryTravelDeg`.
+//
+// This is the arithmetic half of a defect that reached a verifier: the build
+// compared the delivered yaw against `min(bendAngleDeg, LINK_SECONDARY_MAX_DEG)`,
+// but the kerf is NEVER sized to deliver that at the lateral rim — only
+// `LINK_SECONDARY_FLOOR_DEG`. So on every body wider than it is deep the
+// comparison was true by construction, and the build announced "2 joints only
+// twist about 4° side to side" on joints whose built solids yawed 5.80° and
+// 5.62° — above the published number and above the 5° the user asked for.
+//
+// Two things must hold, and the build-suite battery (whose bodies all clear the
+// floor) can only witness the first:
+//   (a) wherever the look ceiling can afford the budget, delivered == budget, so
+//       nothing warns;
+//   (b) the trigger is still REACHABLE — when the ceiling refuses the lateral
+//       budget the delivered yaw really does drop under it. Pinned here rather
+//       than by distorting a fixture, because it needs a lateral half-extent
+//       past ~57mm (a body over 114mm wide) which would flip the planner's own
+//       axis choice on a 150mm toy.
+{
+  const c = 0.4;
+  const bendAngleDeg = 12;
+  const g = solveLinkJointGeometry(5, c, bendAngleDeg);
+  assert.ok(g, 'link sideways floor: the probe geometry solves');
+  // (a) affordable budget ⇒ delivered meets it exactly ⇒ silence.
+  let sawAfforded = false;
+  for (const rhoLat of [8, 18, 30, 45]) {
+    const seam = solveLinkSeam(g, 6, rhoLat, c, bendAngleDeg, rhoLat);
+    assert.ok(
+      seam.secondaryTravelDeg >= seam.secondaryTargetDeg - 1e-9,
+      `link sideways floor: rhoLat=${rhoLat} delivers its budget (${seam.secondaryTravelDeg} vs ${seam.secondaryTargetDeg}) so nothing may warn`,
+    );
+    sawAfforded = true;
+  }
+  assert.ok(sawAfforded, 'link sideways floor: the afforded case is exercised');
+  // (b) ceiling-bound ⇒ delivered drops under the budget ⇒ the warning is live.
+  let sawRefused = false;
+  for (const rhoLat of [60, 80, 120]) {
+    const seam = solveLinkSeam(g, 6, rhoLat, c, bendAngleDeg, rhoLat);
+    assert.ok(
+      seam.kerfMm <= LINK_KERF_MAX_MM + 1e-9,
+      `link sideways floor: rhoLat=${rhoLat} respects the look ceiling`,
+    );
+    if (seam.secondaryTravelDeg < seam.secondaryTargetDeg - 1e-9) {
+      sawRefused = true;
+    }
+  }
+  assert.ok(
+    sawRefused,
+    "link sideways floor: the 'link-sideways-reduced' trigger is reachable — a body wide enough for the look ceiling to refuse the lateral budget really does fall under the floor (without this the build's warning is dead code)",
+  );
+  // The budget itself is the documented floor, capped by the travel and the
+  // envelope — not the geometry cap. A change that lets it track
+  // `geometry.secondaryTravelDeg` again reintroduces the false alarm.
+  const seam = solveLinkSeam(g, 6, 18, c, bendAngleDeg, 18);
+  assert.ok(
+    seam.secondaryTargetDeg <= LINK_SECONDARY_FLOOR_DEG + 1e-9,
+    `link sideways floor: the budget never exceeds the ${LINK_SECONDARY_FLOOR_DEG}° floor (got ${seam.secondaryTargetDeg})`,
+  );
+  assert.ok(
+    seam.secondaryTargetDeg < g.secondaryTravelDeg - 1e-9,
+    'link sideways floor: the budget sits BELOW the envelope cap at bend 12, which is exactly why the cap is the wrong baseline for the warning',
+  );
+}
+
+// (P9) Containment on the steep 45° cone: link sizes DOWN rather than piercing
+// the skin, and never ends up larger than the rounded radius by more than a
+// shrink step.
+{
+  const linkCone = planFlexiToy(steepCone, {
+    ...coneSettings,
+    jointStyle: 'link',
+  });
+  const roundedCone = planFlexiToy(steepCone, {
+    ...coneSettings,
+    jointStyle: 'rounded',
+  });
+  assert.equal(
+    linkCone.joints.length,
+    roundedCone.joints.length,
+    'link plans the same station count on the cone as rounded',
+  );
+  for (let i = 0; i < linkCone.joints.length; i += 1) {
+    const link = linkCone.joints[i];
+    const rounded = roundedCone.joints[i];
+    if (link.fused || rounded.fused) continue;
+    assert.ok(
+      link.ballRadiusMm <= rounded.ballRadiusMm + 0.201,
+      `link cone joint ${i} is not larger than the rounded one (${link.ballRadiusMm} vs ${rounded.ballRadiusMm})`,
+    );
+  }
+}
+
+// (P10) Dragged stations survive on link and raise the adjustment warning.
+{
+  const dragCapsule = makeSpindle({ length: 150, maxRadius: 14 });
+  const dragged = planFlexiToy(dragCapsule, {
+    ...DEFAULT_SETTINGS,
+    jointStyle: 'link',
+    segmentCount: 5,
+    axisOverride: 'x',
+    jointPositions: [0.2, 0.22, 0.6, 0.9],
+  });
+  assert.equal(
+    dragged.joints.length,
+    4,
+    'link keeps the pinned station count (5 segments → 4 joints)',
+  );
+  const fractions = dragged.joints.map((joint) => joint.spineFraction);
+  for (let i = 1; i < fractions.length; i += 1) {
+    assert.ok(
+      fractions[i] > fractions[i - 1],
+      'link dragged stations stay strictly increasing',
+    );
+  }
+  assert.ok(
+    dragged.warnings.some((w) => w.code === 'joint-positions-adjusted'),
+    'link reports that the too-close dragged cuts were nudged',
+  );
+}
+
+// (P11) Every live link joint the planner emits is buildable by whichever cutter
+// the build will actually reach for — the solved hoop/blade, or (when the solver
+// is infeasible at that radius) the rounded groove. A live joint the build can
+// realise NEITHER way is the plan handing the build an impossible station.
+{
+  const bodies = [
+    makeSpindle({ length: 150, maxRadius: 12 }),
+    makeSpindle({ length: 170, maxRadius: 4.2 }),
+    makeSpindle({ length: 150, maxRadius: 18, taper: 0.6 }),
+  ];
+  for (const body of bodies) {
+    for (const c of [0.3, 0.4, 0.55]) {
+      for (const bendAngleDeg of [5, 12, 25]) {
+        const plan = planFlexiToy(body, {
+          ...DEFAULT_SETTINGS,
+          jointStyle: 'link',
+          clearanceMm: c,
+          bendAngleDeg,
+          axisOverride: 'x',
+        });
+        for (const joint of plan.joints) {
+          if (joint.fused) continue;
+          const solved = solveLinkJointGeometry(
+            joint.ballRadiusMm,
+            c,
+            bendAngleDeg,
+          );
+          const roundedFallback =
+            joint.socketDepthMm > 0 && joint.faceGapMm > 0;
+          assert.ok(
+            solved !== null || roundedFallback,
+            `every live link joint is buildable one way or the other (r=${joint.ballRadiusMm})`,
+          );
+        }
+      }
+    }
+  }
+}
+
+// (P12) Link never sizes a joint DOWN into a radius it cannot even build.
+//
+// `sizeJoint`'s shrink loop takes the FIRST — i.e. largest — radius its
+// containment predicate accepts, which is only the best answer if the accepted
+// set is an interval. Link's link-cavity criterion is strictly more demanding
+// than the rounded cup (its legs run off-axis AND tail-ward), so if the
+// criterion were allowed to flip to the looser rounded cup partway down the
+// ladder, the loop would walk straight past the band link rejects and settle
+// just under the flip point — planning a ball it cannot build a hoop in AND
+// that is smaller than the one Rounded would have used, then taking the rounded
+// fallback anyway. Pure loss: measured 3.03mm against rounded's 3.63mm (-17%)
+// on joint 0 of a 150mm spindle before the criterion was hoisted out of the loop.
+//
+// So: link may legitimately size DOWN to fit a real hoop, but a smaller ball
+// than rounded's is only ever justified by actually getting a hoop for it.
+{
+  const bodies = [
+    ['spindle-12', makeSpindle({ length: 150, maxRadius: 12 })],
+    [
+      'spindle-18-taper',
+      makeSpindle({ length: 150, maxRadius: 18, taper: 0.6 }),
+    ],
+    ['spindle-thin', makeSpindle({ length: 170, maxRadius: 4.2 })],
+  ];
+  for (const [name, body] of bodies) {
+    for (const c of [0.3, 0.4, 0.55]) {
+      for (const bendAngleDeg of [5, 12, 25]) {
+        const common = {
+          ...DEFAULT_SETTINGS,
+          segmentCount: 5,
+          clearanceMm: c,
+          bendAngleDeg,
+          axisOverride: 'x',
+        };
+        const linkPlan = planFlexiToy(body, { ...common, jointStyle: 'link' });
+        const roundedPlan = planFlexiToy(body, {
+          ...common,
+          jointStyle: 'rounded',
+        });
+        assert.equal(
+          linkPlan.joints.length,
+          roundedPlan.joints.length,
+          `link and rounded station counts match (${name} c=${c} b=${bendAngleDeg})`,
+        );
+        for (let i = 0; i < linkPlan.joints.length; i += 1) {
+          const lj = linkPlan.joints[i];
+          const rj = roundedPlan.joints[i];
+          if (lj.fused || rj.fused) continue;
+          if (!(lj.ballRadiusMm < rj.ballRadiusMm - 1e-9)) continue;
+          assert.ok(
+            solveLinkJointGeometry(lj.ballRadiusMm, c, bendAngleDeg) !== null,
+            `link only sizes below rounded to WIN a hoop (${name} c=${c} b=${bendAngleDeg} joint ${i}: link ${lj.ballRadiusMm.toFixed(2)} < rounded ${rj.ballRadiusMm.toFixed(2)}, and the link solver is infeasible there)`,
+          );
+        }
+      }
+    }
+  }
 }
 
 console.log('flexiToyPlan.test.mjs: all assertions passed');

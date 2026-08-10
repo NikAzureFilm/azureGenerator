@@ -225,6 +225,7 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByText('Joint style')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Shell/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Strong/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Link/ })).toBeInTheDocument();
     expect(screen.getByText('Segments')).toBeInTheDocument();
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
     expect(screen.getByText('Toy length')).toBeInTheDocument();
@@ -240,13 +241,13 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByRole('button', { name: '.3MF' })).toBeInTheDocument();
   });
 
-  it('offers only the Shell and Strong joint styles', async () => {
+  it('offers the Shell, Strong and Link joint styles', async () => {
     renderDialog();
     await settle();
 
-    expect(screen.getAllByRole('radio', { name: /Shell|Strong/ })).toHaveLength(
-      2,
-    );
+    expect(
+      screen.getAllByRole('radio', { name: /Shell|Strong|Link/ }),
+    ).toHaveLength(3);
     expect(
       screen.queryByRole('radio', { name: /Rounded/ }),
     ).not.toBeInTheDocument();
@@ -297,6 +298,25 @@ describe('FlexiToyDialog', () => {
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
     expect(settingsArg.jointStyle).toBe('shell');
+    expect(settingsArg.jointPositions).toHaveLength(
+      fakeResult.plan.joints.length,
+    );
+  });
+
+  it('switches to the link joint style with one recompute and keeps dragged positions', async () => {
+    renderDialog();
+    await settle();
+
+    dragHandleTo(0, 0.4);
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Link/ }));
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(settingsArg.jointStyle).toBe('link');
     expect(settingsArg.jointPositions).toHaveLength(
       fakeResult.plan.joints.length,
     );
