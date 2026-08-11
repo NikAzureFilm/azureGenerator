@@ -74,11 +74,18 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   a flat BLADE plate rooted in the head body, so the two bodies are two
  *   threaded closed loops and are topologically interlocked — there is no ball,
  *   no socket, no throat and no capture margin anywhere in this style. The
- *   bodies are separated by a FLAT ANNULAR KERF of constant thickness on the cut
- *   plane, which is what the eye reads as the joint and what limits the bend
- *   (`bend ≈ kerf / body radius`, exactly as the reference toy does it), so on a
- *   chunky model the requested angle saturates before the slider does and the
- *   build says so with 'link-travel-reduced'. Clearance is correct BY
+ *   bodies are separated by a CONICAL ANNULAR KERF — a solid of revolution whose
+ *   axial thickness GROWS WITH THE RADIUS, `k(ρ) = 2·tan(bend/2)·ρ + c` — on the
+ *   cut plane, which is what the eye reads as the joint and what limits the
+ *   bend. Grading it is the whole mechanism: a rim `ρ` out drops by exactly
+ *   `2·tan(θ/2)·ρ` when the joint rotates by θ, so a slot proportional to `ρ`
+ *   gives every rim, at every radius and every azimuth, the same angle and the
+ *   same running clearance `c·cos(bend/2)`. A CONSTANT slot instead has to be
+ *   sized by one radius, and on a finned body the fin then collides first — a
+ *   400mm fish delivered 4.0–7.8° of a requested 8° that way. The look ceiling
+ *   caps the TRAVEL rather than the profile, so on a wide model the angle
+ *   saturates before the slider does and the build says so with
+ *   'link-travel-reduced'. Clearance is correct BY
  *   CONSTRUCTION rather than by algebra: the eye is not computed, it is CARVED —
  *   `blade = plate − hoopEnvelope`, where the envelope is the hoop's own solid
  *   grown by `clearanceMm` and swept over the travel — so
@@ -86,15 +93,21 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   and a solver slip can only produce a rounded fallback, never a fused part.
  *   Pitch is free of the MECHANISM (the crown is a rod ON the pivot axis, and
  *   rotation about that axis preserves every radius — law 1), so the kerf alone
- *   limits it. Yaw closes that same flat kerf at the ±v̂ rim, so it equals the
- *   pitch on a round body and would be far less on a finned one — which is why
- *   the kerf carries a SECOND budget, `LINK_SECONDARY_FLOOR_DEG` of sideways
- *   travel measured at that lateral rim, inert wherever the two rims agree.
- *   `LinkSeamProfile.secondaryTravelDeg` is the delivered number; when the look
- *   ceiling refuses the wider gap it lands below the floor and the build says so
- *   with 'link-sideways-reduced', so neither motion is ever silently reduced.
- *   Roll does not close the kerf at all and is keyed by the legs against the
- *   blade (measured 10–23°).
+ *   limits it, and the slider drives it directly. Yaw meets the SAME slot: the
+ *   kerf depends on the radius and nothing else, so the SEAM imposes the same
+ *   angle on pitch, yaw and every oblique axis, and the style carries no
+ *   separate lateral budget — which is why 'link-sideways-reduced' (a SEAM
+ *   shortfall) is a defensive emit site rather than a live one. Sideways travel
+ *   is nonetheless SMALLER than pitch, and by mechanism rather than by seam: the
+ *   eye is carved for a sweep of at most `LINK_SECONDARY_MAX_DEG` (6°), so
+ *   `LinkSeamProfile.secondaryTravelDeg` is `min(carved cap, travel)` and
+ *   measured sideways first contact saturates near 8.6° on the acceptance body
+ *   while pitch tracks the slider to 15.9°. That cap is deliberate — a wider
+ *   carved sweep spends the key gap the legs need — so it is a documented
+ *   property of the style, not a shortfall, and the UI copy says "bends" of the
+ *   pitch angle rather than promising it in every direction. Roll does not close
+ *   the kerf at all and is keyed by the legs against the blade (measured
+ *   10–23°).
  */
 export type FlexiJointStyle =
   | 'shell'
@@ -182,31 +195,63 @@ export type FlexiWarningCode =
    */
   | 'strong-travel-reduced'
   /**
-   * A joint was too small for the link hoop-and-blade solid (or could not fit it
-   * beside its neighbours) and was built with the rounded groove instead. Named
-   * separately from `strong-joint-fallback` on purpose: that code's message
-   * names "a strong hinge", so reusing it would make the code lie about which
-   * mechanism could not be realised.
+   * A joint could not be built as a link hoop-and-blade and was built with the
+   * rounded groove instead. Named separately from `strong-joint-fallback` on
+   * purpose: that code's message names "a strong hinge", so reusing it would
+   * make the code lie about which mechanism could not be realised.
+   *
+   * The MESSAGE names the dominant reason of four — the mechanism refused the
+   * radius, the body is too THIN for the ring, the neighbours leave no room, or
+   * the booleans failed — and offers the remedy that matches it. A single "too
+   * small" line is false in both directions: on a 400mm fish whose joint balls
+   * are 4.7–7.2mm it told the user to enlarge joints that were already too large
+   * for their room, and above the solver's upper radius bound the joint is too
+   * BIG.
+   *
+   * There is no "the body is too WIDE" reason. It was written for a travel range
+   * collapsed by the look ceiling, and the ceiling cannot do that: its binding
+   * radius clamps the body's contribution at ρ_A = 15mm, so the cap is flat in
+   * ρ_max above that and its minimum over the whole feasible box is 5.4° against
+   * a 1° floor. A message no body can produce is a message no one has tested.
    */
   | 'link-joint-fallback'
   /**
    * A link joint's ring gap had to be built NARROWER than the requested
-   * `bendAngleDeg` needs — the gap would otherwise exceed the style's absolute
-   * ceiling or its share of the local body radius. The joint still bends, just
-   * not as far. Never silent: on a chunky body this is the only thing that tells
-   * a user why the Flexibility slider stopped doing anything.
+   * `bendAngleDeg` needs — the gap would otherwise exceed the style's allowance
+   * or its share of the local body radius. The joint still bends, just not as
+   * far. Never silent: on a wide body this is the only thing that tells a user
+   * why the Flexibility slider stopped doing anything.
+   *
+   * The message reports a RANGE, `min–max` over the clamped joints, collapsing
+   * to one number when they agree (which is the usual case, because the look
+   * ceiling is uniform across a model). Naming only the smallest understated
+   * three of four joints on a 400mm fish by up to 3.8°.
+   *
+   * It also names a CAUSE, chosen by the MAJORITY of the clamped joints: the
+   * look ceiling (the ring gap a bigger bend needs would show on the widest part
+   * the seam cuts through — note that is the widest SKIN, so a 6mm tube with a
+   * 25mm wing reads the wing) or a gate (a neighbour or a thin skin refusing the
+   * top of this joint's own range). The remedies are opposites, so one line
+   * cannot claim both, and a minority may not speak for the majority.
    */
   | 'link-travel-reduced'
   /**
    * A link joint's SIDEWAYS travel came out below what its mechanism was carved
-   * for, because the flat ring gap closes at the widest rim and the body is much
-   * wider there than it is deep. Separate from 'link-travel-reduced' because it
-   * is a different motion about a different axis with a different cause: the
-   * up-and-down bend can be at the full requested angle while this one is not,
-   * which is precisely the case that used to be silent (measured: a finned body
-   * at Flexibility 5° bending 7.6° up-and-down and 3.3° sideways, with no
-   * warning at all). Never raised for link's deliberate `LINK_SECONDARY_MAX_DEG`
-   * cap — only when the BODY takes it below that.
+   * for, because the SEAM closed on it first. Under the flat kerf that was a
+   * live case (measured: a finned body at Flexibility 5° bending 7.6°
+   * up-and-down and 3.3° sideways, with no warning at all).
+   *
+   * UNREACHABLE UNDER THE CONICAL KERF, by construction rather than by fixture
+   * selection: `k(ρ)` reads the radius and nothing else, so the seam is
+   * direction-free and `LinkSeamProfile.secondaryTravelDeg` and
+   * `secondaryTargetDeg` are the same expression (plan probe L-SEC pins the
+   * identity; the build's emit site documents itself as defensive). The code and
+   * the emit site are retained so that a future direction-dependent kerf cannot
+   * bring the silent case back.
+   *
+   * It is NOT the channel for link's deliberate `LINK_SECONDARY_MAX_DEG` cap —
+   * that cap is a documented property of the mechanism, stated in
+   * `FlexiJointStyle`, not a shortfall of this build.
    */
   | 'link-sideways-reduced'
   | 'mesh-repaired';
@@ -243,11 +288,12 @@ export type FlexiJointPlan = {
    *   gap is ANGULAR, not a stored millimetre value; this field is used only as
    *   the seam wedge's outer-radius pad and by the per-joint rounded fallback.
    * - 'link': the same constant bowl gap as 'rounded', and ONLY as the rounded
-   *   fallback's carrier. Link's own visible gap is the flat annular KERF, which
-   *   depends on the skin half-extent in the bend direction — a quantity the
-   *   build re-measures in its own in-plane frame anyway (see the
-   *   `crossSectionExtentsAt` note about the two frames differing slightly), so
-   *   storing a planner-side value here would only invite the two to drift.
+   *   fallback's carrier. Link's own visible gap is the CONICAL annular kerf
+   *   `k(ρ)`, which is not one number at all — it grows with the radius, and the
+   *   radii it is read at come from the skin half-extents the build re-measures
+   *   in its own in-plane frame (see the `crossSectionExtentsAt` note about the
+   *   two frames differing slightly), so storing a planner-side value here would
+   *   be both lossy and an invitation for the two to drift.
    */
   faceGapMm: number;
   /** This joint's station along the spine as an arc-length fraction (0..1). */

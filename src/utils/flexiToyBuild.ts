@@ -46,19 +46,22 @@ import {
   solveLinkSeam,
   linkHoopPolyline,
   linkHoopOuterMm,
+  linkKerfAtMm,
+  linkBladeCapFits,
+  linkBladeHeadCapMm,
+  linkTravelSearch,
   LINK_SPHERE_SEGMENTS,
   LINK_SPHERE_INFLATION,
   LINK_BLADE_SEGMENTS,
   LINK_KERF_SEGMENTS,
-  LINK_KERF_MAX_MM,
+  LINK_KERF_ALLOWANCE_MM,
   LINK_KERF_MAX_FRACTION,
   LINK_SECONDARY_INFLATE_MAX_MM,
   LINK_BURY_MM,
   LINK_ENGAGE_MIN_MM,
   LINK_NEIGHBOUR_CLEAR_MM,
   LINK_CLIP_MARGIN_MM,
-  LINK_CLAMP_STEPS,
-  LINK_BEND_SECTOR_HALF,
+  LINK_TRAVEL_MIN_DEG,
   LINK_RING_WALL_MM,
 } from './flexiToyPlan.ts';
 import type {
@@ -173,8 +176,16 @@ export async function buildFlexiToy(
     let strongTravelClampedJoints = 0;
     let strongMinTravelDeg = settings.bendAngleDeg;
     let linkFallbackJoints = 0;
+    let linkFallbackReasons: FlexiLinkNotes['fallbackReasons'] = {
+      mechanism: 0,
+      body: 0,
+      neighbours: 0,
+      boolean: 0,
+    };
     let linkTravelClampedJoints = 0;
+    let linkTravelGateClampedJoints = 0;
     let linkMinTravelDeg = settings.bendAngleDeg;
+    let linkMaxTravelDeg = 0;
     let linkSidewaysClampedJoints = 0;
     let linkMinSidewaysDeg = Infinity;
 
@@ -232,10 +243,18 @@ export async function buildFlexiToy(
           // A top-level arm for the same reason `strong` is one, plus one more:
           // link adds TWO male solids per joint (the hoop and the blade) and so
           // owns two orphan guards of its own.
-          const notes = {
+          const notes: FlexiLinkNotes = {
             linkFallbackJoints: 0,
+            fallbackReasons: {
+              mechanism: 0,
+              body: 0,
+              neighbours: 0,
+              boolean: 0,
+            },
             travelClampedJoints: 0,
+            travelGateClampedJoints: 0,
             minTravelDeg: settings.bendAngleDeg,
+            maxTravelDeg: 0,
             sidewaysClampedJoints: 0,
             minSidewaysDeg: Infinity,
           };
@@ -266,8 +285,11 @@ export async function buildFlexiToy(
           }
           segments = grouped;
           linkFallbackJoints = notes.linkFallbackJoints;
+          linkFallbackReasons = notes.fallbackReasons;
           linkTravelClampedJoints = notes.travelClampedJoints;
+          linkTravelGateClampedJoints = notes.travelGateClampedJoints;
           linkMinTravelDeg = notes.minTravelDeg;
+          linkMaxTravelDeg = notes.maxTravelDeg;
           linkSidewaysClampedJoints = notes.sidewaysClampedJoints;
           linkMinSidewaysDeg = notes.minSidewaysDeg;
           break;
@@ -362,46 +384,125 @@ export async function buildFlexiToy(
             : `${strongTravelClampedJoints} joints bend about ${rounded}° instead of ${settings.bendAngleDeg}° so their cuts still separate cleanly.`,
       });
     }
+    // A link joint can abandon its mechanism for four quite different reasons,
+    // and the remedy differs in each. "Too small" was the only line this ever
+    // said, and it is FALSE on a 400mm fish whose joint balls are 4.7–7.2mm —
+    // the user was told to enlarge joints that were already too large for the
+    // room they had. The dominant reason wins; ties break in declaration order.
+    //
+    // 'mechanism' says "too small" because the solver's refusal is only ever
+    // reachable from BELOW here: the plan hands the build a radius it has
+    // already shrunk into the feasible interval, and the interval's UPPER
+    // boundary (r_max ≈ 51.4·c, see `solveLinkJointGeometry`) is reported by the
+    // plan's own `joint-size-capped` line instead — `sizeJoint` only ever
+    // shrinks, so a too-BIG radius cannot arrive here.
+    //
+    // There is deliberately no fifth "the body is too WIDE" bucket. It was
+    // written for a range collapsed by the look ceiling, and that cannot happen:
+    // the ceiling reads `ρ_bind = max(ρ_hoop, min(ρ_max, ρ_A))`, which CLAMPS the
+    // body's contribution at ρ_A = 15mm, so the cap is flat at 15.94°/15.00°/
+    // 14.06° (c = 0.30/0.55/0.80) for every ρ_max from 15mm to 5000mm and its
+    // minimum over the whole feasible box is 5.4°, five times the travel floor.
+    // A message no body can produce is a message no one has tested.
     if (linkFallbackJoints > 0) {
+      const reasons = linkFallbackReasons;
+      const dominant = (
+        ['mechanism', 'body', 'neighbours', 'boolean'] as const
+      ).reduce((best, key) => (reasons[key] > reasons[best] ? key : best));
+      const one = linkFallbackJoints === 1;
+      const count = one ? 'One joint' : `${linkFallbackJoints} joints`;
+      const verb = one ? 'uses' : 'use';
+      const groove = one ? 'a rounded groove' : 'rounded grooves';
       warnings.push({
         code: 'link-joint-fallback',
-        message:
-          linkFallbackJoints === 1
-            ? 'One joint was too small for a link hinge and uses a rounded groove instead.'
-            : `${linkFallbackJoints} joints were too small for link hinges and use rounded grooves instead.`,
+        message: ((): string => {
+          switch (dominant) {
+            case 'mechanism':
+              return `${count} ${one ? 'is' : 'are'} too small for a link hinge and ${verb} ${groove} instead. Try a larger Joint size, or fewer segments.`;
+            case 'body':
+              return `${count} ${one ? 'sits' : 'sit'} where the model is too thin for the link ring and ${verb} ${groove} instead. Try a smaller Joint size, or a longer toy.`;
+            // Singular gets its OWN sentence rather than a pluralised template:
+            // "One joint is too close together for link hinges" is the kind of
+            // line that reads as a bug even when the geometry behind it is right.
+            case 'neighbours':
+              return one
+                ? `One joint is too close to its neighbour for a link hinge and uses a rounded groove instead. Try fewer segments.`
+                : `${linkFallbackJoints} joints are too close together for link hinges and use rounded grooves instead. Try fewer segments.`;
+            case 'boolean':
+              return `${count} could not be cut as a link hinge on this shape and ${verb} ${groove} instead.`;
+            default:
+              return assertNever(dominant, 'link fallback reason');
+          }
+        })(),
       });
     }
-    // Link's bend IS its ring gap, so on a chunky body the gap ceiling binds
-    // before the slider does. That is honest physics, but it must never be
-    // SILENT: this line names the delivered angle and is the only thing that
-    // tells a user why Flexibility stopped doing anything. "up and down" is
-    // load-bearing, not decoration — this number is the PITCH only, and the
-    // sideways motion has its own line below because it can be smaller.
+    // Link's bend IS its ring gap, so past the look ceiling the gap — and the
+    // bend — stop growing before the slider does. That is honest physics, but it
+    // must never be SILENT: this line names the delivered angle and is the only
+    // thing that tells a user why Flexibility stopped doing anything. It reports
+    // a RANGE because joints on the same body can settle differently, and naming
+    // only the smallest understated three of four joints on the acceptance body
+    // by up to 3.8°. "up and down" is retained because it really is the pitch
+    // angle: the carved key caps the sideways sweep at LINK_SECONDARY_MAX_DEG
+    // independently of this, which the style's own documentation states.
+    //
+    // The CAUSE clause tracks which of the two clamps actually bit. The look
+    // ceiling is the usual one and its remedy is the body; a gate (a neighbour
+    // with no room, a skin too thin for the ring) is a different cause with a
+    // different remedy, so asserting the ceiling for both would be exactly the
+    // kind of confident-but-wrong line the fallback message was rewritten to
+    // stop telling.
+    //
+    // The ceiling clause used to read "this model is too wide AT THE JOINTS",
+    // which points at the joint hardware. What actually binds is the widest skin
+    // radius the seam has to cut THROUGH — a 6mm tube with a 25mm wing reads the
+    // wing, so a user looking at slim joints was told they were fat ones. The
+    // wording now names the ring gap and the place it has to hide in.
+    //
+    // One line has to speak for every clamped joint, so it names the cause of
+    // the MAJORITY of them rather than of any one. `> 0` let a single gated
+    // joint rewrite the sentence for three ceiling-clamped ones, and the two
+    // remedies point in opposite directions ("fewer segments" against "this is
+    // the shape of your model"), so the minority reading was actively
+    // misleading. Ties go to the ceiling: it is the cause that reaches users on
+    // ordinary bodies, and it is the one whose advice is inert rather than wrong
+    // when it is the wrong half.
     if (linkTravelClampedJoints > 0) {
-      const rounded = Math.round(linkMinTravelDeg);
+      const low = linkMinTravelDeg.toFixed(1);
+      const high = linkMaxTravelDeg.toFixed(1);
+      const span =
+        linkTravelClampedJoints === 1 || low === high ? low : `${low}–${high}`;
+      const liveJointCount = plan.joints.filter((joint) => !joint.fused).length;
+      const subject =
+        linkTravelClampedJoints === 1
+          ? `One of ${liveJointCount} joints bends`
+          : `${linkTravelClampedJoints} of ${liveJointCount} joints bend`;
+      const because =
+        linkTravelGateClampedJoints * 2 > linkTravelClampedJoints
+          ? 'there is no room here for a bigger ring gap. Try fewer segments, or a smaller Joint size.'
+          : 'a bigger bend would need a ring gap wider than this model can hide where the joints cut.';
       warnings.push({
         code: 'link-travel-reduced',
-        message:
-          linkTravelClampedJoints === 1
-            ? `One joint bends about ${rounded}° up and down instead of ${settings.bendAngleDeg}° so the ring gap stays in proportion to the body.`
-            : `${linkTravelClampedJoints} joints bend about ${rounded}° up and down instead of ${settings.bendAngleDeg}° so the ring gap stays in proportion to the body.`,
+        message: `${subject} about ${span}° up and down instead of ${settings.bendAngleDeg}° — ${because}`,
       });
     }
-    // The same ring gap closes at the WIDEST rim when the joint twists sideways,
-    // so on a finned or flattened body the sideways travel lands below what the
-    // mechanism was carved for even when the up-and-down bend is at its full
-    // requested angle. That case delivered 3.3° against a 5° slider with nothing
-    // said at all, which is the defect this line exists to close. It names the
-    // delivered angle rather than a shortfall because the delivered angle is the
-    // only number a user can act on.
+    // UNREACHABLE BY CONSTRUCTION, and deliberately kept — see the emit-site
+    // comment in `buildLinkSegments` and plan probe L-SEC. A conical kerf reads
+    // the radius and nothing else, so it is direction-free and cannot fall short
+    // sideways; `secondaryTravelDeg` and `secondaryTargetDeg` are the same
+    // expression. What DOES limit sideways travel is the carved key
+    // (`LINK_SECONDARY_MAX_DEG`), which is a deliberate mechanism decision the
+    // style documents rather than a shortfall to warn about — so this line must
+    // never blame the BODY. It survives so that a future direction-dependent
+    // kerf cannot reintroduce the silent 3.3°-against-a-5°-slider defect.
     if (linkSidewaysClampedJoints > 0 && Number.isFinite(linkMinSidewaysDeg)) {
       const rounded = Math.round(linkMinSidewaysDeg);
       warnings.push({
         code: 'link-sideways-reduced',
         message:
           linkSidewaysClampedJoints === 1
-            ? `One joint only twists about ${rounded}° side to side, because the model is much wider than it is deep there.`
-            : `${linkSidewaysClampedJoints} joints only twist about ${rounded}° side to side, because the model is much wider than it is deep there.`,
+            ? `One joint only twists about ${rounded}° side to side — the ring gap closes before the joint does.`
+            : `${linkSidewaysClampedJoints} joints only twist about ${rounded}° side to side — the ring gap closes before the joints do.`,
       });
     }
     if (base.repaired) {
@@ -2422,6 +2523,37 @@ function buildStrongSegments(
   return groups;
 }
 
+/**
+ * Why a link joint abandoned its mechanism, counted at the point of abandonment
+ * so the warning can name a remedy the user can act on. Ties break in the order
+ * listed here.
+ */
+export type FlexiLinkFallbackReason =
+  /** The solver refused this radius outright, or the hoop cannot engage. */
+  | 'mechanism'
+  /** The body is too thin here for the ring (g1 clip gates g2/g3). */
+  | 'body'
+  /** The neighbouring joints leave no room (g4, g6). */
+  | 'neighbours'
+  /** Every solid solved and the booleans still failed. */
+  | 'boolean';
+
+export type FlexiLinkNotes = {
+  linkFallbackJoints: number;
+  fallbackReasons: Record<FlexiLinkFallbackReason, number>;
+  travelClampedJoints: number;
+  /**
+   * Of those, the ones a GATE pushed below the top of their own range rather
+   * than the look ceiling. The two have different remedies, so the warning says
+   * so instead of asserting the ceiling for both.
+   */
+  travelGateClampedJoints: number;
+  minTravelDeg: number;
+  maxTravelDeg: number;
+  sidewaysClampedJoints: number;
+  minSidewaysDeg: number;
+};
+
 // Subtract one link cutter per live joint, then add every joint's TWO male
 // solids (hoop and blade) back in ONE whole-body union, decompose, and group
 // components into segment intervals. A top-level arm rather than a branch inside
@@ -2435,13 +2567,7 @@ function buildLinkSegments(
   meshInput: FlexiMeshInput,
   clearance: number,
   bendAngleDeg: number,
-  notes: {
-    linkFallbackJoints: number;
-    travelClampedJoints: number;
-    minTravelDeg: number;
-    sidewaysClampedJoints: number;
-    minSidewaysDeg: number;
-  },
+  notes: FlexiLinkNotes,
 ): Manifold[][] | 'uncut' | null {
   let cut = body;
   const males: Manifold[] = [];
@@ -2463,42 +2589,70 @@ function buildLinkSegments(
     if (!(planeExtents.maxMm > 0)) {
       return abandon();
     }
-    // The probe band is derived from the CEILING CONSTANT, never from the solved
-    // kerf: the kerf is an output of the seam solve and using it to define the
-    // band it is measured over would be a fixed point with nothing pinning it.
-    const band = LINK_KERF_MAX_MM / 2 + 1;
-    const bandExtents = measure(band);
-    const rhoMax = Math.max(planeExtents.maxMm, bandExtents.maxMm);
-    // The BEND half-extent: the skin reach in the ±û fan only. Sizing the kerf
-    // by the widest direction instead would kill the Flexibility slider on a
-    // flat, wide body — a fish bends at its SHALLOW radius (measured: rhoBend 6
-    // against rhoMax 18 delivers the full 25° on a 2.88mm kerf, where sizing by
-    // rhoMax delivers 13.1° on a 4.50mm one).
-    const rhoBend = linkFanExtentMm(
-      measure,
-      band,
-      [0, measure.sectorCount / 2],
-      planeExtents.maxMm,
-    );
-    // The LATERAL half-extent. It sizes nothing — it is what the delivered YAW
-    // is read off, because yaw closes the same flat kerf at the ±v̂ rim. On a
-    // finned body it is 2–3× rhoBend and the yaw is correspondingly smaller;
-    // publishing a flat secondary floor without measuring this is how the first
-    // round of this style got its mobility contract wrong by 20%.
-    const rhoLat = linkFanExtentMm(
-      measure,
-      band,
-      [measure.sectorCount / 4, (3 * measure.sectorCount) / 4],
-      planeExtents.maxMm,
-    );
-    const rhoClip =
-      Math.min(planeExtents.minMm, bandExtents.minMm) - LINK_CLIP_MARGIN_MM;
-
     const geometry = solveLinkJointGeometry(
       joint.ballRadiusMm,
       clearance,
       bendAngleDeg,
     );
+
+    // TWO band passes, and they do different jobs.
+    //
+    // Band 1 is derived from the CEILING CONSTANT, never from the solved kerf:
+    // using an output of the seam solve to define the band it is measured over
+    // would be a fixed point with nothing pinning it. `rhoClip` is read off THIS
+    // band alone — widening it would loosen the clip on the very fins it exists
+    // to keep the hoop clear of.
+    //
+    // Band 2 exists because a conical kerf at a large radius is thicker than the
+    // allowance by design (`k(ρ_max)` at the trout's dorsal fin is 6.6mm against
+    // a 4.5mm allowance), so a single 3.25mm band would stop measuring exactly
+    // where the cutter still has to punch through. It only ever widens, and the
+    // travel is capped so the cutter never asks for more than band 2 measured.
+    const band1 = LINK_KERF_ALLOWANCE_MM / 2 + 1;
+    const banded1 = measure(band1);
+    const rhoClip =
+      Math.min(planeExtents.minMm, banded1.minMm) - LINK_CLIP_MARGIN_MM;
+    const rho1 = Math.max(planeExtents.maxMm, banded1.maxMm);
+    let rhoMax = rho1;
+    let requestedTravelDeg = bendAngleDeg;
+    if (geometry) {
+      const first = solveLinkSeam(geometry, rho1, clearance, bendAngleDeg);
+      // Measured at the CUTTER's own rim, not at the skin: that is where the
+      // cone is thickest, and it leaves the band room for `rhoMax` to grow on
+      // the second scan. Sizing band 2 from `rho1` instead makes the cap below
+      // bite by ~0.03° on a finned body — enough to fire a travel warning on a
+      // joint that met its request.
+      const band2 = Math.max(
+        band1,
+        linkKerfAtMm(first, first.outerRadiusMm) / 2 + 1,
+      );
+      if (band2 > band1) {
+        rhoMax = Math.max(planeExtents.maxMm, measure(band2).maxMm);
+      }
+      // Never cut wider than the band that was measured: a cutter thicker than
+      // the slab the skin was sampled over could stop short of a fin and leave
+      // the cut unsevered.
+      //
+      // It folds into `topDeg` below, so a joint it clamped would report as a
+      // LOOK-CEILING clamp. That is not a mis-attribution in practice: swept
+      // over the whole legal box (2.9M cells, r 2.5–80mm × c 0.20–0.80 × bend
+      // 5–25 × ρ 0–20000mm) it binds below the ceiling in ZERO of them, because
+      // band 2 is itself sized from the cone at the cutter's rim and so grows
+      // with the very radius it is divided by. It bites only where band 2's scan
+      // finds a radius ≥ 6.9× band 1's — a razor flange beginning just outside
+      // the first slab — and there the ceiling clause ("a ring gap wider than
+      // this model can hide where the joints cut") is the true sentence anyway.
+      const bandCapDeg =
+        rhoMax > 1e-9
+          ? (2 *
+              Math.atan(
+                Math.max(0, 2 * (band2 - 1) - clearance) / (2 * rhoMax),
+              ) *
+              180) /
+            Math.PI
+          : bendAngleDeg;
+      requestedTravelDeg = Math.min(bendAngleDeg, bandCapDeg);
+    }
 
     // Law 7, explicitly. Three link features reach axially, and each gets a
     // named budget checked against the NEIGHBOUR's own solved reach — never
@@ -2509,6 +2663,19 @@ function buildLinkSegments(
     let tailRoom = Infinity;
     let maxTailReach = Infinity;
     let minNeighborDist = Infinity;
+    // The neighbour's own skin radius, kept per side: it bounds BOTH the reserve
+    // the neighbour makes and the reach this joint's cone is CHARGED for out
+    // there, and the two must be read at the SAME radius or the budget is
+    // asymmetric. Deliberately an upper bound rather than the truth: this band is
+    // up to a whole neighbour-distance wide, so `rhoNb` can land outside
+    // `seam.outerRadiusMm`, where the cutter has no material at all and
+    // `linkKerfAtMm` extrapolates the cone past its own rim. That direction is
+    // safe (it can only lose travel, never clearance) and it is what keeps the
+    // two sides of the budget comparable; clamping it to the rim would be
+    // tighter but would make my charge and the neighbour's reserve two different
+    // quantities again, which is the asymmetry law 7 exists to close.
+    let headNbRho = 0;
+    let tailNbRho = 0;
     for (const side of [-1, 1]) {
       const other = cutJoints[index + side];
       if (!other) continue;
@@ -2522,9 +2689,16 @@ function buildLinkSegments(
         clearance,
         bendAngleDeg,
       );
-      const otherKerfMax = Math.min(
-        LINK_KERF_MAX_MM,
-        LINK_KERF_MAX_FRACTION * measure(distance + 2).maxMm,
+      const rhoNb = measure(distance + 2).maxMm;
+      if (side > 0) headNbRho = rhoNb;
+      else tailNbRho = rhoNb;
+      // The neighbour's WORST CASE, so the reserve is an upper bound whatever
+      // its own ladder settles on. `max`, not `min`: the look ceiling is
+      // `max(ALLOWANCE, FRACTION·ρ)` — the fraction is what the cone is allowed
+      // to grow to out at a fin, not a cap that shrinks on a thin body.
+      const otherKerfMax = Math.max(
+        LINK_KERF_ALLOWANCE_MM,
+        LINK_KERF_MAX_FRACTION * rhoNb,
       );
       const otherHead = otherGeometry
         ? otherGeometry.pivotOffsetMm +
@@ -2563,82 +2737,138 @@ function buildLinkSegments(
 
     // The per-joint ladder. ONE axis — the travel — because every gated quantity
     // is monotone in it once the geometry is frozen:
-    //   g1 engagement `q + a − kerf/2`        INCREASES as travel drops
-    //   g2 envelope radius (sagitta ∝ 1−cos)  decreases
-    //   g4 both neighbour reaches (kerf/2)    decrease
-    //   g5 anchor depth                       has less to reach
-    // so if any step passes, every later step passes. That is what makes this a
-    // genuine relief mechanism rather than a lottery, and it is why the suite can
-    // assert that a dense station degrades by LOSING TRAVEL rather than by
-    // falling back. There is deliberately no second (engagement) ladder axis:
-    // reducing travel IMPROVES engagement, so the two never conflict.
+    //   g1 engagement `q + a − legKerf/2`     INCREASES as travel drops
+    //   g2 envelope radius (sagitta ∝ 1−cos)  decreases, and so does the knee
+    //   g4 both neighbour reaches (k(ρ_nb))   decrease
+    // so `feasible` is monotone decreasing and the search below is exact. That
+    // is what makes this a genuine relief mechanism rather than a lottery, and
+    // why the suite can assert that a dense station degrades by LOSING TRAVEL
+    // rather than by falling back. There is deliberately no second (engagement)
+    // ladder axis: reducing travel IMPROVES engagement, so the two never
+    // conflict.
+    //
+    // The GRID IS ABSOLUTE. A ladder whose rungs are a fraction of the request
+    // (or a bisection of `[1, bend]`) has a grid that moves with `bendAngleDeg`,
+    // which makes the delivered travel a SAWTOOTH in the slider — measured 3 and
+    // 94 decreases respectively against a gate saturating at 16.2°, and it is
+    // why joint 0 of the acceptance body delivered 4.0° at bend 8 but 1.0° at
+    // bend 25. On an absolute grid the candidate set only grows with the
+    // request, so the delivered travel is non-decreasing: 0 decreases.
+    //
+    // Two gates are hoisted OUT because nothing in them moves with the travel;
+    // leaving them in the loop would spend the whole ladder re-deciding a fixed
+    // fact and then report the wrong reason for the fallback.
     //
     // No manifold operation happens in here — this is pure arithmetic over ≤ 15
     // points, the same side of the line the strong ladder stays on.
     let solved: { seam: LinkSeamProfile; poly: LinkHoopPolyline } | null = null;
-    for (let step = 0; geometry && step < LINK_CLAMP_STEPS; step += 1) {
-      const travelDeg =
-        bendAngleDeg - ((bendAngleDeg - 1) * step) / (LINK_CLAMP_STEPS - 1);
-      if (travelDeg < 1) break;
-      const seam = solveLinkSeam(
-        geometry,
-        rhoBend,
-        rhoMax,
-        clearance,
-        travelDeg,
-        rhoLat,
-      );
-      const poly = linkHoopPolyline(geometry, seam, clearance);
-      // g1 — the mechanism still visibly engages past the rim (property L3).
-      if (seam.engagementMm < LINK_ENGAGE_MIN_MM) continue;
-      // g2 — the skin clip must be a NO-OP on the hoop. The clip is not a sizing
-      // device: a clip that actually bites the hoop would leave a knife-edged or
-      // severed ring, which every other probe can survive.
-      if (linkHoopOuterMm(poly) > rhoClip) continue;
-      // g3 — the blade's ring survives the same clip.
-      if (rhoClip < geometry.eyeOuterMm + LINK_RING_WALL_MM) continue;
-      // g4 — law 7, both directions.
-      const myHeadReach = Math.max(
-        seam.kerfMm / 2,
-        geometry.pivotOffsetMm +
-          geometry.tubeRadiusMm +
-          clearance +
-          LINK_SECONDARY_INFLATE_MAX_MM,
-      );
-      const myTailReach = Math.max(
-        seam.kerfMm / 2 + LINK_BURY_MM + geometry.anchorMm,
-        geometry.bladeReachMm - geometry.pivotOffsetMm + clearance,
-      );
-      if (myHeadReach > headRoom || myTailReach > tailRoom) continue;
-      // g5 — the anchor really is buried in tail material past the kerf.
-      let deepest = Infinity;
-      for (const point of poly.points) deepest = Math.min(deepest, point[2]);
-      if (deepest > -(seam.kerfMm / 2 + LINK_BURY_MM)) continue;
-      solved = { seam, poly };
-      break;
+    let reason: FlexiLinkFallbackReason = 'mechanism';
+    // Top of the ladder's range, i.e. `min(request, look ceiling, band)`. Only
+    // meaningful once `solved`; 0 keeps the "a gate clamped me" test below false
+    // on every path that never reached the ladder.
+    let topDeg = 0;
+    if (geometry) {
+      // g3 (travel-free) — the blade's ring survives the skin clip.
+      const ringFits = rhoClip >= geometry.eyeOuterMm + LINK_RING_WALL_MM;
+      // g6 (travel-free) — the blade's head-ward truncation must leave the whole
+      // eye ring behind. Shared with the builder (`linkBladeHeadCapMm`) so the
+      // gate and the truncation cannot drift.
+      const bladeCapFits = linkBladeCapFits(geometry, headRoom);
+      const attempt = (
+        travelDeg: number,
+      ): { seam: LinkSeamProfile; poly: LinkHoopPolyline } | null => {
+        const seam = solveLinkSeam(geometry, rhoMax, clearance, travelDeg);
+        const poly = linkHoopPolyline(geometry, seam, clearance);
+        // g1 — the mechanism still visibly engages past the rim (property L3).
+        // Read at the LEG kerf, which is what the hoop actually has to cross:
+        // charging it the kerf out at a dorsal fin is what drove a healthy joint
+        // to a quarter of its requested travel.
+        if (seam.engagementMm < LINK_ENGAGE_MIN_MM) {
+          reason = 'mechanism';
+          return null;
+        }
+        // g2 — the skin clip must be a NO-OP on the hoop. The clip is not a
+        // sizing device: a clip that actually bites the hoop would leave a
+        // knife-edged or severed ring, which every other probe can survive.
+        if (linkHoopOuterMm(poly) > rhoClip) {
+          reason = 'body';
+          return null;
+        }
+        // g4 — law 7, both directions, each read at ITS OWN neighbour's radius
+        // so my reach and the reserve that neighbour made are the same quantity.
+        const kerfHead = linkKerfAtMm(seam, headNbRho);
+        const kerfTail = linkKerfAtMm(seam, tailNbRho);
+        const myHeadReach = Math.max(
+          kerfHead / 2,
+          geometry.pivotOffsetMm +
+            geometry.tubeRadiusMm +
+            clearance +
+            LINK_SECONDARY_INFLATE_MAX_MM,
+        );
+        const myTailReach = Math.max(
+          kerfTail / 2 + LINK_BURY_MM + geometry.anchorMm,
+          geometry.bladeReachMm - geometry.pivotOffsetMm + clearance,
+        );
+        if (myHeadReach > headRoom || myTailReach > tailRoom) {
+          reason = 'neighbours';
+          return null;
+        }
+        return { seam, poly };
+      };
+      if (!ringFits) {
+        reason = 'body';
+      } else if (!bladeCapFits) {
+        reason = 'neighbours';
+      } else {
+        // The top of the range: `min(request, look ceiling, band)`, closed form.
+        const top = solveLinkSeam(
+          geometry,
+          rhoMax,
+          clearance,
+          requestedTravelDeg,
+        ).travelDeg;
+        // The whole range collapsed before a single gate was consulted, so no
+        // gate can be blamed and no gate's remedy would help. `top` is
+        // `min(request, ceiling, band)`; the request cannot go below 5°, and the
+        // CEILING cannot take it below 5.4° anywhere in the feasible box (its
+        // binding radius clamps the body's contribution at ρ_A = 15mm — see the
+        // warning block above). The only term that can is the BAND, and only on
+        // a body that is ≥ 7× wider 3.3mm off the cut plane than it is within
+        // 3.25mm of it — a razor flange starting just outside the first scan. No
+        // fixture, no acceptance body and no sweep of the plan-side box reaches
+        // it, so it is attributed to the reason that promises nothing: the shape
+        // defeated the cut. Deliberately NOT a bucket of its own — a fifth enum
+        // member, product string and test shape for a path nothing can execute
+        // is untested product surface, and the "too wide" line that used to sit
+        // here also had the mechanism backwards.
+        if (top < LINK_TRAVEL_MIN_DEG) reason = 'boolean';
+        // Largest feasible ABSOLUTE grid point ≤ top, by binary search over a
+        // monotone predicate — exact rather than a sample. The search itself
+        // lives in the plan module beside the grid constants that define it, so
+        // the plan suite pins the SHIPPED loop instead of a replica.
+        solved = linkTravelSearch(top, attempt);
+        topDeg = top;
+      }
     }
     if (solved && solved.seam.travelDeg < bendAngleDeg - 1e-9) {
       notes.travelClampedJoints += 1;
       notes.minTravelDeg = Math.min(notes.minTravelDeg, solved.seam.travelDeg);
+      notes.maxTravelDeg = Math.max(notes.maxTravelDeg, solved.seam.travelDeg);
+      // WHY it was clamped, so the warning can say. The look ceiling (`top` is
+      // already below the request) is one cause; a GATE refusing the top of the
+      // range and pushing the ladder down is a different one with a different
+      // remedy, and the old single-cause line asserted the first even when the
+      // second is what happened.
+      if (solved.seam.travelDeg < topDeg - 1e-9) {
+        notes.travelGateClampedJoints += 1;
+      }
     }
-    // The sideways travel is tracked SEPARATELY from the pitch, against the
-    // kerf's OWN sideways budget (`secondaryTargetDeg`) rather than against
-    // `geometry.secondaryTravelDeg`.
-    //
-    // Comparing against the geometry cap was wrong and fired by construction:
-    // the kerf is sized for the requested pitch at the BEND rim and only ever
-    // for `LINK_SECONDARY_FLOOR_DEG` at the LATERAL one, so on any body wider
-    // than it is deep the delivered yaw sits below `min(bend, 6)` in the normal,
-    // healthy case. Measured: wingedEccentric c=0.30 bend=5 announced "2 joints
-    // only twist about 4° side to side" while the built solids yawed 5.80° and
-    // 5.62° — above the published number and above the 5° asked for. It fired on
-    // 6 of 36 sweep cells, every one of them a false alarm on the one
-    // anisotropic fixture.
-    //
-    // What IS worth saying is the delivered yaw falling under the floor this
-    // style publishes, which happens only when the LOOK CEILING refuses the
-    // wider gap. That is this comparison, and it is what the field's own JSDoc
-    // has always described.
+    // DEFENSIVE ONLY, and deliberately kept. A kerf that depends on the radius
+    // alone is direction-free (see `solveLinkSeam`), so `secondaryTravelDeg` and
+    // `secondaryTargetDeg` are the same expression and this can never fire —
+    // which is a property of the LAW, proven and pinned by a plan probe, not of
+    // the fixtures. Deleting the site would mean a future direction-dependent
+    // kerf reintroduced the silent 3.34°-against-a-5°-slider defect.
     if (
       geometry &&
       solved &&
@@ -2669,10 +2899,14 @@ function buildLinkSegments(
         cutter = built.cutter;
         hoop = built.hoop;
         blade = built.blade;
+      } else {
+        // Every solid was solvable and the booleans still refused.
+        reason = 'boolean';
       }
     }
     if (!cutter) {
       notes.linkFallbackJoints += 1;
+      notes.fallbackReasons[reason] += 1;
       cutter = buildRoundedFallbackCutter(
         wasm,
         joint,
@@ -2767,41 +3001,6 @@ function buildLinkSegments(
 }
 
 /**
- * The skin half-extent over a ±22.5° fan about two opposite directions.
- * `dirProfile` sector `j` spans `[j, j+1)·2π/sectorCount` measured from the
- * frame's `e1`, and `e1` IS the up axis for a horizontal joint axis, so the ±û
- * (BEND) fan is centred on sectors 0 and count/2 and the ±v̂ (LATERAL) fan on
- * count/4 and 3·count/4. Falls back to the plane's widest extent when a coarse
- * mesh leaves every sampled sector empty.
- *
- * Both fans matter and for the same reason: pitch closes the flat kerf at the ±û
- * rim, yaw closes the SAME kerf at the ±v̂ rim. The kerf is sized by the bend fan
- * (that is what keeps the slider alive on a shallow, wide body) and the yaw it
- * delivers is then read back off the lateral fan.
- */
-function linkFanExtentMm(
-  measure: FlexiSectionSampler,
-  bandMm: number,
-  centres: readonly number[],
-  fallbackMm: number,
-): number {
-  const profile = measure.dirProfile(bandMm, bandMm);
-  const count = measure.sectorCount;
-  let best = 0;
-  for (const centre of centres) {
-    for (
-      let offset = -LINK_BEND_SECTOR_HALF;
-      offset <= LINK_BEND_SECTOR_HALF;
-      offset += 1
-    ) {
-      const sector = (((Math.round(centre) + offset) % count) + count) % count;
-      best = Math.max(best, profile.outer[sector]);
-    }
-  }
-  return best > 0 ? best : fallbackMm;
-}
-
-/**
  * Build one link joint's cutter and its two males, or null if any part fails.
  * Deletes everything transient by hand, including on every failure path — the
  * three results are deleted TOGETHER if any of them is missing.
@@ -2841,12 +3040,7 @@ function buildLinkJoint(
       geometry,
       hoopEnvelope,
       clip,
-      Number.isFinite(headRoomMm)
-        ? Math.min(
-            geometry.pivotOffsetMm + geometry.bladeReachMm,
-            headRoomMm - 0.2,
-          )
-        : Infinity,
+      linkBladeHeadCapMm(geometry, headRoomMm),
     );
     if (!blade) return null;
     cutter = buildLinkCutter(
@@ -3017,6 +3211,10 @@ function buildLinkBlade(
 ): Manifold | null {
   const { Manifold: ManifoldClass, CrossSection } = wasm;
   const q = geometry.pivotOffsetMm;
+  // Belt and braces on the ladder's hoisted g6: truncating the plate at a radius
+  // that cuts INTO the eye leaves an open ring — a link that is not linked — and
+  // every gap, clearance and body count downstream still reads perfect.
+  if (headCapMm < q + geometry.eyeOuterMm + LINK_RING_WALL_MM) return null;
   const disc = CrossSection.circle(geometry.bladeReachMm, LINK_BLADE_SEGMENTS);
   const extruded = ManifoldClass.extrude(
     disc,
@@ -3037,11 +3235,11 @@ function buildLinkBlade(
   let capped = plate;
   if (Number.isFinite(headCapMm) && headCapMm < q + geometry.bladeReachMm) {
     const span = 4 * (geometry.bladeReachMm + 2);
-    const box = ManifoldClass.cube([span, span, span], true).translate([
-      0,
-      0,
-      headCapMm - span / 2,
-    ]);
+    // `cube(...).translate(...)` returns a NEW manifold and strands the cube, so
+    // the seed is bound and freed rather than chained away.
+    const boxSeed = ManifoldClass.cube([span, span, span], true);
+    const box = boxSeed.translate([0, 0, headCapMm - span / 2]);
+    boxSeed.delete();
     capped = plate.intersect(box);
     box.delete();
     plate.delete();
@@ -3111,18 +3309,28 @@ function buildLinkBladeEnvelope(
   return oriented;
 }
 
-// The cutter: a FLAT ANNULAR KERF of constant thickness plus the two swing
-// reliefs, each HALF-SPACED to the side it must relieve.
+// The cutter: a CONICAL ANNULAR KERF — a solid of revolution whose axial
+// thickness grows linearly with the radius — plus the two swing reliefs, each
+// HALF-SPACED to the side it must relieve.
 //
-//   cutter = kerfDisc ∪ (hoopEnvelope ∩ {s ≥ 0}) ∪ (bladeEnvelope ∩ {s ≤ 0})
+//   cutter = kerfCone ∪ (hoopEnvelope ∩ {s ≥ 0}) ∪ (bladeEnvelope ∩ {s ≤ 0})
 //
 // The half-spacing is what keeps each male attached to its own body: the hoop's
 // legs at s < 0 ARE tail material and need no relief, the blade's root at s > 0
 // IS head material and needs none either, and an un-split envelope would cut
-// both males free. The kerf disc being a right cylinder of constant height is
-// property L2 in one line, and it makes link's severance as robust as classic's
-// flat ring cut — strictly more robust than the revolved wedges, which can seal
-// inside a flaring body.
+// both males free.
+//
+// SEVERANCE (property L2) survives the grading: the profile is non-decreasing in
+// the radius and at least `LINK_KERF_MIN_MM` on the axis, and the outer radius
+// is unchanged, so it is a through-slot everywhere — a wedge that only ever gets
+// THICKER outward cannot seal inside a flaring body, which is exactly the
+// failure mode the old revolved wedges had.
+//
+// NO FACET CORRECTION. For a non-decreasing profile a point of true radius ρ on
+// a revolve facet carries the axial half-height of a NOMINAL radius ρ/cos θ ≥ ρ,
+// so the faceted cutter over-cuts and can only add clearance. The only
+// inscription risk is the outer radius, already covered by
+// `LINK_KERF_OUT_FACTOR = 1.15 ≥ 1/cos(π/64)`.
 function buildLinkCutter(
   wasm: ManifoldToplevel,
   seam: LinkSeamProfile,
@@ -3130,28 +3338,55 @@ function buildLinkCutter(
   bladeEnvelope: Manifold,
   reachMm: number,
 ): Manifold | null {
-  const { Manifold: ManifoldClass } = wasm;
+  const { Manifold: ManifoldClass, CrossSection } = wasm;
   const outer = seam.outerRadiusMm;
-  const kerf = ManifoldClass.cylinder(
-    seam.kerfMm,
-    outer,
-    outer,
-    LINK_KERF_SEGMENTS,
-    true,
-  );
+  const floor = seam.kerfFloorMm;
+  const rim = Math.max(floor, seam.kerfSlope * outer + seam.clearanceMm);
+  // Radius at which the graded law overtakes the floor.
+  const knee =
+    seam.kerfSlope > 1e-12
+      ? Math.max(
+          0,
+          Math.min(outer, (floor - seam.clearanceMm) / seam.kerfSlope),
+        )
+      : outer;
+  let kerf: Manifold;
+  if (rim <= floor + 1e-9) {
+    // Degenerate cone == the plain right cylinder; keep the cheap solid.
+    kerf = ManifoldClass.cylinder(
+      floor,
+      outer,
+      outer,
+      LINK_KERF_SEGMENTS,
+      true,
+    );
+  } else {
+    // `revolve` spins the (x, y) section about ITS y-axis and lands the result
+    // on +Z, so x is the radius and y the axial coordinate. Same CCW winding as
+    // `buildLinkBladeEnvelope`.
+    const pts: [number, number][] = [[0, -floor / 2]];
+    if (knee > 1e-6) pts.push([knee, -floor / 2]);
+    pts.push([outer, -rim / 2], [outer, rim / 2]);
+    if (knee > 1e-6) pts.push([knee, floor / 2]);
+    pts.push([0, floor / 2]);
+    let section: InstanceType<typeof CrossSection> | null = null;
+    try {
+      section = new CrossSection([pts]);
+      kerf = section.revolve(LINK_KERF_SEGMENTS);
+    } finally {
+      if (section) section.delete();
+    }
+  }
   // Boxes, not cylinders: the half-space only has to cut at s = 0, and a
   // 12-triangle box does that far more cheaply than a faceted cylinder.
   const span = 4 * (outer + reachMm + 2);
-  const headHalf = ManifoldClass.cube([span, span, span], true).translate([
-    0,
-    0,
-    span / 2,
-  ]);
-  const tailHalf = ManifoldClass.cube([span, span, span], true).translate([
-    0,
-    0,
-    -span / 2,
-  ]);
+  // The seeds are bound and freed: `cube(...).translate(...)` returns a NEW
+  // manifold and leaves the cube behind, which leaked one box per half-space per
+  // joint on every build.
+  const halfSeed = ManifoldClass.cube([span, span, span], true);
+  const headHalf = halfSeed.translate([0, 0, span / 2]);
+  const tailHalf = halfSeed.translate([0, 0, -span / 2]);
+  halfSeed.delete();
   const hoopRelief = hoopEnvelope.intersect(headHalf);
   const bladeRelief = bladeEnvelope.intersect(tailHalf);
   headHalf.delete();

@@ -751,7 +751,8 @@ export function FlexiToyDialog({
                 </div>
               ) : (
                 <p className="mt-2 text-xs text-adam-text-secondary/80">
-                  Tighter grips firmly; looser moves more freely.
+                  Tighter grips firmly; looser leaves more play between the
+                  parts and is easier to free after printing.
                 </p>
               )}
             </div>
@@ -822,7 +823,13 @@ export function FlexiToyDialog({
                     case 'strong':
                       return 'How far each joint can bend. Bigger bends open the gap between segments wider.';
                     case 'link':
-                      return 'How far each joint bends up and down. Link shows the bend as a flat ring gap, so on a chunky model the gap — and the bend — stop growing before the slider does, and each joint only twists a few degrees side to side.';
+                      // "On a wide model" read as though slim models were
+                      // exempt. They are not: the ceiling is an ABSOLUTE ring
+                      // gap, so it bites on anything more than roughly 19mm
+                      // across at a joint — which is most models at print size.
+                      // What varies is only how soon, and that is what this now
+                      // says.
+                      return 'How far each joint bends up and down. Sideways twist stays small whatever you pick, so the links stay hooked together. The bend stops growing part-way up the slider — sooner the wider your model is at the joints — and the toy tells you the angle it settled on.';
                     case 'shell':
                       return 'How far each joint can bend.';
                   }

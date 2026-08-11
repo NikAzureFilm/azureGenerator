@@ -322,6 +322,39 @@ describe('FlexiToyDialog', () => {
     );
   });
 
+  // The two helper strings the link style's honesty rests on. Both were WRONG
+  // before the conical kerf landed — "looser moves more freely" is backwards for
+  // a joint whose clearance is additive in the ring gap, and the old Flexibility
+  // line promised a side-to-side sweep the carved key never delivered — and
+  // nothing in this spec pinned either of them, so a later edit could quietly
+  // put the false version back. The rewritten copy is a deliverable, so it is
+  // asserted like one.
+  it('tells the truth about the link joint fit and the bend ceiling', async () => {
+    renderDialog();
+    await settle();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Link/ }));
+    await settle();
+
+    expect(
+      screen.getByText(/Tighter grips firmly; looser leaves more play/),
+    ).toBeInTheDocument();
+    // The pre-fix line said the opposite of what the mechanism does.
+    expect(screen.queryByText(/looser moves more freely/)).toBeNull();
+
+    const bendHelp = screen.getByText(/How far each joint bends up and down/);
+    // It must disclose the sideways cap...
+    expect(bendHelp).toHaveTextContent(/Sideways twist stays small/);
+    // ...and the ceiling, WITHOUT implying slim models are exempt from it.
+    expect(bendHelp).toHaveTextContent(/bend stops growing part-way up/);
+    expect(bendHelp).toHaveTextContent(/the angle it settled on/);
+    expect(bendHelp).not.toHaveTextContent(/On a wide model/);
+    // ...and it must not promise a side-to-side sweep that scales with it.
+    expect(bendHelp).not.toHaveTextContent(
+      /twists? a few degrees side to side/,
+    );
+  });
+
   it('collapses rapid setting changes into a single compute after the debounce', async () => {
     renderDialog();
     await settle();

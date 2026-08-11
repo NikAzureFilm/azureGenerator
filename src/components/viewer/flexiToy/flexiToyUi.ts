@@ -92,10 +92,18 @@ export type FlexiStyleDefaults = {
 };
 
 /**
- * NB no LINK_DEFAULTS. The reference chain-link look — a ring gap that is
- * 0.10–0.13 of the local body radius — lands at `bendAngleDeg ≈ 8`, which is
- * exactly what `SHELL_DEFAULTS` already opens with, so Link needs no literal of
- * its own until the product wants the styles to re-seed the controls.
+ * NB no LINK_DEFAULTS, and the arithmetic behind that rather than an assertion.
+ * Link's ring gap is a CONE, `k(ρ) = 2·tan(bend/2)·ρ + c`, so its ratio to the
+ * local body radius at the skin is `2·tan(bend/2) + c/ρ` — the reference
+ * chain-link look (0.10–0.13 of the radius) therefore lands at `bend ≈ 5.2–6.9°`
+ * at a 15mm skin radius, not at 8. Eight is a deliberate half-notch-wide choice:
+ * it keeps ONE opening default across every style, and after the cone law it
+ * delivers the full 8° at every joint of the acceptance body with a 1.7–2.4mm
+ * slot and no travel warning.
+ *
+ * Re-seeding on a style switch would also throw away the user's dragged
+ * stations, which `FlexiStyleDefaults`' own JSDoc and the dialog spec's
+ * 'keeps dragged positions' test both forbid in substance.
  */
 export const SHELL_DEFAULTS: FlexiStyleDefaults = {
   segmentMode: 'custom',

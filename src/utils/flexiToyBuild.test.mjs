@@ -8,11 +8,11 @@ import {
   solveLinkJointGeometry,
   solveLinkSeam,
   linkHoopPolyline,
+  linkHoopOuterMm,
   crossSectionExtentsSampler,
-  linkFlatKerfAngleDeg,
-  LINK_KERF_MAX_MM,
+  linkKerfAtMm,
+  LINK_KERF_ALLOWANCE_MM,
   LINK_KERF_MAX_FRACTION,
-  LINK_BEND_SECTOR_HALF,
 } from './flexiToyPlan.ts';
 import { buildFlexiToy, loadManifold } from './flexiToyBuild.ts';
 import { FLEXI_CAPTURE_MARGIN_MM } from './flexiToyTypes.ts';
@@ -213,6 +213,25 @@ function countBodies(positions, indices) {
 }
 
 // Reconstruct a single segment's sub-mesh as a Manifold to check watertightness.
+// FNV-1a digest of ONE segment's geometry — isolates joint-local change from
+// global change, so "this control moved the solid" is a fact rather than a hope.
+function linkSegmentDigest(result, segmentIndex) {
+  const range = result.segmentTriangleRanges[segmentIndex];
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  const mix = (x) => {
+    h1 = Math.imul(h1 ^ (x & 0xffffffff), 16777619) >>> 0;
+    h2 = (h2 + Math.imul(x >>> 0, 2246822519)) >>> 0;
+  };
+  for (let i = 0; i < range.count; i += 1) {
+    const g = result.indices[range.start + i];
+    mix(Math.round(result.positions[g * 3] * 1e4));
+    mix(Math.round(result.positions[g * 3 + 1] * 1e4));
+    mix(Math.round(result.positions[g * 3 + 2] * 1e4));
+  }
+  return `${h1.toString(16)}:${h2.toString(16)}:t${range.count / 3}`;
+}
+
 function segmentManifold(wasm, positions, indices, range) {
   const { Manifold, Mesh } = wasm;
   const used = new Map();
@@ -675,94 +694,93 @@ function linkAxialReach(
   return best;
 }
 
-// The seam the build would solve for this joint, at the planner's own local
-// half-extent. Used only to place probe points, never as a contract.
-function linkSeamOf(geometry, joint, settings) {
-  const rho = joint.ballRadiusMm / 0.55;
-  return solveLinkSeam(
-    geometry,
-    rho,
-    rho,
-    settings.clearanceMm,
-    settings.bendAngleDeg,
-  );
-}
-
-// The three skin half-extents the BUILD measures for a link joint, reproduced
-// from the same sampler over the same band: the ±û (bend) fan, the ±v̂ (lateral)
-// fan and the widest. `dirProfile` sector j spans [j, j+1)·2π/sectorCount from
-// e1 (= up) toward e2, so the two fans sit a quarter turn apart.
-function linkExtentsOf(input, joint) {
+// The skin half-extents the BUILD measures for a link joint, reproduced from the
+// same sampler over the same TWO bands.
+//
+// There is no bend/lateral fan any more, and that is the point: the kerf is a
+// solid of revolution whose thickness depends on the RADIUS alone, so there is
+// no direction for it to be sized by. What is still needed is the per-azimuth
+// skin radius, because the SLOT THE EYE READS at azimuth φ is `k(rho(φ))` — that
+// is what L-KERF-SKIN measures the built solids against.
+function linkExtentsOf(input, joint, geometry, settings) {
   const measure = crossSectionExtentsSampler(
     input.positions,
     joint.center,
     joint.axis,
   );
-  const band = LINK_KERF_MAX_MM / 2 + 1;
+  const band1 = LINK_KERF_ALLOWANCE_MM / 2 + 1;
   const plane = measure();
-  const banded = measure(band);
+  const banded1 = measure(band1);
+  const rho1 = Math.max(plane.maxMm, banded1.maxMm);
+  let rhoMax = rho1;
+  let band = band1;
+  if (geometry) {
+    const first = solveLinkSeam(
+      geometry,
+      rho1,
+      settings.clearanceMm,
+      settings.bendAngleDeg,
+    );
+    band = Math.max(band1, linkKerfAtMm(first, first.outerRadiusMm) / 2 + 1);
+    if (band > band1) rhoMax = Math.max(plane.maxMm, measure(band).maxMm);
+  }
   const profile = measure.dirProfile(band, band);
   const count = measure.sectorCount;
-  const fan = (centres) => {
+  // `dirProfile` sector j spans [j, j+1)·2π/sectorCount from e1 (= up) toward
+  // e2, so ψ = 0 is the UP direction. A rotation about `lat·cosψ + up·sinψ`
+  // closes the slot at the rim a quarter turn from ψ.
+  const rhoAtRad = (psi) => {
+    const centre = (psi / (2 * Math.PI)) * count;
     let best = 0;
-    for (const centre of centres) {
-      for (
-        let offset = -LINK_BEND_SECTOR_HALF;
-        offset <= LINK_BEND_SECTOR_HALF;
-        offset += 1
-      ) {
-        best = Math.max(
-          best,
-          profile.outer[
-            (((Math.round(centre) + offset) % count) + count) % count
-          ],
-        );
-      }
+    for (const c of [centre, centre + count / 2]) {
+      const sector = ((Math.round(c) % count) + count) % count;
+      best = Math.max(best, profile.outer[sector]);
     }
     return best > 0 ? best : plane.maxMm;
   };
-  // The half-extent that closes the kerf for a rotation about the in-plane axis
-  // `lat·cosψ + up·sinψ`. That rotation lifts a rim point in proportion to its
-  // component along `m̂ = n̂ × â = lat·sinψ − up·cosψ`, and ±m̂ is exactly the
-  // sector pair `ψ` and `ψ + π` (dirProfile measures from e1 = up). ψ = 0 gives
-  // back the BEND fan and ψ = π/2 the LATERAL one.
-  const fanAtRad = (psi) => {
-    const centre = (psi / (2 * Math.PI)) * count;
-    return fan([centre, centre + count / 2]);
-  };
-  return {
-    rhoMax: Math.max(plane.maxMm, banded.maxMm),
-    rhoBend: fan([0, count / 2]),
-    rhoLat: fan([count / 4, (3 * count) / 4]),
-    fanAtRad,
-  };
+  return { rhoMax, rhoMin: Math.min(plane.minMm, banded1.minMm), rhoAtRad };
 }
 
-// The seam the build actually solved, at the travel the build REPORTED. The kerf
-// is monotone non-decreasing in the travel and the delivered angles are monotone
-// non-decreasing in the kerf, so evaluating at the reported (minimum over live
-// joints) travel is a LOWER bound on what this joint really got.
+// The seam the build actually solved, at the travel the build REPORTED. Every
+// gated quantity is monotone non-decreasing in the travel, so evaluating at the
+// reported (minimum over live joints) travel is a LOWER bound on what this joint
+// really got.
 function linkSeamMeasured(input, joint, geometry, settings, travelDeg) {
-  const extents = linkExtentsOf(input, joint);
+  const extents = linkExtentsOf(input, joint, geometry, settings);
   const seam = solveLinkSeam(
     geometry,
-    extents.rhoBend,
     extents.rhoMax,
     settings.clearanceMm,
     travelDeg,
-    extents.rhoLat,
   );
   return { seam, extents };
 }
 
+// The seam this joint was built with, at the requested travel. Replaces the old
+// `linkSeamOf`, which read the PLANNER's `r/0.55` as a stand-in for the local
+// half-extent — right only at jointScale 1, and 40% out at 0.6.
+function linkSeamAt(input, joint, geometry, settings) {
+  return linkSeamMeasured(
+    input,
+    joint,
+    geometry,
+    settings,
+    settings.bendAngleDeg,
+  ).seam;
+}
+
 // Native-frame `(s, u, v)` probe points on both legs: the mid-length of each
 // descending leg and each buried tip.
-function linkLegProbePoints(geometry, seam) {
-  const poly = linkHoopPolyline(geometry, seam, 0.4);
+// (L-LEGTIPS) EVERY polyline point, tips included, plus the arc CROWN — the
+// point at `s = +q` on the pin axis whose membership is what actually proves the
+// hoop is threaded through the eye rather than merely near it. An earlier
+// revision picked `[1, 2, n−3, n−2]`, which skips exactly the two buried tips
+// (the ends most likely to land in a neighbour's cavity) and the crown.
+function linkLegProbePoints(geometry, seam, clearanceMm = 0.4) {
+  const poly = linkHoopPolyline(geometry, seam, clearanceMm);
   const n = poly.points.length;
-  const pick = [1, 2, n - 3, n - 2];
   const points = [];
-  for (const i of pick) {
+  for (let i = 0; i < n; i += 1) {
     const [v, u, s] = poly.points[i];
     points.push([s, u, v]);
   }
@@ -889,11 +907,10 @@ function assertLinkStructure(
     `${label}: blade material round the eye is >= ${LINK_RING_WALL_CONTRACT_MM}mm at every azimuth and lateral station (worst ${ringWall.toFixed(3)})`,
   );
 
-  // --- L-LOOP: the hoop circuit is CLOSED — both legs and the crown belong
-  // to the tail segment and to nothing else, and the tail is one body.
-  // Measured, not `linkSeamOf`: that helper reads the PLANNER's `r/0.55`, which
-  // is the local half-extent only when `jointScale` is 1. The small-r run below
-  // uses jointScale 0.6, where it would be 40% out.
+  // --- L-LOOP: the hoop circuit is CLOSED — both legs, both TIPS and the arc
+  // CROWN belong to the tail segment and to nothing else, and the tail is one
+  // body. MEASURED extents, never the planner's `r/0.55` stand-in, which is the
+  // local half-extent only at jointScale 1 and 40% out at 0.6.
   const measured = linkSeamMeasured(
     input,
     probeJoint,
@@ -941,7 +958,7 @@ function assertLinkStructure(
   // measured against the HARD-CODED contract so neither a collapse of `q`
   // nor a shrunken constant can hide. Both RIMS come off the built solids —
   // see `linkSeamRims` for why the solved kerf will not do.
-  const rhoProbe = 0.75 * Math.min(extents.rhoBend, extents.rhoLat);
+  const rhoProbe = 0.75 * extents.rhoMin;
   assert.ok(
     rhoProbe > 1.15 * Math.max(geometry.bladeReachMm, geometry.eyeOuterMm + q),
     `${label}: the rim probe radius clears both males (${rhoProbe.toFixed(2)} vs ${geometry.bladeReachMm.toFixed(2)})`,
@@ -949,12 +966,26 @@ function assertLinkStructure(
   const rims = linkSeamRims(wasm, tail, head, at, rhoProbe);
   assert.ok(rims, `${label}: the seam has two clean rims at the skin`);
   const kerf = rims.headRimMm - rims.tailRimMm;
+  // The slot at THIS radius, from the law the cutter was revolved from — not a
+  // blanket ceiling. A constant-thickness kerf would read the same number at
+  // every radius, which is exactly the defect this style shipped with.
   assert.ok(
-    kerf > 0.5 && kerf <= LINK_KERF_MAX_MM + 0.2,
-    `${label}: the measured ring gap is a real flat kerf (${kerf.toFixed(3)}mm)`,
+    kerf > 0.5 && kerf <= linkKerfAtMm(seamProbe, rhoProbe) + 0.35,
+    `${label}: the measured ring gap matches the cone law at rho=${rhoProbe.toFixed(2)} (${kerf.toFixed(3)} vs ${linkKerfAtMm(seamProbe, rhoProbe).toFixed(3)}mm)`,
   );
   // `linkAxialReach` quantises to its 0.1mm slab step, so allow half a step.
-  const engageFloor = LINK_ENGAGE_CONTRACT_MM - 0.05;
+  //
+  // The floor is referenced to the MECHANISM's own radius, not to the probe's.
+  // Under a conical kerf the rim height is a function of the radius, so the
+  // visible interleave at the skin is smaller than at the hoop by exactly half
+  // the extra slot — `(k(rhoProbe) − legKerf)/2`. The contract (property L3) is
+  // the reach past the rim the HOOP crosses, which is what gate g1 sizes; adding
+  // that difference back is the same quantity read at the same radius rather
+  // than a relaxation. The 1.0mm literal stays hard-coded, so zeroing
+  // `LINK_ENGAGE_MIN_MM` still fails here.
+  const rimSpread =
+    (linkKerfAtMm(seamProbe, rhoProbe) - seamProbe.legKerfMm) / 2;
+  const engageFloor = LINK_ENGAGE_CONTRACT_MM - rimSpread - 0.05;
   const tailEngage = linkAxialReach(
     wasm,
     tail,
@@ -975,11 +1006,11 @@ function assertLinkStructure(
   );
   assert.ok(
     tailEngage >= engageFloor,
-    `${label}: tail material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the head rim (got ${tailEngage.toFixed(2)})`,
+    `${label}: tail material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the head rim at the hoop's own radius (measured ${tailEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
   );
   assert.ok(
     headEngage >= engageFloor,
-    `${label}: head material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the tail rim (got ${headEngage.toFixed(2)})`,
+    `${label}: head material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the tail rim at the hoop's own radius (measured ${headEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
   );
 
   // --- L1: pure-translation stops land on the published contract, and each
@@ -3120,7 +3151,13 @@ function skinGapProfile(wasm, result, plan, input, azimuths = 12) {
         const hp = head.intersect(probe);
         const both = !tp.isEmpty() && !hp.isEmpty();
         if (both) {
-          perAzimuth[i] = hp.boundingBox().min[2] - tp.boundingBox().max[2];
+          // The RADIUS is returned alongside the gap: with a conical kerf the
+          // slot the eye reads IS a function of the radius, so a probe that
+          // forgets where it measured cannot check the law it is testing.
+          perAzimuth[i] = {
+            gapMm: hp.boundingBox().min[2] - tp.boundingBox().max[2],
+            radiusMm: radius,
+          };
         }
         tp.delete();
         hp.delete();
@@ -3138,7 +3175,7 @@ function skinGapProfile(wasm, result, plan, input, azimuths = 12) {
 
 function visibleSkinGaps(wasm, result, plan, input, azimuths = 12) {
   return skinGapProfile(wasm, result, plan, input, azimuths).map((row) => {
-    const seen = row.filter((v) => v !== null);
+    const seen = row.filter((v) => v !== null).map((v) => v.gapMm);
     return seen.length > 0 ? Math.min(...seen) : null;
   });
 }
@@ -3522,34 +3559,23 @@ async function buildLink(fixture, overrides = {}) {
   for (const segment of segments) segment.delete();
 }
 
-// YAW IS NOT A CONSTANT, and this probe runs on an ANISOTROPIC fixture because
-// of it. Pitch and yaw are both rotations about an in-plane axis, so both close
-// the same flat kerf at the skin — pitch at the ±û rim, yaw at the ±v̂ one. The
-// kerf is sized by the ±û extent (which is what keeps the Flexibility slider
-// alive on a shallow, wide body), so on a body far wider than it is deep the yaw
-// closes at a rim that can be three times further out. Running only the round
-// spindle, where yaw == pitch by symmetry, is what hid that.
-//
-// BOTH targets asserted here are what the BUILD TOLD THE USER, never a number
-// this file re-derives from the same solver the build used. An earlier revision
-// asserted the derived `seam.secondaryTravelDeg` and passed while a finned model
-// at Flexibility 5° delivered 3.34° sideways with no warning at all — the suite
-// and the code agreed with each other and both disagreed with the product. So:
-//   • pitch target  = the angle 'link-travel-reduced' names, else `bendAngleDeg`
-//   • sideways target = the angle 'link-sideways-reduced' names, else
-//     `min(bendAngleDeg, LINK_SECONDARY_CAP_CONTRACT_DEG)` — the cap link openly
-//     ships, and the only sideways figure a silent build is claiming.
-// The derived value is still cross-checked (positive, inside the carved cap,
-// exactly equal to the pitch on an isotropic station), but it is no longer the
-// contract — a lateral measurement that silently returned 0 would now fail the
-// SWING assertion, not just an arithmetic identity.
-const LINK_SECONDARY_FLOOR_DEG = 4;
+// THE ARTICULATION CONTRACT (AG1). Every target asserted here is what the BUILD
+// TOLD THE USER, never a number this file re-derives from the solver the build
+// used — the suite and the code agreeing with each other while both disagree
+// with the product is exactly how a finned model shipped delivering 4.00° of a
+// requested 8°.
+//   • pitch target  = the angle 'link-travel-reduced' names (the LOW end of the
+//     range it publishes), else `bendAngleDeg`
+//   • sideways target = `min(bendAngleDeg, LINK_SECONDARY_CAP_CONTRACT_DEG)` —
+//     the carved cap, which a direction-free kerf always delivers
+// The ANISOTROPIC fixtures stay in the battery, but for the opposite reason they
+// were added: a finned body is now the case that must deliver the SAME angle in
+// every direction, so a kerf that regained a direction dependence anywhere fails
+// on the fin rather than on the round spindle.
+const LINK_ROLL_FLOOR_DEG = 4;
 for (const [fixture, bends] of [
   ['spindle', [5, 12, 25]],
   ['eccentric', [5, 12, 25]],
-  // One decisive case: at bend 5 this body's middle joints yaw 2.78° and 2.89°,
-  // so a regression to a flat 4° floor overlaps by 14mm³ — three orders over the
-  // 1e-3 threshold, not a 0.01° coin-flip.
   ['finned', [5]],
 ]) {
   for (const bendAngleDeg of bends) {
@@ -3562,29 +3588,31 @@ for (const [fixture, bends] of [
       `link travel: ${fixture} builds at bend ${bendAngleDeg}`,
     );
     const result = outcome.result;
-    // What the build TOLD the user this model delivers.
+    // What the build TOLD the user this model delivers. The warning publishes a
+    // RANGE; the LOW end is the promise every live joint must keep.
     const reduced = result.warnings.find(
       (w) => w.code === 'link-travel-reduced',
     );
     const promisedDeg = reduced
-      ? Number(/bends? about (\d+)° up and down/.exec(reduced.message)[1])
+      ? Number(
+          /bends? about ([\d.]+)(?:–[\d.]+)?° up and down/.exec(
+            reduced.message,
+          )[1],
+        )
       : bendAngleDeg;
-    // …and what it told them about the OTHER motion. Absent warning ⇒ the build
-    // is claiming the full carved cap sideways, and must deliver it.
+    // …and the OTHER motion. A direction-free kerf makes this warning
+    // unreachable by identity, so its absence is the expected state and the
+    // build is claiming the full carved cap sideways.
     const sidewaysWarning = result.warnings.find(
       (w) => w.code === 'link-sideways-reduced',
     );
-    const promisedSidewaysDeg = sidewaysWarning
-      ? Number(/twists? about (\d+)°/.exec(sidewaysWarning.message)[1])
-      : Math.min(bendAngleDeg, LINK_SECONDARY_CAP_CONTRACT_DEG);
-    // The PUBLISHED FLOOR itself, as a model-level claim: whatever the build
-    // says sideways, on a body the look ceiling can serve it may not say less
-    // than the floor. This is the assertion that fails outright on the defect it
-    // was written for — the finned fixture published "3°" before the kerf
-    // carried a lateral budget.
     assert.ok(
-      promisedSidewaysDeg >= LINK_SECONDARY_FLOOR_DEG,
-      `link travel: ${fixture} at bend ${bendAngleDeg} publishes at least the ${LINK_SECONDARY_FLOOR_DEG}° sideways floor (got ${promisedSidewaysDeg}°)`,
+      !sidewaysWarning,
+      `link travel: ${fixture} at bend ${bendAngleDeg} raises no sideways warning — the kerf depends on the radius alone, so yaw cannot fall short of pitch`,
+    );
+    const promisedSidewaysDeg = Math.min(
+      bendAngleDeg,
+      LINK_SECONDARY_CAP_CONTRACT_DEG,
     );
     const segments = result.segmentTriangleRanges.map((range) =>
       segmentManifold(wasm, result.positions, result.indices, range),
@@ -3617,18 +3645,17 @@ for (const [fixture, bends] of [
           secondaryDeg <= LINK_SECONDARY_CAP_CONTRACT_DEG + 1e-9,
         `${label}: the published secondary travel is a real angle inside the carved cap (got ${secondaryDeg.toFixed(2)}°)`,
       );
-      // On an ISOTROPIC station the two rims are the same distance out, so the
-      // derived yaw must be exactly the pitch (capped). This is what stops a
-      // broken lateral measurement from making the contract vacuously easy.
-      if (Math.abs(extents.rhoLat - extents.rhoBend) < 1e-6) {
-        assert.ok(
-          Math.abs(
-            secondaryDeg -
-              Math.min(LINK_SECONDARY_CAP_CONTRACT_DEG, seam.travelDeg),
-          ) < 1e-6,
-          `${label}: on a round station yaw is the pitch (got ${secondaryDeg.toFixed(3)}° vs ${seam.travelDeg.toFixed(3)}°)`,
-        );
-      }
+      // The kerf is direction-free, so yaw IS the pitch (capped) at EVERY
+      // station — not just an isotropic one. That is the identity the plan suite
+      // proves; here it is asserted on the body the build actually measured, so
+      // a station-dependent kerf reintroduced anywhere would fail here too.
+      assert.ok(
+        Math.abs(
+          secondaryDeg -
+            Math.min(LINK_SECONDARY_CAP_CONTRACT_DEG, seam.travelDeg),
+        ) < 1e-6,
+        `${label}: yaw is the pitch on EVERY station (got ${secondaryDeg.toFixed(3)}° vs ${seam.travelDeg.toFixed(3)}°)`,
+      );
       const frame = linkFrame(joint.axis);
       const at = linkPointAt(
         joint,
@@ -3660,21 +3687,20 @@ for (const [fixture, bends] of [
       for (const sign of [1, -1]) {
         assert.ok(
           swings(frame.up, sign * promisedSidewaysDeg) < 1e-3,
-          `${label}: yaws the ${sign * promisedSidewaysDeg}° the build published${
-            sidewaysWarning ? ' (warned)' : ' (no warning ⇒ the carved cap)'
-          }`,
+          `${label}: yaws the ${sign * promisedSidewaysDeg}° the build published${' (no warning ⇒ the carved cap, which the cone always delivers)'}`,
         );
         assert.ok(
-          swings(frame.ax, sign * LINK_SECONDARY_FLOOR_DEG) < 1e-3,
-          `${label}: rolls ${LINK_SECONDARY_FLOOR_DEG}° (roll does not close the kerf)`,
+          swings(frame.ax, sign * LINK_ROLL_FLOOR_DEG) < 1e-3,
+          `${label}: rolls ${LINK_ROLL_FLOOR_DEG}° (roll does not close the kerf)`,
         );
       }
 
-      // Oblique: a rotation about `lat·cosψ + up·sinψ` closes the kerf at the
-      // rim a quarter turn from ψ, so the target is that same kerf law read at
-      // THAT half-extent — capped by the carve, since the rotation carries a
-      // yaw component `sinψ` and the envelope is only swept for the cap.
-      // ψ = 0 reproduces the pitch assertion exactly; ψ = π/2 the yaw one.
+      // OBLIQUE, and this is the whole point of the cone: a rotation about
+      // `lat·cosψ + up·sinψ` meets a slot that depends on the RADIUS alone, so
+      // the target is the SAME promised angle at every azimuth — no per-azimuth
+      // half-extent, no fan, no direction-dependent law. The only cap left is
+      // the carved secondary, which the rotation loads by its yaw share `sinψ`.
+      // ψ = 0 reproduces the pitch assertion exactly.
       for (let a = 0; a < 12; a += 1) {
         const psi = (2 * Math.PI * a) / 12;
         const axis = [
@@ -3685,29 +3711,33 @@ for (const [fixture, bends] of [
         const yawShare = Math.abs(Math.sin(psi));
         const target = Math.min(
           promisedDeg,
-          linkFlatKerfAngleDeg(
-            geometry.pivotOffsetMm,
-            extents.fanAtRad(psi),
-            seam.kerfMm,
-            settings.clearanceMm,
-          ),
           yawShare > 1e-9
             ? LINK_SECONDARY_CAP_CONTRACT_DEG / yawShare
             : Infinity,
         );
-        assert.ok(
-          swings(axis, target) < 1e-3,
-          `${label}: clears ${target.toFixed(2)}° at azimuth ${a}`,
-        );
+        for (const sign of [1, -1]) {
+          assert.ok(
+            swings(axis, sign * target) < 1e-3,
+            `${label}: clears ${target.toFixed(2)}° at azimuth ${a} (sign ${sign})`,
+          );
+        }
       }
     });
     for (const segment of segments) segment.delete();
   }
 }
 
-// (L-LOOK) The look assertions. FLATNESS alone kills every drift toward a wedge,
-// ramp, loft, lip, chamfer or dome: a revolved profile CANNOT produce a gap whose
-// azimuthal spread is under 0.2mm on an eccentric body.
+// (L-KERF-SKIN) The look assertion, and the probe that would have caught the
+// original defect. The slot the eye reads at azimuth φ must be the CONE LAW read
+// at the radius it was measured at — `2·tan(T/2)·ρ(φ) + c` — where `T` is the
+// angle THE BUILD PUBLISHED, not one this file re-derives from the solver under
+// test and not `settings.bendAngleDeg`.
+//
+// It replaces a flatness assertion (spread ≤ 0.2mm at every azimuth). Flatness
+// was the right contract for a constant-thickness kerf and is the WRONG one now:
+// a cone is deliberately thicker where the body is wider, and a slot that is
+// flat round an eccentric body is precisely the bug — it means the fin got the
+// same 4.5mm slot the 9.8mm-deep belly did, and the fin then collides first.
 for (const fixture of ['spindle', 'eccentric']) {
   for (const bendAngleDeg of [8, 12, 25]) {
     const { settings, input, plan, outcome } = await buildLink(fixture, {
@@ -3738,9 +3768,26 @@ for (const fixture of ['spindle', 'eccentric']) {
       joint.center[1] - lookShiftY,
       joint.center[2],
     ]);
+    // What the build TOLD the user, as a BRACKET: the low end of the published
+    // range is the least any live joint keeps and `bendAngleDeg` is the most.
+    // The travel each joint actually got is then recovered from ITS OWN slot
+    // profile — no seam helper, no inferred rho0, no raw setting — which is what
+    // makes this a measurement of the solid rather than of the solver.
+    const lookReduced = outcome.result.warnings.find(
+      (w) => w.code === 'link-travel-reduced',
+    );
+    const lookLowDeg = lookReduced
+      ? Number(
+          /bends? about ([\d.]+)(?:–[\d.]+)?° up and down/.exec(
+            lookReduced.message,
+          )[1],
+        )
+      : bendAngleDeg;
+    let lawSamples = 0;
+    let lawJoints = 0;
     profile.forEach((row, k) => {
       const seen = row.filter((v) => v !== null);
-      if (seen.length < 6) return; // too few probes landed to judge flatness
+      if (seen.length < 6) return; // too few probes landed to judge the law
       const joint = live[k];
       const geometry = solveLinkJointGeometry(
         joint.ballRadiusMm,
@@ -3748,19 +3795,58 @@ for (const fixture of ['spindle', 'eccentric']) {
         bendAngleDeg,
       );
       if (!geometry) return;
-      const min = Math.min(...seen);
-      const max = Math.max(...seen);
-      assert.ok(
-        max - min <= 0.2,
-        `link look: ${fixture} joint ${k} gap is FLAT round the body at bend ${bendAngleDeg} (spread ${(max - min).toFixed(3)}mm over ${seen.length} azimuths)`,
+      const seam = linkSeamAt(input, joint, geometry, settings);
+      // Only OUTSIDE the mechanism. Inside the hoop's own outer reach the void
+      // the needle reads is the swing RELIEF, not the kerf — the two segments
+      // interleave there by design, and `skinGapProfile`'s `ballRadius + 1.5`
+      // guard is a ball-style figure that does not bound this style's envelope.
+      const clearOf =
+        linkHoopOuterMm(
+          linkHoopPolyline(geometry, seam, settings.clearanceMm),
+        ) + 0.5;
+      const outer = seen.filter(
+        (sample) =>
+          sample.radiusMm >= clearOf && sample.gapMm > seam.kerfFloorMm + 1e-6,
       );
-      // EQUALITY with the planned kerf, not merely a floor: the kerf cutter is a
-      // right cylinder, so what the eye reads at the skin IS the kerf.
-      const seam = linkSeamOf(geometry, joint, settings);
-      assert.ok(
-        min >= 0.6 * seam.kerfMm && max <= 1.6 * seam.kerfMm,
-        `link look: ${fixture} joint ${k} gap tracks the planned kerf at bend ${bendAngleDeg} (measured ${min.toFixed(2)}–${max.toFixed(2)}, kerf ${seam.kerfMm.toFixed(2)})`,
-      );
+      lawSamples += outer.length;
+      const rhoLo = Math.min(...outer.map((v) => v.radiusMm));
+      const rhoHi = Math.max(...outer.map((v) => v.radiusMm));
+      // A round station gives every azimuth the same radius, so there is no
+      // gradient to fit there; the eccentric fixture is what exercises the law.
+      const fittable = outer.length >= 3 && rhoHi - rhoLo >= 1.5;
+      if (fittable) {
+        lawJoints += 1;
+        // Least squares on (rho, gap). A CONSTANT-thickness kerf — the shipped
+        // defect — fits a slope of 0 and lands nowhere near the published bracket,
+        // whatever travel it claims.
+        const n = outer.length;
+        const meanRho = outer.reduce((a, v) => a + v.radiusMm, 0) / n;
+        const meanGap = outer.reduce((a, v) => a + v.gapMm, 0) / n;
+        let sxy = 0;
+        let sxx = 0;
+        for (const v of outer) {
+          sxy += (v.radiusMm - meanRho) * (v.gapMm - meanGap);
+          sxx += (v.radiusMm - meanRho) ** 2;
+        }
+        const slope = sxy / sxx;
+        const intercept = meanGap - slope * meanRho;
+        const measuredDeg = (2 * Math.atan(slope / 2) * 180) / Math.PI;
+        assert.ok(
+          measuredDeg >= lookLowDeg - 0.8 && measuredDeg <= bendAngleDeg + 0.8,
+          `link look: ${fixture} joint ${k}'s own slot profile reads ${measuredDeg.toFixed(2)}°, inside the bracket the build published [${lookLowDeg}, ${bendAngleDeg}] at bend ${bendAngleDeg}`,
+        );
+        assert.ok(
+          Math.abs(intercept - settings.clearanceMm) <= 0.45,
+          `link look: ${fixture} joint ${k}'s slot extrapolates to the CLEARANCE on the axis at bend ${bendAngleDeg} (got ${intercept.toFixed(3)}, want ${settings.clearanceMm})`,
+        );
+        for (const sample of outer) {
+          const want = slope * sample.radiusMm + intercept;
+          assert.ok(
+            Math.abs(sample.gapMm - want) <= 0.3,
+            `link look: ${fixture} joint ${k} slot is LINEAR in the radius at bend ${bendAngleDeg} (rho ${sample.radiusMm.toFixed(2)}: measured ${sample.gapMm.toFixed(3)}, fit ${want.toFixed(3)})`,
+          );
+        }
+      }
       // CROSSING MEMBERS. Inside the kerf slab, exactly three things may be
       // present: the tail's TWO hoop legs and the head's ONE blade. This kills a
       // mechanism that quietly stopped crossing the seam — the failure that
@@ -3810,6 +3896,10 @@ for (const fixture of ['spindle', 'eccentric']) {
       }
       slab.delete();
     });
+    assert.ok(
+      lawSamples >= 4 && (lawJoints >= 1 || fixture === 'spindle'),
+      `link look: ${fixture} at bend ${bendAngleDeg} checked the cone law on real samples (${lawSamples} samples over ${lawJoints} joints)`,
+    );
     for (const segment of lookSegments) segment.delete();
   }
 }
@@ -3975,7 +4065,7 @@ for (const [fixture, overrides] of [
       [joint.center[0], joint.center[1] - shiftY, joint.center[2]],
       frame,
     );
-    const seam = linkSeamOf(geometry, joint, settings);
+    const seam = linkSeamAt(input, joint, geometry, settings);
     for (const point of linkLegProbePoints(geometry, seam)) {
       assert.deepEqual(
         segmentsTouching(wasm, segments, at(...point), 0.4),
@@ -4025,16 +4115,25 @@ for (const [fixture, overrides] of [
 // battery — the exact shape of the V2-2 defect. Plus one positive witness, so a
 // build that stopped clamping altogether cannot pass by vacuous truth.
 //
-// BOTH motions, because the SIDEWAYS one is the motion that was silent: the
-// up-and-down bend can be delivered in full while the same flat kerf closes on
-// the twist at a lateral rim three times further out, and that combination
-// raised no warning of any kind. The sideways implication is measured against
-// the build's own lateral extents (`linkSeamMeasured`), not the isotropic
-// `linkSeamOf` shortcut, precisely because the defect only exists where the two
-// rims differ.
+// BOTH motions are still tracked, but they are now the SAME motion: the kerf
+// depends on the radius alone, so a joint that keeps its pitch keeps its yaw. The
+// sideways half of this probe is therefore an unreachability check, and it is
+// backed by an identity in the plan suite (L-SEC) rather than by the choice of
+// fixtures — the failure mode it was written for (full pitch, silent 3.34° yaw at
+// a lateral rim three times further out) cannot be constructed any more.
+// The ceiling clause must not blame the JOINT hardware: what binds is the widest
+// skin radius the seam cuts through, which on a winged tube is a 25mm wing above
+// a 6mm joint ball. "Too wide at the joints" told that user the opposite of what
+// they could see, so the string is pinned in its corrected form.
+const CEILING_CAUSE_RE =
+  / — a bigger bend would need a ring gap wider than this model can hide where the joints cut\.$/;
+const GATE_CAUSE_RE =
+  / — there is no room here for a bigger ring gap\. Try fewer segments, or a smaller Joint size\.$/;
 {
   let sawClamp = false;
   let sawSidewaysClamp = false;
+  let sawCeilingCause = false;
+  let sawGateCause = false;
   // The finned body runs at bend 5 only — that is where the sideways clamp
   // actually bites, and every extra cell here is a whole build.
   for (const [fixture, bends] of [
@@ -4066,7 +4165,7 @@ for (const [fixture, overrides] of [
           );
           if (!geometry) continue;
           if (
-            linkSeamOf(geometry, joint, settings).travelDeg <
+            linkSeamAt(input, joint, geometry, settings).travelDeg <
             bendAngleDeg - 1e-9
           ) {
             reduced = true;
@@ -4078,17 +4177,9 @@ for (const [fixture, overrides] of [
             settings,
             bendAngleDeg,
           ).seam;
-          // A tolerance, because this reproduction evaluates at the REQUESTED
-          // travel while the build's ladder may have stepped down — which only
-          // ever lowers the delivered figure, so a strict test here would flag
-          // the build for being MORE honest than this line.
-          //
-          // The baseline is the seam's OWN sideways budget, not the geometry
-          // cap. Against the cap this implication was true on every anisotropic
-          // fixture at every bend, so it "passed" while the build was raising a
-          // warning on joints that met the request (measured 5.80° yaw against a
-          // published 4° and a requested 5°). The floor is what the style
-          // publishes and the only shortfall a user can act on.
+          // Unreachable BY IDENTITY: the two fields are the same expression.
+          // Kept as a live check so a future direction-dependent kerf trips it
+          // here rather than reaching a user.
           if (
             measured.secondaryTravelDeg <
             measured.secondaryTargetDeg - 0.05
@@ -4110,13 +4201,9 @@ for (const [fixture, overrides] of [
           );
           sawSidewaysClamp = true;
         }
-        // ...and the CONVERSE, which is the direction that was broken: the
-        // warning may not appear on a joint that clears the sideways floor.
-        // Comparing the delivered yaw against `geometry.secondaryTravelDeg`
-        // (= min(bend, 6)) instead of the seam's own budget made this fire on
-        // every anisotropic body at bends 5 and 12 — 6 of 36 sweep cells, all
-        // false, while the built solids yawed 5.80 deg against a published 4 deg
-        // and a requested 5 deg.
+        // ...and the CONVERSE: the warning may not appear on a joint that
+        // delivers its sideways travel. With a direction-free kerf that means it
+        // may not appear at all.
         assert.ok(
           !sidewaysWarned || sidewaysReduced,
           `link clamp: ${fixture} c=${clearanceMm} b=${bendAngleDeg} does NOT warn about sideways travel it actually delivers`,
@@ -4126,9 +4213,36 @@ for (const [fixture, overrides] of [
             (w) => w.code === 'link-travel-reduced',
           ).message;
           assert.ok(
-            /bends? about \d+° up and down instead of \d+°/.test(message),
-            'link clamp: the warning NAMES the delivered angle AND the axis it is about',
+            /bends? about [\d.]+(?:–[\d.]+)?° up and down instead of \d+°/.test(
+              message,
+            ),
+            'link clamp: the warning NAMES the delivered angle (or range) AND the axis it is about',
           );
+          // The range must BRACKET every live joint's own delivered travel — a
+          // line that names only the smallest understated three of four joints
+          // on the acceptance body by up to 3.8°.
+          const span = /about ([\d.]+)(?:–([\d.]+))?°/.exec(message);
+          const low = Number(span[1]);
+          const high = span[2] === undefined ? low : Number(span[2]);
+          assert.ok(
+            high >= low && high <= bendAngleDeg + 1e-9,
+            `link clamp: the published range ${low}-${high} is ordered and inside the request`,
+          );
+          // The CAUSE clause is one of exactly two published strings: the look
+          // ceiling (whose remedy is the body) or a gate (whose remedy is the
+          // neighbours). Which one is chosen is decided where the clamp happens
+          // — `travelDeg < topDeg` is a gate, anything else is the ceiling — so
+          // what this pins is that no THIRD, invented cause and no garbled
+          // template can reach a user. The old line asserted the ceiling for
+          // both, which is wrong wherever a neighbour is what actually bit.
+          const ceilingCause = CEILING_CAUSE_RE.test(message);
+          const gateCause = GATE_CAUSE_RE.test(message);
+          assert.ok(
+            ceilingCause || gateCause,
+            `link clamp: the warning names one of the two published causes (${message})`,
+          );
+          if (ceilingCause) sawCeilingCause = true;
+          if (gateCause) sawGateCause = true;
         }
         if (sidewaysWarned) {
           const message = outcome.result.warnings.find(
@@ -4146,21 +4260,96 @@ for (const [fixture, overrides] of [
     sawClamp,
     'link clamp: at least one fixture in the battery really is clamped (a positive witness)',
   );
-  // Every body in this battery — including the 3.5:1 finned one — CLEARS the
-  // sideways floor, because `solveLinkSeam` budgets the kerf for it at the
-  // lateral rim. So the correct expectation here is silence, and this line is
-  // the regression test for the false alarm: restore the old
-  // `geometry.secondaryTravelDeg` baseline and six of these cells light up.
-  //
-  // The warning is NOT dead code — it fires when the LOOK CEILING refuses the
-  // lateral budget, which needs a lateral half-extent past ~57mm (a body over
-  // 114mm wide). That is out of reach for these fixtures without flipping the
-  // planner's own axis choice, so its reachability and ordering are pinned
-  // arithmetically in flexiToyPlan.test.mjs ('link sideways floor' probe)
-  // rather than by warping a fixture until it fires.
+  // No body can fall short sideways, because the kerf has no direction to be
+  // short in. This is a negative observation here and an IDENTITY in the plan
+  // suite (L-SEC), which is the difference between "no fixture happens to
+  // trigger it" and "nothing can".
   assert.ok(
     !sawSidewaysClamp,
-    'link clamp: no fixture in this battery falls short of the sideways floor, so none may warn about it',
+    'link clamp: a direction-free kerf cannot fall short sideways, so nothing may warn about it',
+  );
+
+  // BOTH causes need a POSITIVE witness, and the gate one needs its own cell:
+  // every fixture in the battery above is clamped by the LOOK CEILING, so the
+  // disjunction they satisfy is satisfied by the ceiling branch alone. Deleting
+  // the gate branch outright (`travelGateClampedJoints > 0` → `false`) left the
+  // whole build suite green — a user-visible message shipping with no coverage,
+  // which is exactly the shape of defect this file exists to stop.
+  //
+  // The cell is the cheapest one measured that carries it: a fish crowded to 8
+  // segments at 120mm, where two joints are pushed below the top of their own
+  // range by a NEIGHBOUR rather than by the ceiling.
+  {
+    const { plan, outcome } = await buildLink('fish', {
+      segmentCount: 8,
+      bendAngleDeg: 18,
+      targetLengthMm: 120,
+      clearanceMm: 0.4,
+    });
+    assert.equal(
+      outcome.status,
+      'ok',
+      `link clamp: the gate-cause witness builds (got ${outcome.code ?? 'ok'})`,
+    );
+    const message = outcome.result.warnings.find(
+      (w) => w.code === 'link-travel-reduced',
+    )?.message;
+    // Set from the MEASUREMENT, never unconditionally — a flag assigned by the
+    // probe itself would make the witness assertion below vacuous, which is the
+    // same disease in a new place. It is also asserted CELL-LOCALLY: reading the
+    // module-level flag here would let any earlier fixture that ever starts
+    // producing a gate cause satisfy this cell's assertion for it, and the cell
+    // would silently stop being a witness for the thing it was written to pin.
+    const gateCauseHere = message !== undefined && GATE_CAUSE_RE.test(message);
+    if (gateCauseHere) sawGateCause = true;
+    assert.ok(
+      gateCauseHere,
+      `link clamp: a joint clamped by a GATE says so, and offers the neighbour remedy rather than "your model is too wide" (got "${message}")`,
+    );
+    // …and it still counts honestly: a gate that clamps two of seven joints may
+    // not claim all seven.
+    const live = plan.joints.filter((j) => !j.fused).length;
+    const counted = /^One of /.test(message)
+      ? 1
+      : Number(/^(\d+) of /.exec(message)[1]);
+    assert.ok(
+      counted >= 1 && counted <= live,
+      `link clamp: the gate witness counts ${counted} clamped joints inside its ${live} live ones`,
+    );
+  }
+  // …and the MIRROR of it: a MINORITY of gate-clamped joints may not rewrite the
+  // sentence for the majority the ceiling clamped. One line has to speak for
+  // every clamped joint, and the two remedies point in opposite directions, so
+  // "any gate at all wins" hands most of these users advice for someone else's
+  // problem. This is the same fish at 25° — five of seven joints clamped, only a
+  // minority of them by a gate — and it must read as a CEILING clamp.
+  {
+    const { outcome } = await buildLink('fish', {
+      segmentCount: 8,
+      bendAngleDeg: 25,
+      targetLengthMm: 120,
+      clearanceMm: 0.4,
+    });
+    assert.equal(
+      outcome.status,
+      'ok',
+      `link clamp: the majority-rule witness builds (got ${outcome.code ?? 'ok'})`,
+    );
+    const message = outcome.result.warnings.find(
+      (w) => w.code === 'link-travel-reduced',
+    )?.message;
+    assert.ok(
+      message !== undefined && CEILING_CAUSE_RE.test(message),
+      `link clamp: a minority gate clamp does NOT rewrite the cause for the ceiling-clamped majority (got "${message}")`,
+    );
+  }
+  assert.ok(
+    sawCeilingCause,
+    'link clamp: the LOOK CEILING cause reaches a user on at least one body',
+  );
+  assert.ok(
+    sawGateCause,
+    'link clamp: the GATE cause reaches a user on at least one body',
   );
 }
 
@@ -4346,6 +4535,488 @@ for (const [count, bendAngleDeg, clearanceMm] of [
     'rounded-uncut',
     'link sever: the torus reports rounded-uncut',
   );
+}
+
+// --- The dialog controls, on BUILT SOLIDS -----------------------------------
+//
+// Every row of the settings box the user can move has to move the geometry, in
+// the direction the label promises, and the toy has to say so when it cannot.
+// These probes exist because all three of the shipped controls were measurably
+// dead or inverted on a finned body: Flexibility saturated above bend 7 and
+// INVERTED at the first joint (4.00° at bend 8, 1.00° at bend 25), Joint fit
+// made the joint STIFFER as it loosened (7.03° at c=0.55 against 7.48° at 0.30),
+// and Joint size silently stopped threading the hoop at scale 1.2.
+
+// The local genus of one segment inside a ball around a joint. A plain body chunk
+// is genus 0, so this counts the HANDLES the mechanism added and nothing else:
+// the tail's hoop arch and the head's blade eye. It is the built-solid answer to
+// "is this joint actually threaded", which no gap, clearance or body count can
+// give.
+function linkLocalGenus(wasm, segment, centreMm, radiusMm) {
+  const ball = wasm.Manifold.sphere(radiusMm, 48).translate(centreMm);
+  const local = segment.intersect(ball);
+  ball.delete();
+  if (local.isEmpty()) {
+    local.delete();
+    return null;
+  }
+  const parts = local.decompose();
+  local.delete();
+  let best = null;
+  let bestVolume = -Infinity;
+  for (const part of parts) {
+    const volume = part.volume();
+    if (volume > bestVolume) {
+      bestVolume = volume;
+      best = part.genus();
+    }
+  }
+  for (const part of parts) part.delete();
+  return best;
+}
+
+// Per-joint threading, both sides, on the built output.
+function linkThreadedJoints(wasm, result, plan, input, settings) {
+  let shiftY = Infinity;
+  for (let i = 1; i < input.positions.length; i += 3) {
+    shiftY = Math.min(shiftY, input.positions[i]);
+  }
+  const segments = result.segmentTriangleRanges.map((range) =>
+    segmentManifold(wasm, result.positions, result.indices, range),
+  );
+  const live = plan.joints.filter((j) => !j.fused);
+  const out = [];
+  live.forEach((joint, k) => {
+    const geometry = solveLinkJointGeometry(
+      joint.ballRadiusMm,
+      settings.clearanceMm,
+      settings.bendAngleDeg,
+    );
+    const centre = [joint.center[0], joint.center[1] - shiftY, joint.center[2]];
+    const radius = geometry
+      ? 1.35 * (geometry.pivotOffsetMm + geometry.bladeReachMm)
+      : 1.35 * (joint.ballRadiusMm + 2);
+    const tailGenus = linkLocalGenus(wasm, segments[k], centre, radius);
+    const headGenus = linkLocalGenus(wasm, segments[k + 1], centre, radius);
+    out.push({
+      hoop: (tailGenus ?? 0) >= 1,
+      eye: (headGenus ?? 0) >= 1,
+      tailGenus,
+      headGenus,
+    });
+  });
+  for (const segment of segments) segment.delete();
+  return out;
+}
+
+// (AG3) Threaded + fallen-back must account for EVERY live joint, and a joint
+// that is not threaded must be NAMED. A silent un-threading is the one failure a
+// user cannot see and cannot act on.
+function assertLinkAccountedFor(label, result, plan, input, settings) {
+  const threading = linkThreadedJoints(wasm, result, plan, input, settings);
+  const live = plan.joints.filter((j) => !j.fused).length;
+  // NO LOOSE FRAGMENTS. A segment that ships as two solids — a detached ring
+  // left behind at a joint, or a shard cut off the body — is invisible in the
+  // preview, silent in the warnings, and falls out of the toy in the user's
+  // hand. Nothing asserted it outside the two severance probes, so every
+  // jointScale, segment-count and clearance cell in this file could have been
+  // shedding parts. The whole-mesh component count is the cheap form of the
+  // statement (no manifold work at all) and it is exact here, because segments
+  // are separated by a positive running gap and so cannot share a component.
+  assert.equal(
+    countBodies(result.positions, result.indices),
+    result.segmentCount,
+    `${label}: every segment ships as exactly ONE solid — no detached rings, no shards`,
+  );
+  const fallbackWarning = result.warnings.find(
+    (w) => w.code === 'link-joint-fallback',
+  );
+  const declaredFallbacks = fallbackWarning
+    ? /^One /.test(fallbackWarning.message)
+      ? 1
+      : Number(/^(\d+)/.exec(fallbackWarning.message)[1])
+    : 0;
+  // The line has to READ right, not just count right. "One joint is too close
+  // together for link hinges and uses a rounded groove instead" was a real
+  // emission — reproduced on the acceptance body — and a user who is shown a
+  // sentence that is visibly broken has no way to tell whether the geometry
+  // behind it is broken too. Checked on the number-agreeing half of the
+  // template, because the explanatory clause legitimately says "the model is".
+  if (fallbackWarning) {
+    const line = fallbackWarning.message;
+    if (declaredFallbacks === 1) {
+      assert.ok(
+        /uses a rounded groove/.test(line) &&
+          !/rounded grooves/.test(line) &&
+          !/link hinges/.test(line) &&
+          !/too close together/.test(line),
+        `${label}: the singular fallback line stays singular ("${line}")`,
+      );
+    } else {
+      assert.ok(
+        /use rounded grooves/.test(line) &&
+          !/a rounded groove instead/.test(line),
+        `${label}: the plural fallback line stays plural ("${line}")`,
+      );
+    }
+  }
+  const threaded = threading.filter((t) => t.hoop && t.eye).length;
+  assert.equal(threading.length, live, `${label}: every live joint was probed`);
+  assert.ok(
+    threaded + declaredFallbacks >= live,
+    `${label}: threaded (${threaded}) + declared fallbacks (${declaredFallbacks}) accounts for all ${live} live joints — a joint that stopped threading with nothing said is the AG3 failure (genus per joint ${JSON.stringify(threading.map((t) => [t.tailGenus, t.headGenus]))})`,
+  );
+  return { threading, threaded, declaredFallbacks, live };
+}
+
+// (L-CONTROL-BEND) Flexibility drives the SLOPE of the cone, and therefore both
+// the visible slot and the delivered travel — strictly, until the look ceiling
+// takes over, and then it says so. Master saturated at bend 7 on every fixture
+// in this list and published nothing.
+{
+  const seen = [];
+  for (const bendAngleDeg of [5, 8, 12, 18, 25]) {
+    const { settings, input, plan, outcome } = await buildLink('finned', {
+      bendAngleDeg,
+    });
+    assert.equal(
+      outcome.status,
+      'ok',
+      `link control bend: finned builds at bend ${bendAngleDeg}`,
+    );
+    const result = outcome.result;
+    const live = plan.joints.filter((j) => !j.fused);
+    const reduced = result.warnings.find(
+      (w) => w.code === 'link-travel-reduced',
+    );
+    const promisedDeg = reduced
+      ? Number(
+          /bends? about ([\d.]+)(?:–[\d.]+)?° up and down/.exec(
+            reduced.message,
+          )[1],
+        )
+      : bendAngleDeg;
+    const gaps = visibleSkinGaps(wasm, result, plan, input, 12).filter(
+      (v) => v !== null,
+    );
+    assert.ok(gaps.length > 0, 'link control bend: the slot was measurable');
+    seen.push({
+      bendAngleDeg,
+      promisedDeg,
+      slot: Math.max(...gaps),
+      digest: linkSegmentDigest(result, 1),
+      warned: Boolean(reduced),
+      live: live.length,
+    });
+  }
+  for (let i = 1; i < seen.length; i += 1) {
+    const previous = seen[i - 1];
+    const current = seen[i];
+    assert.ok(
+      current.promisedDeg >= previous.promisedDeg - 1e-9,
+      `link control bend: the delivered travel never falls as the slider rises (${previous.bendAngleDeg}°→${current.bendAngleDeg}°: ${previous.promisedDeg}→${current.promisedDeg})`,
+    );
+    assert.ok(
+      current.slot >= previous.slot - 0.05,
+      `link control bend: the visible slot never shrinks as the slider rises (${previous.bendAngleDeg}°→${current.bendAngleDeg}°: ${previous.slot.toFixed(3)}→${current.slot.toFixed(3)}mm)`,
+    );
+    // Below saturation the control must actually MOVE the geometry — a slider
+    // whose adjacent settings produce the same solid is the user's complaint.
+    if (!current.warned) {
+      assert.notEqual(
+        current.digest,
+        previous.digest,
+        `link control bend: bends ${previous.bendAngleDeg} and ${current.bendAngleDeg} produce DIFFERENT geometry`,
+      );
+      assert.ok(
+        current.promisedDeg > previous.promisedDeg + 0.5,
+        `link control bend: below saturation the delivered travel really rises (${previous.promisedDeg}→${current.promisedDeg})`,
+      );
+    }
+  }
+  // The live share of the slider: at least the bottom half of it must move the
+  // delivered angle on this body, and the top must be WARNED rather than silent.
+  assert.ok(
+    seen[seen.length - 1].promisedDeg > seen[0].promisedDeg + 3,
+    `link control bend: the slider is live across a real range (${seen[0].promisedDeg}° → ${seen[seen.length - 1].promisedDeg}°)`,
+  );
+  for (const cell of seen) {
+    assert.ok(
+      cell.warned || Math.abs(cell.promisedDeg - cell.bendAngleDeg) < 1e-9,
+      `link control bend: bend ${cell.bendAngleDeg} either delivers the request or warns`,
+    );
+  }
+}
+
+// (L-CONTROL-CLEAR) Joint fit is ADDITIVE in the cone law, so it opens the
+// running play WITHOUT touching the travel. Master coupled the two through the
+// flat law's pivot-relief term and delivered LESS travel as the joint loosened.
+{
+  const rows = [];
+  for (const clearanceMm of [0.3, 0.4, 0.55]) {
+    const { settings, input, plan, outcome } = await buildLink('finned', {
+      clearanceMm,
+      bendAngleDeg: 8,
+    });
+    assert.equal(
+      outcome.status,
+      'ok',
+      `link control fit: finned builds at c=${clearanceMm}`,
+    );
+    const result = outcome.result;
+    const reduced = result.warnings.find(
+      (w) => w.code === 'link-travel-reduced',
+    );
+    const promisedDeg = reduced
+      ? Number(
+          /bends? about ([\d.]+)(?:–[\d.]+)?° up and down/.exec(
+            reduced.message,
+          )[1],
+        )
+      : 8;
+    const segments = result.segmentTriangleRanges.map((range) =>
+      segmentManifold(wasm, result.positions, result.indices, range),
+    );
+    let gap = Infinity;
+    for (let i = 1; i < segments.length; i += 1) {
+      gap = Math.min(gap, segments[i - 1].minGap(segments[i], 5));
+    }
+    for (const segment of segments) segment.delete();
+    const gaps = visibleSkinGaps(wasm, result, plan, input, 12).filter(
+      (v) => v !== null,
+    );
+    rows.push({
+      clearanceMm,
+      promisedDeg,
+      gap,
+      slot: Math.max(...gaps),
+      digest: linkSegmentDigest(result, 1),
+    });
+    void settings;
+  }
+  for (let i = 1; i < rows.length; i += 1) {
+    const previous = rows[i - 1];
+    const current = rows[i];
+    assert.ok(
+      current.gap > previous.gap + 0.02,
+      `link control fit: the running play grows with the preset (${previous.clearanceMm}→${current.clearanceMm}: ${previous.gap.toFixed(3)}→${current.gap.toFixed(3)}mm)`,
+    );
+    assert.ok(
+      current.slot >= previous.slot - 0.02,
+      `link control fit: the visible slot never shrinks as the joint loosens (${previous.clearanceMm}→${current.clearanceMm})`,
+    );
+    // THE INVERSION TEST: travel must not fall as the joint loosens.
+    assert.ok(
+      current.promisedDeg >= previous.promisedDeg - 0.3,
+      `link control fit: loosening the joint never makes it STIFFER (${previous.clearanceMm}→${current.clearanceMm}: ${previous.promisedDeg}° → ${current.promisedDeg}°)`,
+    );
+    assert.notEqual(
+      current.digest,
+      previous.digest,
+      `link control fit: ${previous.clearanceMm} and ${current.clearanceMm} produce DIFFERENT geometry`,
+    );
+  }
+  for (const row of rows) {
+    assert.ok(
+      row.gap >=
+        row.clearanceMm * Math.cos((row.promisedDeg * Math.PI) / 360) - 0.06,
+      `link control fit: the delivered running gap is c·cos(T/2) at c=${row.clearanceMm} (got ${row.gap.toFixed(3)})`,
+    );
+  }
+}
+
+// (L-CONTROL-SCALE, AG3) Joint size drives the mechanism, and the extremes are
+// where a joint stops being a link. Master lost a handle per interior segment at
+// scale 1.2 with NO new warning — the one failure mode a user cannot see.
+{
+  let previousTube = -Infinity;
+  let firstTube = null;
+  let lastTube = null;
+  for (const jointScale of [0.6, 1.0, 1.2, 1.4]) {
+    const { settings, input, plan, outcome } = await buildLink('finned', {
+      jointScale,
+      bendAngleDeg: 8,
+    });
+    assert.equal(
+      outcome.status,
+      'ok',
+      `link control size: finned builds at jointScale ${jointScale}`,
+    );
+    const live = plan.joints.filter((j) => !j.fused);
+    const tube = Math.max(
+      ...live.map((joint) => {
+        const g = solveLinkJointGeometry(
+          joint.ballRadiusMm,
+          settings.clearanceMm,
+          settings.bendAngleDeg,
+        );
+        return g ? g.tubeRadiusMm : 0;
+      }),
+    );
+    // Non-decreasing at every step, and strictly larger end to end: the plan's
+    // own containment cap can flatten the top of the range on a slim body, which
+    // is correct behaviour, but the control may never move the mechanism DOWN.
+    assert.ok(
+      tube >= previousTube - 1e-9,
+      `link control size: the mechanism never shrinks as Joint size rises (scale ${jointScale}: tube ${tube.toFixed(3)} vs ${previousTube.toFixed(3)})`,
+    );
+    previousTube = tube;
+    if (firstTube === null) firstTube = tube;
+    lastTube = tube;
+    assertLinkAccountedFor(
+      `link control size: finned at jointScale ${jointScale}`,
+      outcome.result,
+      plan,
+      input,
+      settings,
+    );
+    // …and where it does fall back, the reason must be NAMED and actionable.
+    const fallback = outcome.result.warnings.find(
+      (w) => w.code === 'link-joint-fallback',
+    );
+    if (fallback) {
+      assert.ok(
+        /rounded groove/.test(fallback.message),
+        `link control size: the fallback line says what was built instead (scale ${jointScale})`,
+      );
+      assert.ok(
+        /Try (a larger Joint size|a smaller Joint size|fewer segments)/.test(
+          fallback.message,
+        ) || /could not be cut/.test(fallback.message),
+        `link control size: the fallback line offers a remedy (scale ${jointScale}: "${fallback.message}")`,
+      );
+    }
+  }
+  assert.ok(
+    lastTube > firstTube + 0.05,
+    `link control size: Joint size really moves the mechanism across its range (${firstTube.toFixed(3)} → ${lastTube.toFixed(3)}mm)`,
+  );
+}
+
+// (L-WARN-HONEST) Every abandonment is named, and the name is the DOMINANT
+// reason rather than a single boilerplate line. "Too small" was the only message
+// this style had, and it is false in both directions — on a 400mm fish whose
+// joint balls are 4.7–7.2mm, and above the solver's own upper radius bound.
+{
+  const seenReasons = new Set();
+  for (const [fixture, overrides] of [
+    ['finned', { jointScale: 0.6, bendAngleDeg: 8 }],
+    ['fish', { segmentCount: 20, bendAngleDeg: 25 }],
+    ['winged', { segmentCount: 20, bendAngleDeg: 25 }],
+    ['eccentric', { segmentCount: 20, bendAngleDeg: 25 }],
+  ]) {
+    const { settings, input, plan, outcome } = await buildLink(
+      fixture,
+      overrides,
+    );
+    if (outcome.status !== 'ok') continue;
+    const fallback = outcome.result.warnings.find(
+      (w) => w.code === 'link-joint-fallback',
+    );
+    if (!fallback) continue;
+    // One shape per published reason, INCLUDING the singular forms. "One joint
+    // is too close together for link hinges" was a real line this style could
+    // emit — reproduced on the acceptance body — and a pluralised template is
+    // the kind of thing that reads as a bug even when the geometry is right, so
+    // the singular branch is a shape of its own rather than a loosened regex.
+    const shapes = [
+      [/(?:is|are) too small for a link hinge/, 'mechanism'],
+      [/too thin for the link ring/, 'body'],
+      [
+        /(?:too close together for link hinges|too close to its neighbour for a link hinge)/,
+        'neighbours',
+      ],
+      [/could not be cut as a link hinge/, 'boolean'],
+    ];
+    const matched = shapes.filter(([re]) => re.test(fallback.message));
+    assert.equal(
+      matched.length,
+      1,
+      `link warn: ${fixture} names exactly one reason ("${fallback.message}")`,
+    );
+    seenReasons.add(matched[0][1]);
+    assertLinkAccountedFor(
+      `link warn: ${fixture} ${JSON.stringify(overrides)}`,
+      outcome.result,
+      plan,
+      input,
+      settings,
+    );
+  }
+  assert.ok(
+    seenReasons.size >= 1,
+    'link warn: the fallback battery produced at least one named reason',
+  );
+  // (c) g6 — a blade truncated into its own eye must never report `ok` silently.
+  // Dense stations on a short body are where `headRoom` bites.
+  {
+    const { settings, input, plan, outcome } = await buildLink('spindle', {
+      segmentCount: 14,
+      bendAngleDeg: 18,
+    });
+    if (outcome.status === 'ok') {
+      assertLinkAccountedFor(
+        'link warn: g6 on a densely cut spindle',
+        outcome.result,
+        plan,
+        input,
+        settings,
+      );
+    }
+  }
+}
+
+// (L-DENSE) Law 7 under the CONVERTED ceiling. A joint's own cone reaches out at
+// `max(ALLOWANCE, FRACTION·rho)`, and the reserve its neighbour makes has to be
+// the same quantity read at the same radius — master reserved `min(...)` and
+// under-reserved by up to 3.95mm on a finned body. The failure mode is lost
+// travel plus a warning, never an unsevered cut.
+{
+  const { settings, input, plan, outcome } = await buildLink('finned', {
+    segmentCount: 12,
+    bendAngleDeg: 18,
+  });
+  assert.equal(
+    outcome.status,
+    'ok',
+    `link dense: 12 segments on a finned body still build (got ${outcome.code ?? 'ok'})`,
+  );
+  const result = outcome.result;
+  assert.equal(
+    countBodies(result.positions, result.indices),
+    result.segmentCount,
+    'link dense: every cut still severs',
+  );
+  assertLinkAccountedFor(
+    'link dense: 12 segments on a finned body',
+    result,
+    plan,
+    input,
+    settings,
+  );
+  const segments = result.segmentTriangleRanges.map((range) =>
+    segmentManifold(wasm, result.positions, result.indices, range),
+  );
+  // The AUTHORITATIVE form of the no-loose-fragments statement, once, on the
+  // densest cell: manifold's own decompose() rather than a triangle-adjacency
+  // count. Everywhere else the whole-mesh component count carries it for free.
+  segments.forEach((segment, index) => {
+    const parts = segment.decompose();
+    const volumes = parts.map((part) => part.volume());
+    for (const part of parts) part.delete();
+    assert.equal(
+      volumes.length,
+      1,
+      `link dense: segment ${index} is ONE solid, not ${volumes.length} (volumes ${volumes.map((v) => v.toFixed(1)).join(', ')}mm³)`,
+    );
+  });
+  for (let i = 1; i < segments.length; i += 1) {
+    assert.ok(
+      segments[i - 1].minGap(segments[i], 5) >= settings.clearanceMm - 0.06,
+      `link dense: the running clearance survives at segments ${i - 1}/${i}`,
+    );
+  }
+  for (const segment of segments) segment.delete();
 }
 
 // (Part D, link arm) The coloured 3MF export is style-agnostic, but link is the
