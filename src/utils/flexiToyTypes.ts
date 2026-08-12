@@ -29,7 +29,10 @@ export const FLEXI_DEFAULT_LENGTH_MM = 150;
 export const FLEXI_MIN_JOINT_SCALE = 0.6;
 export const FLEXI_MAX_JOINT_SCALE = 1.4;
 export const FLEXI_MIN_BEND_DEG = 5;
+/** Maximum bend for the shell, rounded, classic, and strong joint families. */
 export const FLEXI_MAX_BEND_DEG = 25;
+/** Link joints can be opened through a much wider chain-link swing. */
+export const FLEXI_MAX_LINK_BEND_DEG = 90;
 export const FLEXI_DEFAULT_BEND_DEG = 12;
 /** Hard ceiling on the printed face gap between segments (mm). */
 export const FLEXI_MAX_FACE_GAP_MM = 4;

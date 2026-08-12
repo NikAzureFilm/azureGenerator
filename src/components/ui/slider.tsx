@@ -53,6 +53,7 @@ const Slider = React.forwardRef<
     const defaultVal = Array.isArray(defaultValue)
       ? defaultValue[0]
       : defaultValue || 0;
+    const ariaLabel = props['aria-label'];
 
     // Calculate default value position as percentage
     const defaultPosition = ((defaultVal - min) / (max - min)) * 100;
@@ -309,6 +310,34 @@ const Slider = React.forwardRef<
       }, 300);
     };
 
+    const handleThumbKeyDown = (event: React.KeyboardEvent) => {
+      let nextValue: number | null = null;
+      switch (event.key) {
+        case 'Home':
+          nextValue = min;
+          break;
+        case 'End':
+          nextValue = max;
+          break;
+        case 'ArrowRight':
+        case 'ArrowUp':
+          nextValue = currentValue + step;
+          break;
+        case 'ArrowLeft':
+        case 'ArrowDown':
+          nextValue = currentValue - step;
+          break;
+      }
+      if (nextValue === null) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      const clampedValue = Math.max(min, Math.min(max, nextValue));
+      lastValueRef.current = clampedValue;
+      onValueChange?.([clampedValue]);
+      onValueCommit?.([clampedValue]);
+    };
+
     // Prevent default Radix behavior
     const handleRadixValueChange = () => {
       // Do nothing - we handle our own value changes
@@ -383,7 +412,11 @@ const Slider = React.forwardRef<
               </div>
             ))}
         </SliderPrimitive.Track>
-        <SliderPrimitive.Thumb className="hidden" />
+        <SliderPrimitive.Thumb
+          aria-label={ariaLabel}
+          className="hidden"
+          onKeyDown={handleThumbKeyDown}
+        />
       </SliderPrimitive.Root>
     );
   },

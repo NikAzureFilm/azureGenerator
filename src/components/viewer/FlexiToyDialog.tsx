@@ -24,6 +24,7 @@ import {
   FLEXI_MAX_CLEARANCE_MM,
   FLEXI_MAX_JOINT_SCALE,
   FLEXI_MAX_LENGTH_MM,
+  FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_BEND_DEG,
   FLEXI_MIN_CLEARANCE_MM,
@@ -210,6 +211,16 @@ export function FlexiToyDialog({
       ? settings.jointPositions.map((f) => f.toFixed(3)).join(',')
       : ''
   }`;
+
+  const flexibilityMaxDeg =
+    jointStyle === 'link' ? FLEXI_MAX_LINK_BEND_DEG : FLEXI_MAX_BEND_DEG;
+
+  const selectJointStyle = (style: FlexiUiJointStyle): void => {
+    setJointStyle(style);
+    if (style !== 'link') {
+      setBendAngleDeg((value) => Math.min(value, FLEXI_MAX_BEND_DEG));
+    }
+  };
 
   // Fresh session each time the dialog opens: every control goes back to the
   // shell defaults (no length derivation — the defaults are constants), and the
@@ -640,19 +651,19 @@ export function FlexiToyDialog({
                   selected={jointStyle === 'shell'}
                   title="Shell"
                   description="Overlapping scales — joints stay hidden"
-                  onSelect={() => setJointStyle('shell')}
+                  onSelect={() => selectJointStyle('shell')}
                 />
                 <StyleCard
                   selected={jointStyle === 'strong'}
                   title="Strong"
                   description="Open gaps and a hinge bar — captive joint"
-                  onSelect={() => setJointStyle('strong')}
+                  onSelect={() => selectJointStyle('strong')}
                 />
                 <StyleCard
                   selected={jointStyle === 'link'}
                   title="Link"
                   description="Threaded rings — a hoop through a slot, with a flat gap"
-                  onSelect={() => setJointStyle('link')}
+                  onSelect={() => selectJointStyle('link')}
                 />
               </div>
             </div>
@@ -807,10 +818,11 @@ export function FlexiToyDialog({
             <div>
               <ControlLabel label="Flexibility" value={`${bendAngleDeg}°`} />
               <Slider
+                aria-label="Flexibility"
                 className="h-11 sm:h-8"
                 value={[bendAngleDeg]}
                 min={FLEXI_MIN_BEND_DEG}
-                max={FLEXI_MAX_BEND_DEG}
+                max={flexibilityMaxDeg}
                 step={1}
                 defaultValue={[SHELL_DEFAULTS.bendAngleDeg]}
                 onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
@@ -823,13 +835,7 @@ export function FlexiToyDialog({
                     case 'strong':
                       return 'How far each joint can bend. Bigger bends open the gap between segments wider.';
                     case 'link':
-                      // "On a wide model" read as though slim models were
-                      // exempt. They are not: the ceiling is an ABSOLUTE ring
-                      // gap, so it bites on anything more than roughly 19mm
-                      // across at a joint — which is most models at print size.
-                      // What varies is only how soon, and that is what this now
-                      // says.
-                      return 'How far each joint bends up and down. Sideways twist stays small whatever you pick, so the links stay hooked together. The bend stops growing part-way up the slider — sooner the wider your model is at the joints — and the toy tells you the angle it settled on.';
+                      return 'How far each joint bends up and down, up to 90°. Sideways twist stays small whatever you pick, so the links stay hooked together. If the model has less room than the selected bend needs, the toy tells you the angle it settled on.';
                     case 'shell':
                       return 'How far each joint can bend.';
                   }

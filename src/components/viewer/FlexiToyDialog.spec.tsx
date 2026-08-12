@@ -329,12 +329,28 @@ describe('FlexiToyDialog', () => {
   // nothing in this spec pinned either of them, so a later edit could quietly
   // put the false version back. The rewritten copy is a deliverable, so it is
   // asserted like one.
-  it('tells the truth about the link joint fit and the bend ceiling', async () => {
+  it('lets Link flexibility reach 90 degrees and explains geometric reductions', async () => {
     renderDialog();
     await settle();
 
     fireEvent.click(screen.getByRole('radio', { name: /Link/ }));
     await settle();
+
+    expect(screen.getByRole('slider', { name: 'Flexibility' })).toHaveAttribute(
+      'aria-valuemax',
+      '90',
+    );
+    const flexibilitySlider = screen.getByRole('slider', {
+      name: 'Flexibility',
+    });
+    (computeFlexiToy as Mock).mockClear();
+    fireEvent.keyDown(flexibilitySlider, { key: 'End' });
+    await settle();
+
+    expect(flexibilitySlider).toHaveAttribute('aria-valuenow', '90');
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ jointStyle: 'link', bendAngleDeg: 90 }),
+    );
 
     expect(
       screen.getByText(/Tighter grips firmly; looser leaves more play/),
@@ -345,10 +361,9 @@ describe('FlexiToyDialog', () => {
     const bendHelp = screen.getByText(/How far each joint bends up and down/);
     // It must disclose the sideways cap...
     expect(bendHelp).toHaveTextContent(/Sideways twist stays small/);
-    // ...and the ceiling, WITHOUT implying slim models are exempt from it.
-    expect(bendHelp).toHaveTextContent(/bend stops growing part-way up/);
+    // ...the full control range and honest geometric fallback.
+    expect(bendHelp).toHaveTextContent(/up to 90°/);
     expect(bendHelp).toHaveTextContent(/the angle it settled on/);
-    expect(bendHelp).not.toHaveTextContent(/On a wide model/);
     // ...and it must not promise a side-to-side sweep that scales with it.
     expect(bendHelp).not.toHaveTextContent(
       /twists? a few degrees side to side/,
