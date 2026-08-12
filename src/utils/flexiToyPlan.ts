@@ -19,6 +19,7 @@ import {
   FLEXI_MIN_SOCKET_WALL_MM,
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_FACE_GAP_MM,
+  FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_DEFAULT_JOINT_STYLE,
   assertNever,
 } from './flexiToyTypes.ts';
@@ -242,6 +243,8 @@ export const LINK_TILT_DEG = 38;
 export const LINK_SECONDARY_MAX_DEG = 6;
 /** Cap on the per-sphere secondary-travel allowance (mm). Build-side too. */
 export const LINK_SECONDARY_INFLATE_MAX_MM = 0.45;
+/** Maximum angular interval between pitch-envelope samples. */
+export const LINK_PITCH_SWEEP_STEP_DEG = 15;
 // KEY_PAD_MIN is exactly SECONDARY_INFLATE_MAX + LEG_SLAB_MARGIN, which is what
 // makes `legSlabClearMm ≥ 0` hold by construction: the legs' envelope never
 // reaches the blade slab, so `eyeOuterMm` may be computed from the ARC alone and
@@ -259,25 +262,11 @@ const LINK_ANCHOR_MIN_MM = 1.5; // buried leg run
 const LINK_ANCHOR_FRACTION = 0.35;
 /** How far past the tail rim the leg goes horizontal, i.e. how deep it buries. */
 export const LINK_BURY_MM = 0.6;
+export const LINK_ENGAGE_MIN_MM = 1;
 const LINK_KERF_MIN_MM = 0.8;
 const LINK_KERF_CLEAR_MM = 0.25; // kerf floor is also c + this
-/**
- * The largest ring gap the LOOK allows at any radius up to
- * `ρ_A = ALLOWANCE / FRACTION`, and beyond that its share of the local body
- * radius. NB deliberately NOT `FLEXI_MAX_FACE_GAP_MM`: that governs the rounded
- * family's `faceGapMm`, a different quantity.
- *
- * IT CAPS THE TRAVEL, NEVER THE PROFILE. Clamping the conical kerf itself would
- * destroy the convexity the running-clearance theorem needs (§`solveLinkSeam`)
- * and reintroduce the case where the reported angle is not the angle the solid
- * delivers. Instead the ceiling `max(ALLOWANCE, FRACTION·ρ)` is inverted ONCE,
- * in closed form, into `travelCapDeg`: below `ρ_A` the bound
- * `(ALLOWANCE − c)/(2ρ)` is decreasing and above it `FRACTION/2 − c/(2ρ)` is
- * increasing, so the binding radius is `min(ρ_max, ρ_A)` — one evaluation, no
- * breakpoint list, no root search.
- */
+/** Printable radial run used for the hoop leg drop and central crown floor. */
 export const LINK_KERF_ALLOWANCE_MM = 4.5;
-export const LINK_KERF_MAX_FRACTION = 0.3;
 /**
  * The kerf disc's outer radius clears the widest local half-extent by this
  * factor (plus 1mm) so the flat ring always punches through the skin, fins
@@ -285,8 +274,6 @@ export const LINK_KERF_MAX_FRACTION = 0.3;
  * here without a cycle.
  */
 const LINK_KERF_OUT_FACTOR = 1.15;
-/** Floor on male reach past the rim — property L3, the deep-interleave look. */
-export const LINK_ENGAGE_MIN_MM = 1;
 const LINK_SOLVE_ITERATIONS = 8; // keyGap ↔ bladeReach fixed point
 /**
  * Hoop centreline resolution: points per HALF arc. The polyline has 2n+5 points.
@@ -358,7 +345,7 @@ export const LINK_KERF_SEGMENTS = 64;
  * Measured against a gate saturating at 16.2°: 3 decreases for the proportional
  * ladder, 94 for a `[1, bend]` bisection, 0 for this.
  */
-export const LINK_CLAMP_STEPS = 9;
+export const LINK_CLAMP_STEPS = 11;
 /** Absolute grid the travel ladder searches, in degrees. */
 export const LINK_TRAVEL_STEP_DEG = 0.05;
 /** Floor of that grid: below this a link joint is not worth building. */
@@ -2368,7 +2355,7 @@ export type LinkSeamProfile = {
    * contact happens strictly beyond this and no migration correction exists.
    */
   travelDeg: number;
-  /** The look ceiling, inverted into an angle. See `LINK_KERF_ALLOWANCE_MM`. */
+  /** Product maximum for Link flexibility. */
   travelCapDeg: number;
   /**
    * DELIVERED yaw (and the floor on roll). Identically
@@ -2383,8 +2370,6 @@ export type LinkSeamProfile = {
    * deleted along with the mechanism that used to make it fire.
    */
   secondaryTargetDeg: number;
-  /** Male reach past the head rim == female reach past the tail rim. */
-  engagementMm: number;
   /** Radius of the kerf solid of revolution. */
   outerRadiusMm: number;
 };
@@ -2399,6 +2384,39 @@ export type LinkHoopPolyline = {
   envRadiusMm: number[];
   pivotOffsetMm: number;
 };
+
+/**
+ * Pitch samples shared by the clearance solver and the boolean envelope. Keeping
+ * each interval at or below 15Â° avoids the very large spherical padding that a
+ * three-pose approximation needs near a 90Â° swing.
+ */
+export function linkPitchSweepAnglesDeg(travelDeg: number): number[] {
+  const travel = Math.max(0, Math.min(FLEXI_MAX_LINK_BEND_DEG, travelDeg));
+  if (travel <= 1e-9) return [0];
+  const intervals = Math.max(
+    2,
+    Math.ceil((2 * travel) / LINK_PITCH_SWEEP_STEP_DEG),
+  );
+  return Array.from(
+    { length: intervals + 1 },
+    (_, index) => -travel + (2 * travel * index) / intervals,
+  );
+}
+
+function linkPitchSweepSagFactor(travelDeg: number): number {
+  const intervalRad =
+    (Math.min(Math.max(0, travelDeg), LINK_PITCH_SWEEP_STEP_DEG) * Math.PI) /
+    180;
+  return 1 - Math.cos(intervalRad / 2);
+}
+
+// Keep the proven low-angle link proportions instead of shrinking the hardware
+// when the denser sweep needs less padding. Above 25°, extra motion comes from
+// additional body clearance; the closed hoop and blade stay link-sized.
+function linkHardwareSagFactor(travelDeg: number): number {
+  const sizedTravelRad = (Math.min(Math.max(0, travelDeg), 25) * Math.PI) / 180;
+  return 1 - Math.cos(sizedTravelRad / 2);
+}
 
 /**
  * Solve the link hoop/blade for a mechanism scale, clearance and bend angle.
@@ -2442,7 +2460,7 @@ export function solveLinkJointGeometry(
   const tiltRad = (LINK_TILT_DEG * Math.PI) / 180;
   const sinHalfSec = Math.sin((secDeg * Math.PI) / 360);
   const sinSec = Math.sin((secDeg * Math.PI) / 180);
-  const sagK = 1 - Math.cos((bendAngleDeg * Math.PI) / 360);
+  const sagK = linkHardwareSagFactor(bendAngleDeg);
 
   // Short fixed point: the key gap depends on the blade reach, which depends on
   // the eye, which depends on where the legs leave the arc, which depends on the
@@ -2502,9 +2520,8 @@ export function solveLinkJointGeometry(
     const arcEndAxial = hoopRadius * (1 - Math.cos(arcHalf));
     const endU = -arcEndAxial * Math.sin(tiltRad);
     const endS = q - arcEndAxial * Math.cos(tiltRad);
-    // The DEEPEST knee any station can ask for: `solveLinkSeam` folds the
-    // hoop's own outer bound into the travel cap, so the built `kneeDepthMm` is
-    // always ≤ this and the drop/legSagitta estimate below stays conservative.
+    // The radial leg drop is capped at this printable run. Higher angles add
+    // axial body clearance without pushing the hoop farther into the skin.
     const kneeS = -(LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM);
     const drop = Math.max(0.2, endS - kneeS) * Math.tan(tiltRad);
     // Capped at the blade's own reach for the reason `linkHoopPolyline` caps it:
@@ -2622,11 +2639,9 @@ export function linkKerfAtMm(seam: LinkSeamProfile, rhoMm: number): number {
  * why the seam carries no lateral budget and why `secondaryTravelDeg` is an
  * identity rather than a measurement.
  *
- * CONVEXITY IS LOAD-BEARING.  The look ceiling is NOT applied to `k` — clamping
- * it would break the supporting-line argument above and put the reported angle
- * above the angle the solid delivers. It is inverted into `travelCapDeg`
- * instead, so `travelDeg === min(requested, cap)` EXACTLY and first contact is
- * strictly beyond it.
+ * CONVEXITY IS LOAD-BEARING. The profile is never clamped: doing so would break
+ * the supporting-line argument above and report more travel than the solid
+ * delivers. `travelDeg` is the request capped only at Link's 90° product limit.
  *
  * Total: the floor always wins at ρ = 0, so `rhoMax = 0` (which
  * `PlacedJoints.maxStationExtentMm` documents as reachable) still yields a
@@ -2641,82 +2656,59 @@ export function solveLinkSeam(
   const q = geometry.pivotOffsetMm;
   const rhoMax = Math.max(0, rhoMaxMm);
   const requested = Math.max(0, travelDeg);
-  const deepestKnee = LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM;
-  const rhoA = LINK_KERF_ALLOWANCE_MM / LINK_KERF_MAX_FRACTION;
-  // EVERY bound below is computed REQUEST-INDEPENDENTLY, which is what makes
-  // `travelCapDeg` a constant of the station and `travelDeg = min(request, cap)`
-  // monotone in the slider. Reading the hoop at the request instead (which is
-  // conservative, and was the first cut of this) makes the cap fall as the
-  // request rises once the hoop outgrows `ρ_A`, and the delivered travel then
-  // dips by up to 0.007° above r ≈ 14.75 — small, but the ladder's bisection is
-  // only EXACT because the predicate is monotone, so it is not a property to
-  // leave to the size of the body.
-  //
-  // The reference travel is the ceiling the STATION alone would allow, widened
-  // by the blade reach so it is finite at the degenerate station and provably
-  // above the final cap (which is taken at a `ρ_bind` no smaller). The hoop
-  // grows with the travel, so evaluating it there over-estimates its reach.
-  const rhoPlain = Math.max(
-    Math.min(rhoMax, rhoA),
-    geometry.bladeReachMm,
-    1e-9,
-  );
-  const referenceTravelDeg = linkKerfAngleDeg(
-    rhoPlain,
-    LINK_KERF_ALLOWANCE_MM,
-    clearanceMm,
-  );
-  const polyHigh = linkHoopPolylineAt(
+  const travelCapDeg = FLEXI_MAX_LINK_BEND_DEG;
+  const delivered = Math.min(requested, travelCapDeg);
+  const kerfSlope = 2 * Math.tan((delivered * Math.PI) / 360);
+  const sagRef = linkPitchSweepSagFactor(delivered);
+  let kneeDepthMm = LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM;
+  let polyHigh = linkHoopPolylineAt(
     geometry,
-    deepestKnee,
+    kneeDepthMm,
     clearanceMm,
-    referenceTravelDeg,
+    delivered,
   );
-  // ONE polyline for both bounds. The points depend on the knee depth alone, and
-  // the only travel-dependent term in the envelope is the pitch sagitta
-  // `axisDistance·(1 − cos(T/2))`, so the zero-travel envelope is this one minus
-  // that term — no second walk.
-  const sagRef = 1 - Math.cos((referenceTravelDeg * Math.PI) / 360);
   let rhoHoopBound = 0;
   let crownClear = 0;
-  for (let i = 0; i < polyHigh.points.length; i += 1) {
-    const [v, u, s] = polyHigh.points[i];
-    const env = polyHigh.envRadiusMm[i];
-    rhoHoopBound = Math.max(rhoHoopBound, Math.hypot(v, u) + env);
-    // The crown wants the OPPOSITE bound. A polyline point whose whole envelope
-    // sits ABOVE the cut plane leaves an annular lip of head material at the
-    // tunnel mouth, and the envelope SHRINKS as the travel falls, so the lip is
-    // widest at ZERO travel — that is the conservative evaluation here, and it
-    // is also constant, which keeps `k` monotone in the travel at radii where
-    // the floor binds. Only HEAD-SIDE points can contribute: a leg point (s < 0)
-    // is tail material and yields a NEGATIVE lip, which the running max — seeded
-    // at 0 — discards, so the walk needs no explicit `s > 0` filter and the
-    // quantity is a head-side maximum by construction. Kerf-independent: no
-    // circularity.
-    const axisDistance = Math.min(geometry.bladeReachMm, Math.hypot(u, s - q));
-    const lip = s - (env - axisDistance * sagRef);
-    if (lip > crownClear) crownClear = lip;
-  }
-  // The look ceiling `max(ALLOWANCE, FRACTION·ρ)`, inverted once. The binding
-  // radius is `min(rhoMax, ρ_A)` — below `ρ_A` the bound falls as 1/ρ, above it
-  // it rises — widened to cover the hoop's own outer bound so `legKerfMm` can
-  // never exceed the allowance and `solveLinkJointGeometry`'s fixed `kneeS`
-  // estimate stays deeper than the built knee.
-  const rhoBind = Math.max(rhoHoopBound, rhoPlain);
-  const travelCapDeg = linkKerfAngleDeg(
-    rhoBind,
-    LINK_KERF_ALLOWANCE_MM,
-    clearanceMm,
-  );
-  const delivered = Math.min(requested, travelCapDeg);
-  const kerfFloorMm = Math.max(
+  let kerfFloorMm = Math.max(
     LINK_KERF_MIN_MM,
     clearanceMm + LINK_KERF_CLEAR_MM,
-    // Clamped at the allowance so the corner where the mouth cannot be
-    // swallowed is exactly the pre-cone behaviour, i.e. never a regression.
-    Math.min(2 * crownClear, LINK_KERF_ALLOWANCE_MM),
   );
-  const kerfSlope = 2 * Math.tan((delivered * Math.PI) / 360);
+  for (let iteration = 0; iteration < 48; iteration += 1) {
+    polyHigh = linkHoopPolylineAt(
+      geometry,
+      kneeDepthMm,
+      clearanceMm,
+      delivered,
+    );
+    rhoHoopBound = 0;
+    crownClear = 0;
+    for (let i = 0; i < polyHigh.points.length; i += 1) {
+      const [v, u, s] = polyHigh.points[i];
+      const env = polyHigh.envRadiusMm[i];
+      rhoHoopBound = Math.max(rhoHoopBound, Math.hypot(v, u) + env);
+      const axisDistance = Math.min(
+        geometry.bladeReachMm,
+        Math.hypot(u, s - q),
+      );
+      const lip = s - (env - axisDistance * sagRef);
+      if (lip > crownClear) crownClear = lip;
+    }
+    kerfFloorMm = Math.max(
+      LINK_KERF_MIN_MM,
+      clearanceMm + LINK_KERF_CLEAR_MM,
+      Math.min(2 * crownClear, LINK_KERF_ALLOWANCE_MM),
+    );
+    const legKerfMm = Math.max(
+      kerfFloorMm,
+      kerfSlope * rhoHoopBound + clearanceMm,
+    );
+    const nextKneeDepthMm = legKerfMm / 2 + LINK_BURY_MM;
+    if (Math.abs(nextKneeDepthMm - kneeDepthMm) < 1e-9) {
+      kneeDepthMm = nextKneeDepthMm;
+      break;
+    }
+    kneeDepthMm = nextKneeDepthMm;
+  }
   const seam: LinkSeamProfile = {
     kerfMm: 0,
     kerfFloorMm,
@@ -2729,14 +2721,12 @@ export function solveLinkSeam(
     travelCapDeg,
     secondaryTravelDeg: Math.min(geometry.secondaryTravelDeg, delivered),
     secondaryTargetDeg: Math.min(geometry.secondaryTravelDeg, delivered),
-    engagementMm: 0,
     outerRadiusMm: LINK_KERF_OUT_FACTOR * rhoMax + 1,
   };
   seam.kerfMm = linkKerfAtMm(seam, rhoMax);
   seam.outerKerfMm = seam.kerfMm;
   seam.legKerfMm = linkKerfAtMm(seam, rhoHoopBound);
-  seam.kneeDepthMm = seam.legKerfMm / 2 + LINK_BURY_MM;
-  seam.engagementMm = q + geometry.tubeRadiusMm - seam.legKerfMm / 2;
+  seam.kneeDepthMm = kneeDepthMm;
   return seam;
 }
 
@@ -2750,10 +2740,9 @@ export function solveLinkSeam(
  * The envelope radius is `a + c`, plus the secondary-travel allowance
  * (a rotation by `sec` about the pivot moves a point at distance `L` by
  * `2L·sin(sec/2)`), plus the pitch SAGITTA — the chord error of approximating
- * the continuous pitch sweep by three rotation samples, which is exactly
- * `dist(p, pin axis)·(1 − cos(travel/2))` — plus the polyline's own chord sag.
- * With those terms the union of the three hulls is a PROVEN SUPERSET of the
- * continuously swept fat hoop.
+ * the continuous pitch sweep by rotation samples no more than 15° apart, plus
+ * the polyline's own chord sag. The sampled hulls and that small sagitta form a
+ * conservative superset of the continuously swept fat hoop.
  */
 export function linkHoopPolyline(
   geometry: LinkJointGeometry,
@@ -2805,7 +2794,11 @@ function linkHoopPolylineAt(
   // is not an unsupported feature at all.
   const end = arc[arc.length - 1];
   const kneeS = -kneeDepthMm;
-  const drop = Math.max(0.2, end[2] - kneeS) * Math.tan(tilt);
+  const printableDropRun = Math.min(
+    Math.max(0.2, end[2] - kneeS),
+    LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM,
+  );
+  const drop = printableDropRun * Math.tan(tilt);
   const knee: Vec3 = [geometry.legOffsetMm, end[1] - drop, kneeS];
   const tip: Vec3 = [
     geometry.legOffsetMm,
@@ -2821,10 +2814,10 @@ function linkHoopPolylineAt(
   ];
 
   const sinHalfSec = Math.sin((geometry.secondaryTravelDeg * Math.PI) / 360);
-  const sagK = 1 - Math.cos((Math.max(0, travelDeg) * Math.PI) / 360);
+  const sagK = linkPitchSweepSagFactor(travelDeg);
   const envRadiusMm = points.map((p) => {
     const chord = Math.hypot(p[0], p[1], p[2] - q);
-    // The sagitta covers the chord error of the three-sample pitch sweep WHERE
+    // The sagitta covers the chord error between adjacent pitch samples WHERE
     // THE TWO BODIES CAN MEET. Past `bladeReachMm` from the pivot there is no
     // head material on the tail side to meet — the blade disc is that radius and
     // the head body itself starts beyond the kerf — so charging the leg tip its
@@ -3005,12 +2998,10 @@ function linkCavityFits(
  * — the precondition `jointOverlapCap`'s bisection needs. (A
  * `max(mechanism, kerf + keep)` form is V-shaped in general and would break it.)
  *
- * The kerf term is CAPPED AT THE ALLOWANCE. Beyond that radius the cutter is out
- * past the skin, where it claims no spine length; a collision that far out is
- * the build's neighbour gate (law 7) and degrades by losing travel. Capping is
- * also what keeps the term `r`-independent — `k = 2·tan(T/2)·ρ + c` carries no
- * `r` — so the footprint is `max(const, affine-in-r) + max(const, affine-in-r)`
- * and the monotonicity above is strengthened rather than merely preserved.
+ * The kerf term uses the full requested cone at the measured skin extent. This
+ * is the extra body space a high-angle link needs; budgeting only the old visual
+ * allowance is what made 45–90° builds run out of room and fall back to rounded.
+ * The kerf itself is independent of `r`, so the footprint remains monotone.
  *
  * NB `maxStationExtentMm` is `undefined` at one caller by design (it has no
  * placed stations to measure yet); the resulting `extent = 0` makes the kerf
@@ -3023,15 +3014,36 @@ function linkFootprintMm(
   maxStationExtentMm: number | undefined,
 ): number | null {
   if (bendAngleDeg === undefined) return null;
-  const geometry = solveLinkJointGeometry(
-    maxBallRadius,
-    clearance,
-    bendAngleDeg,
-  );
+  let geometry = solveLinkJointGeometry(maxBallRadius, clearance, bendAngleDeg);
+  // Above the link solver's feasible radius interval, the planner shrinks the
+  // joint back to the interval edge. Measure that real, capped link here too;
+  // dropping straight to the smaller rounded footprint would under-budget the
+  // large-angle body gap and make the spacing function discontinuous.
+  if (!geometry && maxBallRadius >= LINK_MIN_HEAD_RADIUS_MM) {
+    // The feasible interval's upper edge is ~51.4·clearance. Half of that is a
+    // stable interior seed, including the narrow c=0.2 case whose 3.2mm endpoint
+    // is below the interval.
+    let low = Math.max(LINK_MIN_HEAD_RADIUS_MM, 25 * clearance);
+    if (low > maxBallRadius) return null;
+    geometry = solveLinkJointGeometry(low, clearance, bendAngleDeg);
+    if (geometry) {
+      let high = maxBallRadius;
+      for (let iteration = 0; iteration < 32; iteration += 1) {
+        const mid = (low + high) / 2;
+        const candidate = solveLinkJointGeometry(mid, clearance, bendAngleDeg);
+        if (candidate) {
+          low = mid;
+          geometry = candidate;
+        } else {
+          high = mid;
+        }
+      }
+    }
+  }
   if (!geometry) return null;
   const extent = maxStationExtentMm ?? 0;
   const seam = solveLinkSeam(geometry, extent, clearance, bendAngleDeg);
-  const kerfTerm = Math.min(linkKerfAtMm(seam, extent), LINK_KERF_ALLOWANCE_MM);
+  const kerfTerm = linkKerfAtMm(seam, extent);
   const q = geometry.pivotOffsetMm;
   const head =
     Math.max(

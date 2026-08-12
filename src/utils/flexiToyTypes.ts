@@ -85,9 +85,9 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   gives every rim, at every radius and every azimuth, the same angle and the
  *   same running clearance `c·cos(bend/2)`. A CONSTANT slot instead has to be
  *   sized by one radius, and on a finned body the fin then collides first — a
- *   400mm fish delivered 4.0–7.8° of a requested 8° that way. The look ceiling
- *   caps the TRAVEL rather than the profile, so on a wide model the angle
- *   saturates before the slider does and the build says so with
+ *   400mm fish delivered 4.0–7.8° of a requested 8° that way. The conical gap
+ *   now follows the Link slider through 90°; when neighbouring cuts genuinely
+ *   leave too little axial room, the build reduces that joint and reports
  *   'link-travel-reduced'. Clearance is correct BY
  *   CONSTRUCTION rather than by algebra: the eye is not computed, it is CARVED —
  *   `blade = plate − hoopEnvelope`, where the envelope is the hoop's own solid
@@ -105,7 +105,7 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   eye is carved for a sweep of at most `LINK_SECONDARY_MAX_DEG` (6°), so
  *   `LinkSeamProfile.secondaryTravelDeg` is `min(carved cap, travel)` and
  *   measured sideways first contact saturates near 8.6° on the acceptance body
- *   while pitch tracks the slider to 15.9°. That cap is deliberate — a wider
+ *   while pitch tracks the slider through 90°. That cap is deliberate — a wider
  *   carved sweep spends the key gap the legs need — so it is a documented
  *   property of the style, not a shortfall, and the UI copy says "bends" of the
  *   pitch angle rather than promising it in every direction. Roll does not close
@@ -211,31 +211,19 @@ export type FlexiWarningCode =
    * for their room, and above the solver's upper radius bound the joint is too
    * BIG.
    *
-   * There is no "the body is too WIDE" reason. It was written for a travel range
-   * collapsed by the look ceiling, and the ceiling cannot do that: its binding
-   * radius clamps the body's contribution at ρ_A = 15mm, so the cap is flat in
-   * ρ_max above that and its minimum over the whole feasible box is 5.4° against
-   * a 1° floor. A message no body can produce is a message no one has tested.
+   * Width is handled as an axial spacing requirement by the Link footprint; a
+   * fallback here means the ring itself, its local skin, its neighbour, or the
+   * boolean operation could not produce a closed printable link.
    */
   | 'link-joint-fallback'
   /**
    * A link joint's ring gap had to be built NARROWER than the requested
-   * `bendAngleDeg` needs — the gap would otherwise exceed the style's allowance
-   * or its share of the local body radius. The joint still bends, just not as
-   * far. Never silent: on a wide body this is the only thing that tells a user
-   * why the Flexibility slider stopped doing anything.
+   * `bendAngleDeg` needs because the local skin or neighbouring cuts leave too
+   * little room. The joint still bends, just not as far, and is never silent.
    *
    * The message reports a RANGE, `min–max` over the clamped joints, collapsing
-   * to one number when they agree (which is the usual case, because the look
-   * ceiling is uniform across a model). Naming only the smallest understated
-   * three of four joints on a 400mm fish by up to 3.8°.
-   *
-   * It also names a CAUSE, chosen by the MAJORITY of the clamped joints: the
-   * look ceiling (the ring gap a bigger bend needs would show on the widest part
-   * the seam cuts through — note that is the widest SKIN, so a 6mm tube with a
-   * 25mm wing reads the wing) or a gate (a neighbour or a thin skin refusing the
-   * top of this joint's own range). The remedies are opposites, so one line
-   * cannot claim both, and a minority may not speak for the majority.
+   * to one number when they agree. It points to the useful remedies: fewer
+   * segments or a smaller joint size.
    */
   | 'link-travel-reduced'
   /**

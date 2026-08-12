@@ -47,6 +47,7 @@ import {
   linkHoopPolyline,
   linkHoopOuterMm,
   linkKerfAtMm,
+  linkPitchSweepAnglesDeg,
   linkBladeCapFits,
   linkBladeHeadCapMm,
   linkTravelSearch,
@@ -55,7 +56,6 @@ import {
   LINK_BLADE_SEGMENTS,
   LINK_KERF_SEGMENTS,
   LINK_KERF_ALLOWANCE_MM,
-  LINK_KERF_MAX_FRACTION,
   LINK_SECONDARY_INFLATE_MAX_MM,
   LINK_BURY_MM,
   LINK_ENGAGE_MIN_MM,
@@ -183,7 +183,6 @@ export async function buildFlexiToy(
       boolean: 0,
     };
     let linkTravelClampedJoints = 0;
-    let linkTravelGateClampedJoints = 0;
     let linkMinTravelDeg = settings.bendAngleDeg;
     let linkMaxTravelDeg = 0;
     let linkSidewaysClampedJoints = 0;
@@ -252,7 +251,6 @@ export async function buildFlexiToy(
               boolean: 0,
             },
             travelClampedJoints: 0,
-            travelGateClampedJoints: 0,
             minTravelDeg: settings.bendAngleDeg,
             maxTravelDeg: 0,
             sidewaysClampedJoints: 0,
@@ -287,7 +285,6 @@ export async function buildFlexiToy(
           linkFallbackJoints = notes.linkFallbackJoints;
           linkFallbackReasons = notes.fallbackReasons;
           linkTravelClampedJoints = notes.travelClampedJoints;
-          linkTravelGateClampedJoints = notes.travelGateClampedJoints;
           linkMinTravelDeg = notes.minTravelDeg;
           linkMaxTravelDeg = notes.maxTravelDeg;
           linkSidewaysClampedJoints = notes.sidewaysClampedJoints;
@@ -397,13 +394,9 @@ export async function buildFlexiToy(
     // plan's own `joint-size-capped` line instead — `sizeJoint` only ever
     // shrinks, so a too-BIG radius cannot arrive here.
     //
-    // There is deliberately no fifth "the body is too WIDE" bucket. It was
-    // written for a range collapsed by the look ceiling, and that cannot happen:
-    // the ceiling reads `ρ_bind = max(ρ_hoop, min(ρ_max, ρ_A))`, which CLAMPS the
-    // body's contribution at ρ_A = 15mm, so the cap is flat at 15.94°/15.00°/
-    // 14.06° (c = 0.30/0.55/0.80) for every ρ_max from 15mm to 5000mm and its
-    // minimum over the whole feasible box is 5.4°, five times the travel floor.
-    // A message no body can produce is a message no one has tested.
+    // Body width is already converted into axial spacing by the Link footprint,
+    // so fallbacks name the concrete local failure: mechanism, thin skin,
+    // neighbour truncation, or boolean failure.
     if (linkFallbackJoints > 0) {
       const reasons = linkFallbackReasons;
       const dominant = (
@@ -436,37 +429,13 @@ export async function buildFlexiToy(
         })(),
       });
     }
-    // Link's bend IS its ring gap, so past the look ceiling the gap — and the
-    // bend — stop growing before the slider does. That is honest physics, but it
-    // must never be SILENT: this line names the delivered angle and is the only
-    // thing that tells a user why Flexibility stopped doing anything. It reports
-    // a RANGE because joints on the same body can settle differently, and naming
-    // only the smallest understated three of four joints on the acceptance body
-    // by up to 3.8°. "up and down" is retained because it really is the pitch
+    // A joint can still lose travel when its local skin or neighbouring cuts do
+    // not leave enough axial room. That must never be silent: this line names the
+    // delivered range and gives the spacing remedies. "up and down" is retained
+    // because it really is the pitch
     // angle: the carved key caps the sideways sweep at LINK_SECONDARY_MAX_DEG
     // independently of this, which the style's own documentation states.
     //
-    // The CAUSE clause tracks which of the two clamps actually bit. The look
-    // ceiling is the usual one and its remedy is the body; a gate (a neighbour
-    // with no room, a skin too thin for the ring) is a different cause with a
-    // different remedy, so asserting the ceiling for both would be exactly the
-    // kind of confident-but-wrong line the fallback message was rewritten to
-    // stop telling.
-    //
-    // The ceiling clause used to read "this model is too wide AT THE JOINTS",
-    // which points at the joint hardware. What actually binds is the widest skin
-    // radius the seam has to cut THROUGH — a 6mm tube with a 25mm wing reads the
-    // wing, so a user looking at slim joints was told they were fat ones. The
-    // wording now names the ring gap and the place it has to hide in.
-    //
-    // One line has to speak for every clamped joint, so it names the cause of
-    // the MAJORITY of them rather than of any one. `> 0` let a single gated
-    // joint rewrite the sentence for three ceiling-clamped ones, and the two
-    // remedies point in opposite directions ("fewer segments" against "this is
-    // the shape of your model"), so the minority reading was actively
-    // misleading. Ties go to the ceiling: it is the cause that reaches users on
-    // ordinary bodies, and it is the one whose advice is inert rather than wrong
-    // when it is the wrong half.
     if (linkTravelClampedJoints > 0) {
       const low = linkMinTravelDeg.toFixed(1);
       const high = linkMaxTravelDeg.toFixed(1);
@@ -477,13 +446,9 @@ export async function buildFlexiToy(
         linkTravelClampedJoints === 1
           ? `One of ${liveJointCount} joints bends`
           : `${linkTravelClampedJoints} of ${liveJointCount} joints bend`;
-      const because =
-        linkTravelGateClampedJoints * 2 > linkTravelClampedJoints
-          ? 'there is no room here for a bigger ring gap. Try fewer segments, or a smaller Joint size.'
-          : 'a bigger bend would need a ring gap wider than this model can hide where the joints cut.';
       warnings.push({
         code: 'link-travel-reduced',
-        message: `${subject} about ${span}° up and down instead of ${settings.bendAngleDeg}° — ${because}`,
+        message: `${subject} about ${span}° up and down instead of ${settings.bendAngleDeg}° — there is no room here for a bigger ring gap. Try fewer segments, or a smaller Joint size.`,
       });
     }
     // UNREACHABLE BY CONSTRUCTION, and deliberately kept — see the emit-site
@@ -2542,12 +2507,6 @@ export type FlexiLinkNotes = {
   linkFallbackJoints: number;
   fallbackReasons: Record<FlexiLinkFallbackReason, number>;
   travelClampedJoints: number;
-  /**
-   * Of those, the ones a GATE pushed below the top of their own range rather
-   * than the look ceiling. The two have different remedies, so the warning says
-   * so instead of asserting the ceiling for both.
-   */
-  travelGateClampedJoints: number;
   minTravelDeg: number;
   maxTravelDeg: number;
   sidewaysClampedJoints: number;
@@ -2692,14 +2651,14 @@ function buildLinkSegments(
       const rhoNb = measure(distance + 2).maxMm;
       if (side > 0) headNbRho = rhoNb;
       else tailNbRho = rhoNb;
-      // The neighbour's WORST CASE, so the reserve is an upper bound whatever
-      // its own ladder settles on. `max`, not `min`: the look ceiling is
-      // `max(ALLOWANCE, FRACTION·ρ)` — the fraction is what the cone is allowed
-      // to grow to out at a fin, not a cap that shrinks on a thin body.
-      const otherKerfMax = Math.max(
-        LINK_KERF_ALLOWANCE_MM,
-        LINK_KERF_MAX_FRACTION * rhoNb,
-      );
+      // Reserve the neighbour's full requested conical gap at its own radius,
+      // so this joint cannot carve away space the adjacent link needs.
+      const otherKerfMax = otherGeometry
+        ? linkKerfAtMm(
+            solveLinkSeam(otherGeometry, rhoNb, clearance, bendAngleDeg),
+            rhoNb,
+          )
+        : LINK_KERF_ALLOWANCE_MM;
       const otherHead = otherGeometry
         ? otherGeometry.pivotOffsetMm +
           otherGeometry.tubeRadiusMm +
@@ -2763,10 +2722,6 @@ function buildLinkSegments(
     // points, the same side of the line the strong ladder stays on.
     let solved: { seam: LinkSeamProfile; poly: LinkHoopPolyline } | null = null;
     let reason: FlexiLinkFallbackReason = 'mechanism';
-    // Top of the ladder's range, i.e. `min(request, look ceiling, band)`. Only
-    // meaningful once `solved`; 0 keeps the "a gate clamped me" test below false
-    // on every path that never reached the ladder.
-    let topDeg = 0;
     if (geometry) {
       // g3 (travel-free) — the blade's ring survives the skin clip.
       const ringFits = rhoClip >= geometry.eyeOuterMm + LINK_RING_WALL_MM;
@@ -2779,11 +2734,14 @@ function buildLinkSegments(
       ): { seam: LinkSeamProfile; poly: LinkHoopPolyline } | null => {
         const seam = solveLinkSeam(geometry, rhoMax, clearance, travelDeg);
         const poly = linkHoopPolyline(geometry, seam, clearance);
-        // g1 — the mechanism still visibly engages past the rim (property L3).
-        // Read at the LEG kerf, which is what the hoop actually has to cross:
-        // charging it the kerf out at a dorsal fin is what drove a healthy joint
-        // to a quarter of its requested travel.
-        if (seam.engagementMm < LINK_ENGAGE_MIN_MM) {
+        // Preserve the original extra body-rim overlap in the low-angle range.
+        // Above 25°, the intentionally wider gap supplies the requested swing;
+        // captivity comes from the two closed, threaded loops instead.
+        if (
+          bendAngleDeg <= 25 &&
+          geometry.pivotOffsetMm + geometry.tubeRadiusMm - seam.legKerfMm / 2 <
+            LINK_ENGAGE_MIN_MM
+        ) {
           reason = 'mechanism';
           return null;
         }
@@ -2820,48 +2778,26 @@ function buildLinkSegments(
       } else if (!bladeCapFits) {
         reason = 'neighbours';
       } else {
-        // The top of the range: `min(request, look ceiling, band)`, closed form.
+        // The top of the range: the request, capped at Link's 90° product limit.
         const top = solveLinkSeam(
           geometry,
           rhoMax,
           clearance,
           requestedTravelDeg,
         ).travelDeg;
-        // The whole range collapsed before a single gate was consulted, so no
-        // gate can be blamed and no gate's remedy would help. `top` is
-        // `min(request, ceiling, band)`; the request cannot go below 5°, and the
-        // CEILING cannot take it below 5.4° anywhere in the feasible box (its
-        // binding radius clamps the body's contribution at ρ_A = 15mm — see the
-        // warning block above). The only term that can is the BAND, and only on
-        // a body that is ≥ 7× wider 3.3mm off the cut plane than it is within
-        // 3.25mm of it — a razor flange starting just outside the first scan. No
-        // fixture, no acceptance body and no sweep of the plan-side box reaches
-        // it, so it is attributed to the reason that promises nothing: the shape
-        // defeated the cut. Deliberately NOT a bucket of its own — a fifth enum
-        // member, product string and test shape for a path nothing can execute
-        // is untested product surface, and the "too wide" line that used to sit
-        // here also had the mechanism backwards.
+        // Defensive for malformed or future settings below the travel floor.
         if (top < LINK_TRAVEL_MIN_DEG) reason = 'boolean';
         // Largest feasible ABSOLUTE grid point ≤ top, by binary search over a
         // monotone predicate — exact rather than a sample. The search itself
         // lives in the plan module beside the grid constants that define it, so
         // the plan suite pins the SHIPPED loop instead of a replica.
         solved = linkTravelSearch(top, attempt);
-        topDeg = top;
       }
     }
     if (solved && solved.seam.travelDeg < bendAngleDeg - 1e-9) {
       notes.travelClampedJoints += 1;
       notes.minTravelDeg = Math.min(notes.minTravelDeg, solved.seam.travelDeg);
       notes.maxTravelDeg = Math.max(notes.maxTravelDeg, solved.seam.travelDeg);
-      // WHY it was clamped, so the warning can say. The look ceiling (`top` is
-      // already below the request) is one cause; a GATE refusing the top of the
-      // range and pushing the ladder down is a different one with a different
-      // remedy, and the old single-cause line asserted the first even when the
-      // second is what happened.
-      if (solved.seam.travelDeg < topDeg - 1e-9) {
-        notes.travelGateClampedJoints += 1;
-      }
     }
     // DEFENSIVE ONLY, and deliberately kept. A kerf that depends on the radius
     // alone is direction-free (see `solveLinkSeam`), so `secondaryTravelDeg` and
@@ -3156,21 +3092,20 @@ function buildLinkHoopCore(
 }
 
 // The hoop's swept FAT envelope — the solid that carves the eye out of the blade
-// and the swing relief out of the head. Three pitch samples {−T, 0, +T}; the
-// per-point sagitta the polyline already carries is exactly the chord error of
-// that approximation, so the union of the three hulls is a proven superset of
-// the continuously swept fat hoop.
+// and the swing relief out of the head. Pitch samples stay at most 15° apart;
+// the per-point sagitta covers the small chord error between adjacent samples,
+// so their hull union conservatively contains the continuously swept fat hoop.
 function buildLinkHoopEnvelope(
   wasm: ManifoldToplevel,
   poly: LinkHoopPolyline,
   travelDeg: number,
 ): Manifold | null {
   const { Manifold: ManifoldClass } = wasm;
-  const travel = (travelDeg * Math.PI) / 180;
   const parts: Manifold[] = [];
   for (let i = 0; i + 1 < poly.points.length; i += 1) {
     const seeds: Manifold[] = [];
-    for (const angle of [-travel, 0, travel]) {
+    for (const angleDeg of linkPitchSweepAnglesDeg(travelDeg)) {
+      const angle = (angleDeg * Math.PI) / 180;
       seeds.push(
         linkSphere(
           ManifoldClass,

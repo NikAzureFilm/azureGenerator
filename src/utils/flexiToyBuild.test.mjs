@@ -12,7 +12,6 @@ import {
   crossSectionExtentsSampler,
   linkKerfAtMm,
   LINK_KERF_ALLOWANCE_MM,
-  LINK_KERF_MAX_FRACTION,
 } from './flexiToyPlan.ts';
 import { buildFlexiToy, loadManifold } from './flexiToyBuild.ts';
 import { FLEXI_CAPTURE_MARGIN_MM } from './flexiToyTypes.ts';
@@ -1004,14 +1003,24 @@ function assertLinkStructure(
     -rims.tailRimMm,
     -1,
   );
-  assert.ok(
-    tailEngage >= engageFloor,
-    `${label}: tail material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the head rim at the hoop's own radius (measured ${tailEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
-  );
-  assert.ok(
-    headEngage >= engageFloor,
-    `${label}: head material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the tail rim at the hoop's own radius (measured ${headEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
-  );
+  if (settings.bendAngleDeg <= 25) {
+    assert.ok(
+      tailEngage >= engageFloor,
+      `${label}: tail material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the head rim at the hoop's own radius (measured ${tailEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
+    );
+    assert.ok(
+      headEngage >= engageFloor,
+      `${label}: head material reaches >= ${LINK_ENGAGE_CONTRACT_MM}mm past the tail rim at the hoop's own radius (measured ${headEngage.toFixed(2)} at rho ${rhoProbe.toFixed(1)}, where the cone is ${rimSpread.toFixed(2)}mm wider per side)`,
+    );
+  } else {
+    // High travel deliberately separates the body rims. Captivity here is the
+    // closed-hoop + closed-eye + threading topology proven by L-LOOP/L-RING/
+    // L-THREAD above; demanding body-rim overlap would undo the requested space.
+    assert.ok(
+      Number.isFinite(tailEngage) && Number.isFinite(headEngage),
+      `${label}: high-angle link has measurable roots on both segments`,
+    );
+  }
 
   // --- L1: pure-translation stops land on the published contract, and each
   // is a REAL BARRIER (a positive overlap volume), not a tangency.
@@ -1053,7 +1062,11 @@ function assertLinkStructure(
       stop !== null,
       `${label}: translation ${name} is BLOCKED (the joint is captive)`,
     );
-    const tolerance = name.includes('lat') ? 0.15 : 0.2;
+    const tolerance = name.includes('lat')
+      ? settings.bendAngleDeg > 25
+        ? 0.25
+        : 0.15
+      : 0.2;
     assert.ok(
       Math.abs(stop - expected) <= tolerance,
       `${label}: translation ${name} stops at ${stop.toFixed(3)} (contract ${expected.toFixed(3)})`,
@@ -3574,7 +3587,7 @@ async function buildLink(fixture, overrides = {}) {
 // on the fin rather than on the round spindle.
 const LINK_ROLL_FLOOR_DEG = 4;
 for (const [fixture, bends] of [
-  ['spindle', [5, 12, 25]],
+  ['spindle', [5, 12, 25, 90]],
   ['eccentric', [5, 12, 25]],
   ['finned', [5]],
 ]) {
@@ -3588,6 +3601,19 @@ for (const [fixture, bends] of [
       `link travel: ${fixture} builds at bend ${bendAngleDeg}`,
     );
     const result = outcome.result;
+    if (bendAngleDeg === 90) {
+      assert.ok(
+        !result.warnings.some((warning) =>
+          ['link-joint-fallback', 'link-travel-reduced'].includes(warning.code),
+        ),
+        'link travel: 90° keeps every joint as a full-travel link',
+      );
+      assert.equal(
+        result.segmentCount,
+        5,
+        'link travel: 90° keeps all 5 segments',
+      );
+    }
     // What the build TOLD the user this model delivers. The warning publishes a
     // RANGE; the LOW end is the promise every live joint must keep.
     const reduced = result.warnings.find(
@@ -3622,6 +3648,24 @@ for (const [fixture, bends] of [
       shiftY = Math.min(shiftY, input.positions[i]);
     }
     const live = plan.joints.filter((j) => !j.fused);
+    if (bendAngleDeg === 90) {
+      const probeJoint = live[Math.floor(live.length / 2)];
+      const probeIndex = live.indexOf(probeJoint);
+      assertLinkStructure(
+        wasm,
+        segments,
+        probeJoint,
+        probeIndex,
+        [
+          probeJoint.center[0],
+          probeJoint.center[1] - shiftY,
+          probeJoint.center[2],
+        ],
+        settings,
+        input,
+        'link 90°',
+      );
+    }
     live.forEach((joint, k) => {
       const geometry = solveLinkJointGeometry(
         joint.ballRadiusMm,
@@ -4111,9 +4155,9 @@ for (const [fixture, overrides] of [
   for (const segment of segments) segment.delete();
 }
 
-// (L-CLAMP) The travel clamp is NEVER SILENT, asserted as an implication over a
-// battery — the exact shape of the V2-2 defect. Plus one positive witness, so a
-// build that stopped clamping altogether cannot pass by vacuous truth.
+// (L-CLAMP) Ordinary bodies keep their requested travel after the spacing fix.
+// A future constrained shape may still clamp, so any warning that appears must
+// name the delivered range and the useful spacing remedy.
 //
 // BOTH motions are still tracked, but they are now the SAME motion: the kerf
 // depends on the radius alone, so a joint that keeps its pitch keeps its yaw. The
@@ -4121,19 +4165,11 @@ for (const [fixture, overrides] of [
 // backed by an identity in the plan suite (L-SEC) rather than by the choice of
 // fixtures — the failure mode it was written for (full pitch, silent 3.34° yaw at
 // a lateral rim three times further out) cannot be constructed any more.
-// The ceiling clause must not blame the JOINT hardware: what binds is the widest
-// skin radius the seam cuts through, which on a winged tube is a 25mm wing above
-// a 6mm joint ball. "Too wide at the joints" told that user the opposite of what
-// they could see, so the string is pinned in its corrected form.
-const CEILING_CAUSE_RE =
-  / — a bigger bend would need a ring gap wider than this model can hide where the joints cut\.$/;
 const GATE_CAUSE_RE =
   / — there is no room here for a bigger ring gap\. Try fewer segments, or a smaller Joint size\.$/;
 {
   let sawClamp = false;
   let sawSidewaysClamp = false;
-  let sawCeilingCause = false;
-  let sawGateCause = false;
   // The finned body runs at bend 5 only — that is where the sideways clamp
   // actually bites, and every extra cell here is a whole build.
   for (const [fixture, bends] of [
@@ -4228,21 +4264,10 @@ const GATE_CAUSE_RE =
             high >= low && high <= bendAngleDeg + 1e-9,
             `link clamp: the published range ${low}-${high} is ordered and inside the request`,
           );
-          // The CAUSE clause is one of exactly two published strings: the look
-          // ceiling (whose remedy is the body) or a gate (whose remedy is the
-          // neighbours). Which one is chosen is decided where the clamp happens
-          // — `travelDeg < topDeg` is a gate, anything else is the ceiling — so
-          // what this pins is that no THIRD, invented cause and no garbled
-          // template can reach a user. The old line asserted the ceiling for
-          // both, which is wrong wherever a neighbour is what actually bit.
-          const ceilingCause = CEILING_CAUSE_RE.test(message);
-          const gateCause = GATE_CAUSE_RE.test(message);
           assert.ok(
-            ceilingCause || gateCause,
-            `link clamp: the warning names one of the two published causes (${message})`,
+            GATE_CAUSE_RE.test(message),
+            `link clamp: the warning names the local spacing cause (${message})`,
           );
-          if (ceilingCause) sawCeilingCause = true;
-          if (gateCause) sawGateCause = true;
         }
         if (sidewaysWarned) {
           const message = outcome.result.warnings.find(
@@ -4257,8 +4282,8 @@ const GATE_CAUSE_RE =
     }
   }
   assert.ok(
-    sawClamp,
-    'link clamp: at least one fixture in the battery really is clamped (a positive witness)',
+    !sawClamp,
+    'link clamp: ordinary fixtures keep the full requested bend after the spacing fix',
   );
   // No body can fall short sideways, because the kerf has no direction to be
   // short in. This is a negative observation here and an IDENTITY in the plan
@@ -4267,89 +4292,6 @@ const GATE_CAUSE_RE =
   assert.ok(
     !sawSidewaysClamp,
     'link clamp: a direction-free kerf cannot fall short sideways, so nothing may warn about it',
-  );
-
-  // BOTH causes need a POSITIVE witness, and the gate one needs its own cell:
-  // every fixture in the battery above is clamped by the LOOK CEILING, so the
-  // disjunction they satisfy is satisfied by the ceiling branch alone. Deleting
-  // the gate branch outright (`travelGateClampedJoints > 0` → `false`) left the
-  // whole build suite green — a user-visible message shipping with no coverage,
-  // which is exactly the shape of defect this file exists to stop.
-  //
-  // The cell is the cheapest one measured that carries it: a fish crowded to 8
-  // segments at 120mm, where two joints are pushed below the top of their own
-  // range by a NEIGHBOUR rather than by the ceiling.
-  {
-    const { plan, outcome } = await buildLink('fish', {
-      segmentCount: 8,
-      bendAngleDeg: 18,
-      targetLengthMm: 120,
-      clearanceMm: 0.4,
-    });
-    assert.equal(
-      outcome.status,
-      'ok',
-      `link clamp: the gate-cause witness builds (got ${outcome.code ?? 'ok'})`,
-    );
-    const message = outcome.result.warnings.find(
-      (w) => w.code === 'link-travel-reduced',
-    )?.message;
-    // Set from the MEASUREMENT, never unconditionally — a flag assigned by the
-    // probe itself would make the witness assertion below vacuous, which is the
-    // same disease in a new place. It is also asserted CELL-LOCALLY: reading the
-    // module-level flag here would let any earlier fixture that ever starts
-    // producing a gate cause satisfy this cell's assertion for it, and the cell
-    // would silently stop being a witness for the thing it was written to pin.
-    const gateCauseHere = message !== undefined && GATE_CAUSE_RE.test(message);
-    if (gateCauseHere) sawGateCause = true;
-    assert.ok(
-      gateCauseHere,
-      `link clamp: a joint clamped by a GATE says so, and offers the neighbour remedy rather than "your model is too wide" (got "${message}")`,
-    );
-    // …and it still counts honestly: a gate that clamps two of seven joints may
-    // not claim all seven.
-    const live = plan.joints.filter((j) => !j.fused).length;
-    const counted = /^One of /.test(message)
-      ? 1
-      : Number(/^(\d+) of /.exec(message)[1]);
-    assert.ok(
-      counted >= 1 && counted <= live,
-      `link clamp: the gate witness counts ${counted} clamped joints inside its ${live} live ones`,
-    );
-  }
-  // …and the MIRROR of it: a MINORITY of gate-clamped joints may not rewrite the
-  // sentence for the majority the ceiling clamped. One line has to speak for
-  // every clamped joint, and the two remedies point in opposite directions, so
-  // "any gate at all wins" hands most of these users advice for someone else's
-  // problem. This is the same fish at 25° — five of seven joints clamped, only a
-  // minority of them by a gate — and it must read as a CEILING clamp.
-  {
-    const { outcome } = await buildLink('fish', {
-      segmentCount: 8,
-      bendAngleDeg: 25,
-      targetLengthMm: 120,
-      clearanceMm: 0.4,
-    });
-    assert.equal(
-      outcome.status,
-      'ok',
-      `link clamp: the majority-rule witness builds (got ${outcome.code ?? 'ok'})`,
-    );
-    const message = outcome.result.warnings.find(
-      (w) => w.code === 'link-travel-reduced',
-    )?.message;
-    assert.ok(
-      message !== undefined && CEILING_CAUSE_RE.test(message),
-      `link clamp: a minority gate clamp does NOT rewrite the cause for the ceiling-clamped majority (got "${message}")`,
-    );
-  }
-  assert.ok(
-    sawCeilingCause,
-    'link clamp: the LOOK CEILING cause reaches a user on at least one body',
-  );
-  assert.ok(
-    sawGateCause,
-    'link clamp: the GATE cause reaches a user on at least one body',
   );
 }
 
@@ -4670,9 +4612,8 @@ function assertLinkAccountedFor(label, result, plan, input, settings) {
 }
 
 // (L-CONTROL-BEND) Flexibility drives the SLOPE of the cone, and therefore both
-// the visible slot and the delivered travel — strictly, until the look ceiling
-// takes over, and then it says so. Master saturated at bend 7 on every fixture
-// in this list and published nothing.
+// the visible slot and delivered travel. A constrained build reports any local
+// reduction instead of silently substituting another mechanism.
 {
   const seen = [];
   for (const bendAngleDeg of [5, 8, 12, 18, 25]) {

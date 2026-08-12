@@ -15,6 +15,7 @@ import {
   linkBladeCapFits,
   linkBladeHeadCapMm,
   linkTravelSearch,
+  linkPitchSweepAnglesDeg,
   LINK_SECONDARY_MAX_DEG,
   LINK_RING_WALL_MM,
   LINK_ENGAGE_MIN_MM,
@@ -22,7 +23,6 @@ import {
   LINK_ARC_SEGMENTS,
   LINK_SECONDARY_INFLATE_MAX_MM,
   LINK_KERF_ALLOWANCE_MM,
-  LINK_KERF_MAX_FRACTION,
   LINK_CLAMP_STEPS,
   LINK_TRAVEL_STEP_DEG,
   LINK_TRAVEL_MIN_DEG,
@@ -30,6 +30,7 @@ import {
   LINK_BURY_MM,
   LINK_NEIGHBOUR_CLEAR_MM,
   LINK_CLIP_MARGIN_MM,
+  LINK_PITCH_SWEEP_STEP_DEG,
 } from './flexiToyPlan.ts';
 import {
   FLEXI_MIN_BALL_RADIUS_MM,
@@ -37,7 +38,7 @@ import {
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_SEGMENTS,
-  FLEXI_MAX_BEND_DEG,
+  FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_MAX_FACE_GAP_MM,
   isRoundedFamilyJointStyle,
 } from './flexiToyTypes.ts';
@@ -1406,7 +1407,6 @@ const LINK_LEG_SLAB_MARGIN_MM = 0.05;
 const LINK_MIN_HEAD_RADIUS_CONTRACT_MM = 3.2;
 const LINK_KERF_MIN_CONTRACT_MM = 0.8;
 const LINK_KERF_CLEAR_CONTRACT_MM = 0.25;
-const LINK_ENGAGE_CONTRACT_MM = 1;
 // The four acceptance-body stations, as `[r, rhoSkin, rhoMax]`. Measured on
 // `tmp/trout-source.stl` (the union of the five welded components of the user's
 // own export) at SHELL_DEFAULTS + link: 400mm, 5 segments, jointScale 1.
@@ -1425,12 +1425,12 @@ const TROUT_STATIONS = [
 // three literals close it, so a mutation to any of them fails here in one second
 // rather than passing a seven-minute build suite unnoticed.
 assert.equal(LINK_RING_WALL_MM, 1.2, 'link ring wall contract is 1.2mm');
+assert.equal(LINK_ENGAGE_MIN_MM, 1, 'low-angle link overlap is 1.0mm');
 assert.equal(
   LINK_RING_WALL_MM,
   FLEXI_MIN_SOCKET_WALL_MM,
   'link ring wall tracks the shared printable wall floor',
 );
-assert.equal(LINK_ENGAGE_MIN_MM, 1, 'link engagement floor contract is 1.0mm');
 assert.equal(
   LINK_TILT_DEG,
   38,
@@ -1446,11 +1446,6 @@ assert.equal(
   4.5,
   'link kerf allowance contract is 4.5mm',
 );
-assert.equal(
-  LINK_KERF_MAX_FRACTION,
-  0.3,
-  'link kerf share of the local radius contract is 0.30',
-);
 // (L-CONTRACT) The rest of the published numbers, as LITERALS. Zeroing any of
 // them must fail in one second here rather than pass a seven-minute build suite
 // by making every assertion that reads them vacuously true.
@@ -1462,12 +1457,12 @@ assert.equal(
 assert.equal(LINK_TRAVEL_STEP_DEG, 0.05, 'link travel grid contract is 0.05°');
 assert.equal(
   LINK_CLAMP_STEPS,
-  9,
-  'link ladder bisection budget contract is 9 = ceil(log2(481))',
+  11,
+  'link ladder bisection budget contract covers the 90Â° range',
 );
 assert.equal(LINK_TRAVEL_MIN_DEG, 1, 'link travel floor contract is 1°');
 // Derived from the SLIDER's own maximum, not from a literal 25. The budget is
-// `ceil(log2(gridPoints))`, so raising `FLEXI_MAX_BEND_DEG` or shrinking
+// `ceil(log2(gridPoints))`, so raising `FLEXI_MAX_LINK_BEND_DEG` or shrinking
 // `LINK_TRAVEL_STEP_DEG` without raising the budget would silently truncate the
 // bisection — the result would stay feasible and safe, but would no longer be
 // provably the largest feasible grid point, which is the property the constant
@@ -1475,9 +1470,25 @@ assert.equal(LINK_TRAVEL_MIN_DEG, 1, 'link travel floor contract is 1°');
 // lowering the budget (9 → 8) and refining the grid both break it.
 assert.ok(
   Math.pow(2, LINK_CLAMP_STEPS) >=
-    (FLEXI_MAX_BEND_DEG - LINK_TRAVEL_MIN_DEG) / LINK_TRAVEL_STEP_DEG + 1,
-  `the bisection budget (${LINK_CLAMP_STEPS} steps) really does cover the whole ${FLEXI_MAX_BEND_DEG}° grid`,
+    (FLEXI_MAX_LINK_BEND_DEG - LINK_TRAVEL_MIN_DEG) / LINK_TRAVEL_STEP_DEG + 1,
+  `the bisection budget (${LINK_CLAMP_STEPS} steps) really does cover the whole ${FLEXI_MAX_LINK_BEND_DEG}° Link grid`,
 );
+assert.equal(
+  LINK_PITCH_SWEEP_STEP_DEG,
+  15,
+  'link pitch envelope samples at most every 15Â°',
+);
+for (const travelDeg of [5, 25, 45, 90]) {
+  const angles = linkPitchSweepAnglesDeg(travelDeg);
+  assert.equal(angles[0], -travelDeg, 'pitch sweep starts at negative travel');
+  assert.equal(angles.at(-1), travelDeg, 'pitch sweep ends at positive travel');
+  for (let index = 1; index < angles.length; index += 1) {
+    assert.ok(
+      angles[index] - angles[index - 1] <= LINK_PITCH_SWEEP_STEP_DEG + 1e-9,
+      `pitch envelope interval stays within ${LINK_PITCH_SWEEP_STEP_DEG}Â° at ${travelDeg}Â° travel`,
+    );
+  }
+}
 assert.equal(
   LINK_BLADE_CAP_MARGIN_MM,
   0.2,
@@ -1770,12 +1781,13 @@ for (const r of LINK_RADII) {
           `link anchor runs horizontal (${where} i=${i}: ${climbOf(i).toFixed(3)}°)`,
         );
       }
-      // The two legs descend at EXACTLY the tilt angle — a 52° overhang, inside
-      // the normal FDM window.
+      // The two legs never exceed the tilt angle. Large bends extend the legs
+      // axially through the wider body gap instead of pushing the hoop farther
+      // outward, so those cases intentionally become shallower.
       for (const i of [2, points.length - 2]) {
         assert.ok(
-          Math.abs(climbOf(i) - LINK_TILT_DEG) < 0.5,
-          `link leg descends at the tilt angle (${where} i=${i}: ${climbOf(i).toFixed(2)}° vs ${LINK_TILT_DEG})`,
+          climbOf(i) > 0 && climbOf(i) <= LINK_TILT_DEG + 0.5,
+          `link leg stays within the printable tilt (${where} i=${i}: ${climbOf(i).toFixed(2)}° vs max ${LINK_TILT_DEG})`,
         );
       }
       // SPEC DEVIATION, recorded: the design asserted every non-anchor span
@@ -1832,25 +1844,15 @@ for (const c of LINK_CLEARANCES) {
     `link travel stays finite and positive at rho = 0 (c=${c}: ${seam.travelDeg})`,
   );
   assert.ok(
-    Number.isFinite(seam.engagementMm) && Number.isFinite(seam.outerRadiusMm),
-    'link seam reports finite engagement and outer radius at rho = 0',
+    Number.isFinite(seam.outerRadiusMm),
+    'link seam reports a finite outer radius at rho = 0',
   );
-  // And the look ceiling really does bind on a chunky body — as a TRAVEL cap,
-  // never as a clamp on the profile.
-  const chunky = solveLinkSeam(g, 40, c, 25);
+  const wide = solveLinkSeam(g, 40, c, 90);
+  assert.equal(wide.travelDeg, 90, 'link seam supports the full 90Â° range');
+  assert.equal(wide.travelCapDeg, FLEXI_MAX_LINK_BEND_DEG);
   assert.ok(
-    chunky.travelDeg < 25 - 1e-9 &&
-      Math.abs(chunky.travelDeg - chunky.travelCapDeg) < 1e-9,
-    'link reports a REDUCED travel when the ceiling binds (never silently full)',
-  );
-  assert.ok(
-    linkKerfAtMm(chunky, LINK_KERF_ALLOWANCE_MM / LINK_KERF_MAX_FRACTION) <=
-      LINK_KERF_ALLOWANCE_MM + 1e-9,
-    'link kerf respects the allowance at the ceiling breakpoint radius',
-  );
-  assert.ok(
-    linkKerfAtMm(chunky, 40) <= LINK_KERF_MAX_FRACTION * 40 + 1e-9,
-    'link kerf respects its share of the local radius out at the skin',
+    linkKerfAtMm(wide, 40) > LINK_KERF_ALLOWANCE_MM,
+    'a 90Â° link opens the body gap instead of clamping or changing joint style',
   );
 }
 
@@ -2042,54 +2044,18 @@ for (const r of [3.2, 4.679, 6.698, 7.236, 10.13, 15]) {
   }
 }
 
-// (L-CAP) The look ceiling, inverted in closed form. `travelDeg` is EXACTLY
-// `min(requested, cap)` — the profile is never clamped, so the reported angle is
-// the angle the solid delivers and there is no migration correction to get wrong.
+// (L-CAP) Link accepts the full product range. `travelDeg` equals the request up
+// to 90°; the profile is never visually clamped or swapped to another joint.
 {
-  const rhoA = LINK_KERF_ALLOWANCE_MM / LINK_KERF_MAX_FRACTION;
-  assert.equal(rhoA, 15, 'link ceiling breakpoint radius contract is 15mm');
-  for (const [c, want] of [
-    [0.3, 15.939],
-    [0.4, 15.564],
-    [0.55, 15.002],
-  ]) {
-    const caps = TROUT_STATIONS.map(([r, , rhoMax]) => {
-      const g = solveLinkJointGeometry(r, c, 25);
-      return solveLinkSeam(g, rhoMax, c, 25).travelCapDeg;
-    });
-    for (const cap of caps) {
-      assert.ok(
-        Math.abs(cap - want) < 5e-3,
-        `link travel cap on the acceptance body is ${want}° at c=${c} (got ${cap.toFixed(3)})`,
-      );
-    }
-    assert.ok(
-      Math.max(...caps) - Math.min(...caps) < 5e-3,
-      `link travel cap is UNIFORM across the acceptance body's stations at c=${c} — the property that lets the warning name one number`,
-    );
-  }
+  assert.equal(FLEXI_MAX_LINK_BEND_DEG, 90);
   for (const r of LINK_RADII) {
     for (const c of LINK_CLEARANCES) {
-      for (const bendAngleDeg of LINK_BENDS) {
+      for (const bendAngleDeg of [...LINK_BENDS, 45, 90]) {
         for (const rhoMax of [0, 6, 15, 43.25]) {
           const g = solveLinkJointGeometry(r, c, bendAngleDeg);
           const seam = solveLinkSeam(g, rhoMax, c, bendAngleDeg);
-          assert.equal(
-            seam.travelDeg,
-            Math.min(bendAngleDeg, seam.travelCapDeg),
-            `link delivers exactly min(requested, cap) (r=${r} c=${c} b=${bendAngleDeg} rhoMax=${rhoMax})`,
-          );
-          // The binding radius really is `max(hoop bound, min(rhoMax, rhoA))`.
-          const yCeil = Math.tan((seam.travelCapDeg * Math.PI) / 360);
-          const rhoBind = (LINK_KERF_ALLOWANCE_MM - c) / (2 * yCeil);
-          assert.ok(
-            rhoBind >= Math.min(rhoMax, rhoA) - 1e-6,
-            `link ceiling binds no closer in than min(rhoMax, rhoA) (r=${r} c=${c} b=${bendAngleDeg} rhoMax=${rhoMax}: ${rhoBind.toFixed(3)})`,
-          );
-          assert.ok(
-            linkKerfAtMm(seam, rhoBind) <= LINK_KERF_ALLOWANCE_MM + 1e-6,
-            'link kerf never exceeds the allowance at the binding radius',
-          );
+          assert.equal(seam.travelDeg, bendAngleDeg);
+          assert.equal(seam.travelCapDeg, FLEXI_MAX_LINK_BEND_DEG);
         }
       }
     }
@@ -2128,15 +2094,12 @@ for (const r of [3.2, 5, 7.236, 10, 15]) {
   }
 }
 
-// (L-KNEE) The knee is derived from the LEG kerf, which is bounded by the
-// allowance BY CONSTRUCTION (the hoop's own outer bound is folded into the
-// travel cap). That is what keeps `solveLinkJointGeometry`'s hard-coded
-// `kneeS = −(ALLOWANCE/2 + BURY)` conservative without the solver being edited.
+// (L-KNEE) The knee follows the widened leg kerf. It may extend past the old
+// visual allowance, which is how a high-flex link stays rooted in its tail body.
 {
-  const deepest = LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM;
   for (const r of LINK_RADII) {
     for (const c of LINK_CLEARANCES) {
-      for (const bendAngleDeg of LINK_BENDS) {
+      for (const bendAngleDeg of [...LINK_BENDS, 45, 90]) {
         for (const rhoMax of [0, 6, 20, 43.25]) {
           const g = solveLinkJointGeometry(r, c, bendAngleDeg);
           const seam = solveLinkSeam(g, rhoMax, c, bendAngleDeg);
@@ -2146,14 +2109,7 @@ for (const r of [3.2, 5, 7.236, 10, 15]) {
               1e-12,
             `link knee depth is legKerf/2 + bury (${where})`,
           );
-          assert.ok(
-            seam.legKerfMm <= LINK_KERF_ALLOWANCE_MM + 1e-9,
-            `link leg kerf never exceeds the allowance (${where}: ${seam.legKerfMm.toFixed(4)})`,
-          );
-          assert.ok(
-            seam.kneeDepthMm <= deepest + 1e-9,
-            `link knee is never deeper than the solver's own estimate (${where}: ${seam.kneeDepthMm.toFixed(4)} vs ${deepest})`,
-          );
+          assert.ok(Number.isFinite(seam.kneeDepthMm) && seam.kneeDepthMm > 0);
           const poly = linkHoopPolyline(g, seam, c);
           let low = Infinity;
           for (const point of poly.points) low = Math.min(low, point[2]);
@@ -2166,8 +2122,8 @@ for (const r of [3.2, 5, 7.236, 10, 15]) {
     }
   }
   // Pinned on the acceptance body at bend 8, c 0.30.
-  const legs = [1.198, 1.423, 1.484, 1.437];
-  const knees = [1.199, 1.312, 1.342, 1.318];
+  const legs = [1.061, 1.301, 1.435, 1.318];
+  const knees = [1.131, 1.25, 1.318, 1.259];
   TROUT_STATIONS.forEach(([r, , rhoMax], i) => {
     const g = solveLinkJointGeometry(r, 0.3, 8);
     const seam = solveLinkSeam(g, rhoMax, 0.3, 8);
@@ -2179,56 +2135,20 @@ for (const r of [3.2, 5, 7.236, 10, 15]) {
   });
 }
 
-// (L-ENGAGE) The engagement is read at the LEG kerf — what the hoop actually has
-// to cross — not at the kerf out by a dorsal fin. Charging a joint the fin's
-// slot is what drove joint 0 of the acceptance body to 0.488mm of engagement,
-// below the 1.0mm floor, and cost it four consecutive rungs of the old ladder
-// for a body that never needed a wide slot at all.
+// (L-ROOT) Large travel widens the body gap without changing the chain topology.
+// The hoop's knees always finish LINK_BURY_MM behind the tail-side rim, keeping
+// the closed hoop fused to its own segment all the way through the 90° range.
 {
-  const at = (c, bend) =>
-    TROUT_STATIONS.map(([r, , rhoMax]) => {
-      const g = solveLinkJointGeometry(r, c, bend);
-      return solveLinkSeam(g, rhoMax, c, bend).engagementMm;
-    });
-  const bend8 = at(0.3, 8);
-  const bend25 = at(0.3, 25);
-  [2.138, 3.207, 3.491, 3.271].forEach((want, i) => {
-    assert.ok(
-      Math.abs(bend8[i] - want) < 5e-3,
-      `link engagement on acceptance station ${i} at bend 8 is ${want}mm (got ${bend8[i].toFixed(3)})`,
-    );
-  });
-  [1.683, 2.644, 2.898, 2.701].forEach((want, i) => {
-    assert.ok(
-      Math.abs(bend25[i] - want) < 5e-3,
-      `link engagement on acceptance station ${i} at bend 25 is ${want}mm (got ${bend25[i].toFixed(3)})`,
-    );
-  });
-  for (const value of [...bend8, ...bend25]) {
-    assert.ok(
-      value >= LINK_ENGAGE_CONTRACT_MM,
-      `link keeps its ${LINK_ENGAGE_CONTRACT_MM}mm engagement floor on the acceptance body (got ${value.toFixed(3)})`,
-    );
-  }
-  // …and it is non-increasing in the travel, which is what makes g1 monotone.
   for (const r of LINK_RADII) {
     for (const c of LINK_CLEARANCES) {
-      let previous = Infinity;
-      for (let travel = 1; travel <= 25; travel += 1) {
-        const g = solveLinkJointGeometry(r, c, 25);
+      for (let travel = 1; travel <= FLEXI_MAX_LINK_BEND_DEG; travel += 1) {
+        const g = solveLinkJointGeometry(r, c, travel);
+        if (!g) continue;
         const seam = solveLinkSeam(g, 20, c, travel);
         assert.ok(
-          Math.abs(
-            seam.engagementMm -
-              (g.pivotOffsetMm + g.tubeRadiusMm - seam.legKerfMm / 2),
-          ) < 1e-12,
-          'link engagement is q + a − legKerf/2',
+          Math.abs(seam.kneeDepthMm - seam.legKerfMm / 2 - LINK_BURY_MM) < 1e-9,
+          `link hoop stays rooted LINK_BURY_MM behind the tail rim (r=${r} c=${c} travel=${travel})`,
         );
-        assert.ok(
-          seam.engagementMm <= previous + 1e-12,
-          `link engagement is non-increasing in the travel (r=${r} c=${c} travel=${travel})`,
-        );
-        previous = seam.engagementMm;
       }
     }
   }
@@ -2324,60 +2244,24 @@ for (const r of LINK_RADII) {
   }
 }
 
-// (L-PLANBUILD) The plan is CONSERVATIVE, not exact — and the reason is a pair of
-// MONOTONICITIES, not the ρ-independence an earlier revision of this probe
-// claimed (and asserted with `Math.abs(x − y) >= 0`, which cannot fail).
-// `legKerfMm` DOES read the station, through
-// `rhoPlain = max(min(ρ_max, ρ_A), bladeReach)`. What is true, and is what the
-// plan/build agreement actually rests on, is:
-//
-//   1. `legKerfMm` (and so the knee, and so every envelope radius) is
-//      NON-INCREASING in ρ_max, and CONSTANT once ρ_max ≥ ρ_A — measured
-//      1.5165 → 1.4838mm at r = 7.236, c = 0.30, bend 8 over ρ_max = 0 … 120;
-//   2. all three are NON-DECREASING in the travel.
-//
-// The plan solves at the FULL request and at a station radius no larger than the
-// build's, so it walks the deeper, fatter polyline in both arguments at once —
-// which is why a gate the plan clears the build clears too.
+// (L-PLANBUILD) The hoop leg kerf depends on the hoop's own swept bound, not the
+// model's outer skin radius. The plan solves at full requested travel, so its
+// knee and envelope conservatively dominate any reduced-travel build.
 {
-  const rhoA = LINK_KERF_ALLOWANCE_MM / LINK_KERF_MAX_FRACTION;
   for (const r of [3.2, 5, 7.236, 12]) {
     for (const c of LINK_CLEARANCES) {
       for (const bendAngleDeg of [8, 18, 25]) {
         const g = solveLinkJointGeometry(r, c, bendAngleDeg);
         const where = `r=${r} c=${c} b=${bendAngleDeg}`;
-        // (1) monotone in ρ_max, and flat above ρ_A.
-        let previousLeg = Infinity;
-        let previousKnee = Infinity;
+        let reference = null;
         for (const rhoMax of [0, 3, 6, 9.8, 12, 15, 20, 43.25, 120]) {
           const seam = solveLinkSeam(g, rhoMax, c, bendAngleDeg);
-          assert.ok(
-            seam.legKerfMm <= previousLeg + 1e-12,
-            `link leg kerf is non-increasing in the station radius (${where} rhoMax=${rhoMax}: ${seam.legKerfMm} > ${previousLeg})`,
-          );
-          assert.ok(
-            seam.kneeDepthMm <= previousKnee + 1e-12,
-            `link knee depth is non-increasing in the station radius (${where} rhoMax=${rhoMax})`,
-          );
-          previousLeg = seam.legKerfMm;
-          previousKnee = seam.kneeDepthMm;
+          reference ??= seam;
+          assert.equal(seam.legKerfMm, reference.legKerfMm);
+          assert.equal(seam.kneeDepthMm, reference.kneeDepthMm);
+          assert.equal(seam.travelCapDeg, FLEXI_MAX_LINK_BEND_DEG);
         }
-        const atRhoA = solveLinkSeam(g, rhoA, c, bendAngleDeg);
-        for (const rhoMax of [rhoA, 20, 43.25, 120, 1e4]) {
-          const seam = solveLinkSeam(g, rhoMax, c, bendAngleDeg);
-          assert.equal(
-            seam.legKerfMm,
-            atRhoA.legKerfMm,
-            `link leg kerf is CONSTANT above ρ_A (${where} rhoMax=${rhoMax})`,
-          );
-          assert.equal(
-            seam.travelCapDeg,
-            atRhoA.travelCapDeg,
-            `link travel cap is CONSTANT above ρ_A (${where} rhoMax=${rhoMax})`,
-          );
-        }
-        // (2) the plan (full request, smaller-or-equal station) dominates the
-        // build (clamped travel, larger-or-equal station) pointwise.
+        // The full-request plan dominates a reduced-travel build pointwise.
         const plan = solveLinkSeam(g, 43.25, c, bendAngleDeg);
         const planPoly = linkHoopPolyline(g, plan, c);
         for (const rhoBuild of [43.25, 60, 120]) {
@@ -2407,9 +2291,7 @@ for (const r of LINK_RADII) {
 }
 
 // (L-MINR / L-RMAX) Feasibility is an INTERVAL in `r`, over the FULL advanced
-// Joint-gap range — not just the three presets. The lower bound at c = 0.20 is
-// the solver's own `legOffset < 0.95·hoopRadius` gate, not the 3.2 pre-gate, so
-// lowering `LINK_MIN_HEAD_RADIUS_MM` would loosen only the loose end.
+// joint-gap and 90° travel ranges — not just the presets.
 {
   const bounds = new Map([
     [0.2, [4.95, 10.25]],
@@ -2431,7 +2313,9 @@ for (const r of LINK_RADII) {
     let hi = null;
     for (let step = 50; step <= 1000; step += 1) {
       const r = step / 20; // 2.50 … 50.00 in 0.05 steps
-      const ok = [5, 12, 25].every((b) => solveLinkJointGeometry(r, c, b));
+      const ok = [5, 12, 25, 45, 90].every((b) =>
+        solveLinkJointGeometry(r, c, b),
+      );
       if (ok && lo === null) lo = r;
       if (ok) hi = r;
     }
@@ -2446,7 +2330,7 @@ for (const r of LINK_RADII) {
   }
   // The printable floors hold across the WHOLE interval, at every bend.
   for (const c of [0.2, 0.25, 0.3, 0.4, 0.55, 0.8]) {
-    for (let bendAngleDeg = 5; bendAngleDeg <= 25; bendAngleDeg += 1) {
+    for (let bendAngleDeg = 5; bendAngleDeg <= 90; bendAngleDeg += 1) {
       for (const r of [3.2, 4, 6, 9, 10.2]) {
         const g = solveLinkJointGeometry(r, c, bendAngleDeg);
         if (!g) continue;
