@@ -38,6 +38,7 @@ import {
   FLEXI_CAPTURE_MARGIN_MM,
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_SEGMENTS,
+  FLEXI_DEFAULT_JOINT_STYLE,
   FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_MAX_FACE_GAP_MM,
   isRoundedFamilyJointStyle,
@@ -1409,13 +1410,19 @@ const LINK_KERF_MIN_CONTRACT_MM = 0.8;
 const LINK_KERF_CLEAR_CONTRACT_MM = 0.25;
 // The four acceptance-body stations, as `[r, rhoSkin, rhoMax]`. Measured on
 // `tmp/trout-source.stl` (the union of the five welded components of the user's
-// own export) at SHELL_DEFAULTS + link: 400mm, 5 segments, jointScale 1.
+// own export) at LINK_DEFAULTS: 400mm, 5 segments, jointScale 1.
 const TROUT_STATIONS = [
   [4.679, 9.828, 43.197],
   [6.698, 13.75, 37.034],
   [7.236, 15.096, 39.23],
   [6.819, 14.191, 31.938],
 ];
+
+assert.equal(
+  FLEXI_DEFAULT_JOINT_STYLE,
+  'link',
+  'the core defaults new Flexi Toy conversions to Link joints',
+);
 
 // The published contract constants, pinned to LITERALS. Every other assertion
 // below (and every built-solid probe in the build suite) compares against the

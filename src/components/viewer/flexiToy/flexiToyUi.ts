@@ -26,7 +26,7 @@ export type FlexiUiJointStyle = Extract<
 >;
 
 /** The style the dialog opens with. */
-export const DEFAULT_JOINT_STYLE: FlexiUiJointStyle = 'strong';
+export const DEFAULT_JOINT_STYLE: FlexiUiJointStyle = 'link';
 
 // Cut-station palette: blue = a live articulating joint, amber = a fused
 // (rigid) station; the *_HOVER variants light up under the cursor / drag.
@@ -73,11 +73,9 @@ export const AXIS_OPTIONS: Array<{ value: FlexiAxisOverride; label: string }> =
   ];
 
 /**
- * Everything the dialog resets when it opens. Keeping it as one object per
- * style means a STRONG_DEFAULTS can be added later as a single literal (and
- * applied wherever we decide styles should re-seed the controls) without
- * touching the reset code. Today only the open defaults are applied: switching
- * styles deliberately leaves the other controls alone.
+ * Everything the dialog resets when it opens. These values are tuned for the
+ * default Link joint; switching styles deliberately leaves the user's other
+ * controls and dragged stations alone.
  */
 export type FlexiStyleDefaults = {
   segmentMode: 'auto' | 'custom';
@@ -92,7 +90,10 @@ export type FlexiStyleDefaults = {
 };
 
 /**
- * NB no LINK_DEFAULTS, and the arithmetic behind that rather than an assertion.
+ * The default Link setup uses the large five-segment captive-ring look shown in
+ * the product reference: tight print clearance, full 400mm scale, normal-size
+ * rings, and an 8° starting bend.
+ *
  * Link's ring gap is a CONE, `k(ρ) = 2·tan(bend/2)·ρ + c`, so its ratio to the
  * local body radius at the skin is `2·tan(bend/2) + c/ρ` — the reference
  * chain-link look (0.10–0.13 of the radius) therefore lands at `bend ≈ 5.2–6.9°`
@@ -105,7 +106,7 @@ export type FlexiStyleDefaults = {
  * stations, which `FlexiStyleDefaults`' own JSDoc and the dialog spec's
  * 'keeps dragged positions' test both forbid in substance.
  */
-export const SHELL_DEFAULTS: FlexiStyleDefaults = {
+export const LINK_DEFAULTS: FlexiStyleDefaults = {
   segmentMode: 'custom',
   segmentCountCustom: 5,
   clearanceMm: FLEXI_CLEARANCE_PRESETS.tight,

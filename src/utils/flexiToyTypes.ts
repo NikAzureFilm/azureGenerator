@@ -119,7 +119,8 @@ export type FlexiJointStyle =
   | 'strong'
   | 'link';
 
-export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'shell';
+/** New Flexi Toy conversions open with the captive chain-link mechanism. */
+export const FLEXI_DEFAULT_JOINT_STYLE: FlexiJointStyle = 'link';
 
 /** Styles that share the rounded family's sizing (cup containment, bowl gap). */
 export function isRoundedFamilyJointStyle(style: FlexiJointStyle): boolean {

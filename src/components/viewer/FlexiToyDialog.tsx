@@ -59,7 +59,7 @@ import {
   CLEARANCE_PRESET_ORDER,
   DEFAULT_JOINT_STYLE,
   FLEXI_ERROR_COPY,
-  SHELL_DEFAULTS,
+  LINK_DEFAULTS,
   clamp,
   type FlexiUiJointStyle,
 } from './flexiToy/flexiToyUi';
@@ -97,35 +97,35 @@ export function FlexiToyDialog({
   const { toast } = useToast();
 
   const [segmentMode, setSegmentMode] = useState<'auto' | 'custom'>(
-    SHELL_DEFAULTS.segmentMode,
+    LINK_DEFAULTS.segmentMode,
   );
   const [segmentCountCustom, setSegmentCountCustom] = useState(
-    SHELL_DEFAULTS.segmentCountCustom,
+    LINK_DEFAULTS.segmentCountCustom,
   );
   const [clearanceMm, setClearanceMm] = useState<number>(
-    SHELL_DEFAULTS.clearanceMm,
+    LINK_DEFAULTS.clearanceMm,
   );
   const [showAdvancedFit, setShowAdvancedFit] = useState(false);
   const [targetLengthMm, setTargetLengthMm] = useState(
-    SHELL_DEFAULTS.targetLengthMm,
+    LINK_DEFAULTS.targetLengthMm,
   );
-  const [jointScale, setJointScale] = useState(SHELL_DEFAULTS.jointScale);
-  const [bendAngleDeg, setBendAngleDeg] = useState(SHELL_DEFAULTS.bendAngleDeg);
+  const [jointScale, setJointScale] = useState(LINK_DEFAULTS.jointScale);
+  const [bendAngleDeg, setBendAngleDeg] = useState(LINK_DEFAULTS.bendAngleDeg);
   const [jointStyle, setJointStyle] =
     useState<FlexiUiJointStyle>(DEFAULT_JOINT_STYLE);
   const [axisOverride, setAxisOverride] = useState<FlexiAxisOverride>(
-    SHELL_DEFAULTS.axisOverride,
+    LINK_DEFAULTS.axisOverride,
   );
   // User-dragged cut stations (arc-length fractions); null = even spacing.
   const [jointPositions, setJointPositions] = useState<number[] | null>(
-    SHELL_DEFAULTS.jointPositions,
+    LINK_DEFAULTS.jointPositions,
   );
   // Incremented whenever the dialog itself rewrites the stations, so the strip
   // can discard a keyboard commit that is still waiting on its debounce.
   const [stationEditToken, setStationEditToken] = useState(0);
 
   const [showOriginalColors, setShowOriginalColors] = useState(
-    SHELL_DEFAULTS.showOriginalColors,
+    LINK_DEFAULTS.showOriginalColors,
   );
   // Strip interaction state. `dragState` doubles as the live position of the
   // matching 3D ring while a handle is being moved.
@@ -223,7 +223,7 @@ export function FlexiToyDialog({
   };
 
   // Fresh session each time the dialog opens: every control goes back to the
-  // shell defaults (no length derivation — the defaults are constants), and the
+  // Link defaults (no length derivation — the defaults are constants), and the
   // expensive mesh input is warmed in the background so the first compute does
   // not pay for it.
   useEffect(() => {
@@ -231,18 +231,18 @@ export function FlexiToyDialog({
       return;
     }
 
-    setSegmentMode(SHELL_DEFAULTS.segmentMode);
-    setSegmentCountCustom(SHELL_DEFAULTS.segmentCountCustom);
-    setClearanceMm(SHELL_DEFAULTS.clearanceMm);
+    setSegmentMode(LINK_DEFAULTS.segmentMode);
+    setSegmentCountCustom(LINK_DEFAULTS.segmentCountCustom);
+    setClearanceMm(LINK_DEFAULTS.clearanceMm);
     setShowAdvancedFit(false);
-    setTargetLengthMm(SHELL_DEFAULTS.targetLengthMm);
-    setJointScale(SHELL_DEFAULTS.jointScale);
-    setBendAngleDeg(SHELL_DEFAULTS.bendAngleDeg);
+    setTargetLengthMm(LINK_DEFAULTS.targetLengthMm);
+    setJointScale(LINK_DEFAULTS.jointScale);
+    setBendAngleDeg(LINK_DEFAULTS.bendAngleDeg);
     setJointStyle(DEFAULT_JOINT_STYLE);
-    setAxisOverride(SHELL_DEFAULTS.axisOverride);
-    setJointPositions(SHELL_DEFAULTS.jointPositions);
+    setAxisOverride(LINK_DEFAULTS.axisOverride);
+    setJointPositions(LINK_DEFAULTS.jointPositions);
     setStationEditToken((token) => token + 1);
-    setShowOriginalColors(SHELL_DEFAULTS.showOriginalColors);
+    setShowOriginalColors(LINK_DEFAULTS.showOriginalColors);
     setHoverJointIndex(null);
     setDragState(null);
     setErrorInfo(null);
@@ -700,7 +700,7 @@ export function FlexiToyDialog({
                   min={FLEXI_MIN_SEGMENTS}
                   max={FLEXI_MAX_SEGMENTS}
                   step={1}
-                  defaultValue={[SHELL_DEFAULTS.segmentCountCustom]}
+                  defaultValue={[LINK_DEFAULTS.segmentCountCustom]}
                   onValueChange={([value]) => changeSegmentCount(value)}
                 />
               ) : (
@@ -789,7 +789,7 @@ export function FlexiToyDialog({
                 min={FLEXI_MIN_LENGTH_MM}
                 max={FLEXI_MAX_LENGTH_MM}
                 step={5}
-                defaultValue={[SHELL_DEFAULTS.targetLengthMm]}
+                defaultValue={[LINK_DEFAULTS.targetLengthMm]}
                 onValueChange={([value]) => changeLength(value)}
               />
             </div>
@@ -805,7 +805,7 @@ export function FlexiToyDialog({
                 min={FLEXI_MIN_JOINT_SCALE}
                 max={FLEXI_MAX_JOINT_SCALE}
                 step={0.05}
-                defaultValue={[SHELL_DEFAULTS.jointScale]}
+                defaultValue={[LINK_DEFAULTS.jointScale]}
                 onValueChange={([value]) =>
                   setJointScale(Number(value.toFixed(2)))
                 }
@@ -824,7 +824,7 @@ export function FlexiToyDialog({
                 min={FLEXI_MIN_BEND_DEG}
                 max={flexibilityMaxDeg}
                 step={1}
-                defaultValue={[SHELL_DEFAULTS.bendAngleDeg]}
+                defaultValue={[LINK_DEFAULTS.bendAngleDeg]}
                 onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
               />
               {/* A switch, not a ternary, so a fourth style is a

@@ -300,7 +300,7 @@ const LINK_SOLVE_ITERATIONS = 8; // keyGap ↔ bladeReach fixed point
  *     link / strong 1.38–1.40×   ·   / rounded 0.86×   ·   / shell 0.83×
  *
  * So the design's "≤1.5× strong" gate IS met on the canonical fixture, and link
- * is CHEAPER than both rounded and shell — the latter of which ships as
+ * is CHEAPER than both rounded and shell, and now ships as
  * `FLEXI_DEFAULT_JOINT_STYLE`. The cheap cutter (a 64-segment right cylinder in
  * place of a ~6k-triangle revolved wedge) more than pays for the ~50 small hulls
  * the two males cost; link's output here is 11.8k triangles against rounded's

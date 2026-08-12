@@ -256,14 +256,14 @@ describe('FlexiToyDialog', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('opens with the strong style and the default settings', async () => {
+  it('opens with the Link style and its default settings', async () => {
     renderDialog();
     await settle();
 
     expect(computeFlexiToy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        jointStyle: 'strong',
+        jointStyle: 'link',
         segmentCount: 5,
         clearanceMm: 0.3,
         targetLengthMm: 400,
@@ -275,6 +275,7 @@ describe('FlexiToyDialog', () => {
     // Even spacing on open: no pinned stations are sent.
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
     expect(settingsArg.jointPositions).toBeUndefined();
+    expect(screen.getByRole('radio', { name: /Link/ })).toBeChecked();
   });
 
   it('opens with original colors shown', async () => {
@@ -305,6 +306,9 @@ describe('FlexiToyDialog', () => {
 
   it('switches to the link joint style with one recompute and keeps dragged positions', async () => {
     renderDialog();
+    await settle();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Strong/ }));
     await settle();
 
     dragHandleTo(0, 0.4);
@@ -580,10 +584,9 @@ describe('FlexiToyDialog', () => {
     fireEvent.click(recover);
     await settle();
 
-    // Style switched back to strong; the open compute already cached that
-    // result, so recovery is instant (cache hit, no new compute) and clears
-    // the error.
-    expect(computeFlexiToy).not.toHaveBeenCalled();
+    // Strong is no longer the opening default, so recovery computes it once and
+    // clears the error.
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('radio', { name: /Strong/ })).toBeChecked();
     expect(
       screen.queryByText("These joints don't fit this shape"),
