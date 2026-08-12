@@ -91,8 +91,10 @@ export type FlexiStyleDefaults = {
 
 /**
  * The default Link setup uses the large five-segment captive-ring look shown in
- * the product reference: tight print clearance, full 400mm scale, normal-size
- * rings, and an 8° starting bend.
+ * the product reference: standard print clearance, full 400mm scale,
+ * normal-size rings, and an 8° starting bend. Standard clearance leaves a
+ * visibly open pocket around the two threaded links without changing the
+ * hoop-and-eye mechanism into another joint type.
  *
  * Link's ring gap is a CONE, `k(ρ) = 2·tan(bend/2)·ρ + c`, so its ratio to the
  * local body radius at the skin is `2·tan(bend/2) + c/ρ` — the reference
@@ -109,7 +111,7 @@ export type FlexiStyleDefaults = {
 export const LINK_DEFAULTS: FlexiStyleDefaults = {
   segmentMode: 'custom',
   segmentCountCustom: 5,
-  clearanceMm: FLEXI_CLEARANCE_PRESETS.tight,
+  clearanceMm: FLEXI_CLEARANCE_PRESETS.standard,
   targetLengthMm: FLEXI_MAX_LENGTH_MM,
   jointScale: 1,
   bendAngleDeg: 8,

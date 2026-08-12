@@ -265,7 +265,7 @@ describe('FlexiToyDialog', () => {
       expect.objectContaining({
         jointStyle: 'link',
         segmentCount: 5,
-        clearanceMm: 0.3,
+        clearanceMm: 0.4,
         targetLengthMm: 400,
         bendAngleDeg: 8,
         jointScale: 1,
