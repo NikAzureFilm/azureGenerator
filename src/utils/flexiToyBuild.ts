@@ -46,6 +46,7 @@ import {
   solveLinkSeam,
   linkHoopPolyline,
   linkHoopOuterMm,
+  linkPocketBoundsMm,
   linkKerfAtMm,
   linkPitchSweepAnglesDeg,
   linkBladeCapFits,
@@ -57,12 +58,10 @@ import {
   LINK_KERF_SEGMENTS,
   LINK_KERF_ALLOWANCE_MM,
   LINK_SECONDARY_INFLATE_MAX_MM,
-  LINK_BURY_MM,
   LINK_ENGAGE_MIN_MM,
   LINK_NEIGHBOUR_CLEAR_MM,
   LINK_CLIP_MARGIN_MM,
   LINK_TRAVEL_MIN_DEG,
-  LINK_RING_WALL_MM,
 } from './flexiToyPlan.ts';
 import type {
   FlexiSectionSampler,
@@ -240,7 +239,7 @@ export async function buildFlexiToy(
         }
         case 'link': {
           // A top-level arm for the same reason `strong` is one, plus one more:
-          // link adds TWO male solids per joint (the hoop and the blade) and so
+          // link adds TWO male solids per joint (the hoop and the ring) and so
           // owns two orphan guards of its own.
           const notes: FlexiLinkNotes = {
             linkFallbackJoints: 0,
@@ -389,10 +388,9 @@ export async function buildFlexiToy(
     //
     // 'mechanism' says "too small" because the solver's refusal is only ever
     // reachable from BELOW here: the plan hands the build a radius it has
-    // already shrunk into the feasible interval, and the interval's UPPER
-    // boundary (r_max ≈ 51.4·c, see `solveLinkJointGeometry`) is reported by the
-    // plan's own `joint-size-capped` line instead — `sizeJoint` only ever
-    // shrinks, so a too-BIG radius cannot arrive here.
+    // already shrunk into the feasible interval, which is now unbounded above
+    // (see `solveLinkJointGeometry`) — `sizeJoint` only ever shrinks, so a
+    // too-BIG radius cannot arrive here.
     //
     // Body width is already converted into axial spacing by the Link footprint,
     // so fallbacks name the concrete local failure: mechanism, thin skin,
@@ -2514,7 +2512,7 @@ export type FlexiLinkNotes = {
 };
 
 // Subtract one link cutter per live joint, then add every joint's TWO male
-// solids (hoop and blade) back in ONE whole-body union, decompose, and group
+// solids (hoop and ring) back in ONE whole-body union, decompose, and group
 // components into segment intervals. A top-level arm rather than a branch inside
 // buildRoundedSegments for the same reasons `strong` is one, plus one more: link
 // adds two males per joint and so needs two orphan guards of its own.
@@ -2652,27 +2650,34 @@ function buildLinkSegments(
       if (side > 0) headNbRho = rhoNb;
       else tailNbRho = rhoNb;
       // Reserve the neighbour's full requested conical gap at its own radius,
-      // so this joint cannot carve away space the adjacent link needs.
-      const otherKerfMax = otherGeometry
-        ? linkKerfAtMm(
-            solveLinkSeam(otherGeometry, rhoNb, clearance, bendAngleDeg),
-            rhoNb,
-          )
-        : LINK_KERF_ALLOWANCE_MM;
+      // so this joint cannot carve away space the adjacent link needs. The
+      // tail reserve is a MAX of real reaches, mirroring the plan footprint:
+      // the knee sits below the LEG kerf (`kneeDepthMm`), not below the rim
+      // kerf at the widest fin, so summing the rim kerf with the buried run
+      // double-charges at high bends.
+      const otherSeam = otherGeometry
+        ? solveLinkSeam(otherGeometry, rhoNb, clearance, bendAngleDeg)
+        : null;
+      const otherKerfMax =
+        otherGeometry && otherSeam
+          ? linkKerfAtMm(otherSeam, rhoNb)
+          : LINK_KERF_ALLOWANCE_MM;
       const otherHead = otherGeometry
         ? otherGeometry.pivotOffsetMm +
           otherGeometry.tubeRadiusMm +
           clearance +
           LINK_SECONDARY_INFLATE_MAX_MM
         : other.ballRadiusMm + clearance;
-      const otherTail = otherGeometry
-        ? Math.max(
-            otherKerfMax / 2 + LINK_BURY_MM + otherGeometry.anchorMm,
-            otherGeometry.bladeReachMm -
-              otherGeometry.pivotOffsetMm +
-              clearance,
-          )
-        : other.ballRadiusMm + clearance;
+      const otherTail =
+        otherGeometry && otherSeam
+          ? Math.max(
+              otherKerfMax / 2,
+              otherSeam.kneeDepthMm + otherGeometry.anchorMm,
+              otherGeometry.bladeReachMm -
+                otherGeometry.pivotOffsetMm +
+                clearance,
+            )
+          : other.ballRadiusMm + clearance;
       if (side > 0) {
         headRoom = Math.min(
           headRoom,
@@ -2723,11 +2728,13 @@ function buildLinkSegments(
     let solved: { seam: LinkSeamProfile; poly: LinkHoopPolyline } | null = null;
     let reason: FlexiLinkFallbackReason = 'mechanism';
     if (geometry) {
-      // g3 (travel-free) — the blade's ring survives the skin clip.
-      const ringFits = rhoClip >= geometry.eyeOuterMm + LINK_RING_WALL_MM;
-      // g6 (travel-free) — the blade's head-ward truncation must leave the whole
-      // eye ring behind. Shared with the builder (`linkBladeHeadCapMm`) so the
-      // gate and the truncation cannot drift.
+      // g3 (travel-free) — the WHOLE ring survives the skin clip: a clip
+      // cylinder inside the ring's outer radius would shave or sever the loop
+      // (the old blade plate only needed the eye ring to survive).
+      const ringFits = rhoClip >= geometry.bladeReachMm;
+      // g6 (travel-free) — the whole ring must fit in the head-ward room.
+      // Shared with the builder (`linkBladeHeadCapMm`) so the gate and the
+      // builder's refusal cannot drift.
       const bladeCapFits = linkBladeCapFits(geometry, headRoom);
       const attempt = (
         travelDeg: number,
@@ -2763,8 +2770,12 @@ function buildLinkSegments(
             clearance +
             LINK_SECONDARY_INFLATE_MAX_MM,
         );
+        // Same max-form as the reserve above: each term is a real reach (rim
+        // cone at the neighbour's radius; knee + buried run; ring's tail
+        // crown), and the knee is monotone in the travel so g4 stays monotone.
         const myTailReach = Math.max(
-          kerfTail / 2 + LINK_BURY_MM + geometry.anchorMm,
+          kerfTail / 2,
+          seam.kneeDepthMm + geometry.anchorMm,
           geometry.bladeReachMm - geometry.pivotOffsetMm + clearance,
         );
         if (myHeadReach > headRoom || myTailReach > tailRoom) {
@@ -2819,8 +2830,38 @@ function buildLinkSegments(
 
     let cutter: Manifold | null = null;
     let hoop: Manifold | null = null;
-    let blade: Manifold | null = null;
+    let ring: Manifold | null = null;
     if (geometry && solved) {
+      // The OPEN POCKET, sized here because it needs the measured skin and the
+      // law-7 rooms. It only ever shrinks under its caps (anchoring, skin wall,
+      // neighbour rooms) and is skipped outright when it could not even bare
+      // the hoop's crown — never load-bearing, so no warning and no fallback.
+      const bounds = linkPocketBoundsMm(geometry, solved.poly);
+      let pocket = Math.min(
+        bounds.desiredMm,
+        bounds.capMm,
+        headRoom - LINK_NEIGHBOUR_CLEAR_MM,
+        tailRoom - LINK_NEIGHBOUR_CLEAR_MM,
+      );
+      // Two passes: the band the skin is measured over must contain the final
+      // sphere, so the first pass's (wider) band makes the second conservative.
+      // Capped at LINK_POCKET_SKIN_FRACTION of the thinnest local half-extent
+      // as well as wall-inside-skin: the bowl should read like the reference
+      // toy's (a solid rim around it), and the seam-rim probes read the kerf at
+      // 0.75·ρ_min, which must stay outside the bowl.
+      for (let pass = 0; pass < 2 && pocket > 0; pass += 1) {
+        const skin = Math.min(planeExtents.minMm, measure(pocket).minMm);
+        pocket = Math.min(
+          pocket,
+          skin - FLEXI_MIN_SOCKET_WALL_MM,
+          LINK_POCKET_SKIN_FRACTION * skin,
+        );
+      }
+      const pocketRadiusMm =
+        pocket >=
+        geometry.pivotOffsetMm + geometry.tubeRadiusMm + clearance + 0.5
+          ? pocket
+          : 0;
       const built = buildLinkJoint(
         wasm,
         joint,
@@ -2830,11 +2871,12 @@ function buildLinkSegments(
         clearance,
         rhoClip,
         headRoom,
+        pocketRadiusMm,
       );
       if (built) {
         cutter = built.cutter;
         hoop = built.hoop;
-        blade = built.blade;
+        ring = built.ring;
       } else {
         // Every solid was solvable and the booleans still refused.
         reason = 'boolean';
@@ -2856,7 +2898,7 @@ function buildLinkSegments(
     }
     if (!cutter) {
       if (hoop) hoop.delete();
-      if (blade) blade.delete();
+      if (ring) ring.delete();
       return abandon();
     }
 
@@ -2865,11 +2907,11 @@ function buildLinkSegments(
     if (cut !== body) cut.delete();
     cut = next;
     if (hoop) males.push(hoop);
-    if (blade) males.push(blade);
+    if (ring) males.push(ring);
   }
 
   // TWO orphan guards, against the FINAL cut solid — a hoop whose leg anchor
-  // landed in a neighbour's cavity and a blade whose root the next joint's
+  // landed in a neighbour's cavity and a ring whose crown the next joint's
   // cutter carved away are different bugs with the same symptom, and neither is
   // visible to the severance guard below: an orphan is its own component,
   // `decompose()` happily assigns it to some segment group, every group stays
@@ -2950,41 +2992,43 @@ function buildLinkJoint(
   clearance: number,
   rhoClipMm: number,
   headRoomMm: number,
-): { cutter: Manifold; hoop: Manifold; blade: Manifold } | null {
+  pocketRadiusMm: number,
+): { cutter: Manifold; hoop: Manifold; ring: Manifold } | null {
   const { Manifold: ManifoldClass } = wasm;
   let clip: Manifold | null = null;
   let hoopCore: Manifold | null = null;
   let hoopEnvelope: Manifold | null = null;
-  let bladeEnvelope: Manifold | null = null;
-  let blade: Manifold | null = null;
+  let ringEnvelope: Manifold | null = null;
+  let ring: Manifold | null = null;
   let cutter: Manifold | null = null;
   try {
     // Belt and braces only: ladder gate g2 already requires this clip to be a
-    // NO-OP on the hoop, and g3 keeps the blade's ring alive. Truncating the
-    // blade is safe (it is a plate); truncating the hoop would not be, which is
-    // why the gate exists rather than the clip being a sizing device.
+    // NO-OP on the hoop, and g3 keeps the whole ring inside it. Truncating
+    // either loop would open or knife-edge it, which is why the gates exist
+    // rather than the clip being a sizing device.
     if (Number.isFinite(rhoClipMm) && rhoClipMm > 0) {
       const height = 4 * (geometry.bladeReachMm + geometry.anchorMm + 4);
       clip = ManifoldClass.cylinder(height, rhoClipMm, rhoClipMm, 64, true);
     }
     hoopCore = buildLinkHoopCore(wasm, poly);
     hoopEnvelope = buildLinkHoopEnvelope(wasm, poly, seam.travelDeg);
-    bladeEnvelope = buildLinkBladeEnvelope(wasm, geometry, clearance);
-    if (!hoopCore || !hoopEnvelope || !bladeEnvelope) return null;
-    blade = buildLinkBlade(
+    ringEnvelope = buildLinkRingEnvelope(wasm, geometry, clearance);
+    if (!hoopCore || !hoopEnvelope || !ringEnvelope) return null;
+    ring = buildLinkRing(
       wasm,
       geometry,
       hoopEnvelope,
       clip,
       linkBladeHeadCapMm(geometry, headRoomMm),
     );
-    if (!blade) return null;
+    if (!ring) return null;
     cutter = buildLinkCutter(
       wasm,
       seam,
       hoopEnvelope,
-      bladeEnvelope,
+      ringEnvelope,
       geometry.bladeReachMm + geometry.anchorMm,
+      pocketRadiusMm,
     );
     if (!cutter) return null;
     let hoop = hoopCore;
@@ -2998,24 +3042,24 @@ function buildLinkJoint(
     const matrix = orientationMatrix(joint.axis, joint.center);
     const orientedCutter = cutter.transform(matrix);
     const orientedHoop = hoop.transform(matrix);
-    const orientedBlade = blade.transform(matrix);
+    const orientedRing = ring.transform(matrix);
     cutter.delete();
     cutter = null;
     hoopCore = null;
     hoop.delete();
-    blade.delete();
-    blade = null;
+    ring.delete();
+    ring = null;
     return {
       cutter: orientedCutter,
       hoop: orientedHoop,
-      blade: orientedBlade,
+      ring: orientedRing,
     };
   } finally {
     if (clip) clip.delete();
     if (hoopCore) hoopCore.delete();
     if (hoopEnvelope) hoopEnvelope.delete();
-    if (bladeEnvelope) bladeEnvelope.delete();
-    if (blade) blade.delete();
+    if (ringEnvelope) ringEnvelope.delete();
+    if (ring) ring.delete();
     if (cutter) cutter.delete();
   }
 }
@@ -3091,8 +3135,8 @@ function buildLinkHoopCore(
   return hoop;
 }
 
-// The hoop's swept FAT envelope — the solid that carves the eye out of the blade
-// and the swing relief out of the head. Pitch samples stay at most 15° apart;
+// The hoop's swept FAT envelope — the solid whose carve radius the ring's hole
+// is sized past, and which carves the swing relief out of the head. Pitch samples stay at most 15° apart;
 // the per-point sagitta covers the small chord error between adjacent samples,
 // so their hull union conservatively contains the continuously swept fat hoop.
 function buildLinkHoopEnvelope(
@@ -3131,127 +3175,138 @@ function buildLinkHoopEnvelope(
   return envelope;
 }
 
-// The blade plate, with the eye CARVED by the hoop's own envelope rather than
-// computed. This one line is the whole clearance argument: because
-// `hoopEnvelope ⊇ hoop ⊕ ball(c)` at every reachable pose,
-// `dist(blade, hoop) ≥ clearanceMm` at rest AND through the travel, and no
-// algebra slip can fuse the two segments — the worst a wrong estimate can do is
-// send the joint to the rounded fallback.
-function buildLinkBlade(
+/** Facets of the ring rod's circular cross-section. 32 keeps the envelope's
+ *  inscription inflation (`1/cos(π/32) ≈ 1.005`) inside the key-gap margin. */
+const LINK_RING_TUBE_SEGMENTS = 32;
+
+/** The open pocket never exceeds this fraction of the thinnest local skin
+ *  half-extent: the bowl keeps a solid rim (the reference-toy look) and stays
+ *  clear of the 0.75·ρ_min radius the seam-rim probes measure the kerf at. */
+const LINK_POCKET_SKIN_FRACTION = 0.6;
+
+// The ring: a slender TORUS revolved about the pin axis, whose hole IS the eye.
+// Its solid stays at least `LINK_RING_SLACK_MM` outside the hoop envelope's
+// carve radius by construction (`centreline − tube = eyeOuterMm + slack`), and
+// because `hoopEnvelope ⊇ hoop ⊕ ball(c)` at every reachable pose,
+// `dist(ring, hoop) ≥ clearanceMm` at rest AND through the travel. The subtract
+// below is belt and braces on that argument — the worst a wrong estimate can do
+// is send the joint to the rounded fallback.
+//
+// Unlike the old blade plate there is NO head-ward truncation branch: a plane
+// pushed past a torus's outer edge first thins the crown to a knife edge and
+// then opens the loop, so the ring either fits whole (gate g6) or the joint
+// falls back.
+function buildLinkRing(
   wasm: ManifoldToplevel,
   geometry: LinkJointGeometry,
   hoopEnvelope: Manifold,
   clip: Manifold | null,
   headCapMm: number,
 ): Manifold | null {
-  const { Manifold: ManifoldClass, CrossSection } = wasm;
+  const { CrossSection } = wasm;
   const q = geometry.pivotOffsetMm;
-  // Belt and braces on the ladder's hoisted g6: truncating the plate at a radius
-  // that cuts INTO the eye leaves an open ring — a link that is not linked — and
-  // every gap, clearance and body count downstream still reads perfect.
-  if (headCapMm < q + geometry.eyeOuterMm + LINK_RING_WALL_MM) return null;
-  const disc = CrossSection.circle(geometry.bladeReachMm, LINK_BLADE_SEGMENTS);
-  const extruded = ManifoldClass.extrude(
-    disc,
-    geometry.bladeThicknessMm,
-    0,
-    0,
-    undefined,
-    true,
-  );
-  disc.delete();
-  // Local +Z (the plate normal) → native +X; the disc then spans (u, s).
-  const plate = extruded.rotate([0, 90, 0]).translate([0, 0, q]);
-  extruded.delete();
-
-  // Head-ward truncation, so the blade cannot bridge the NEXT joint's cavity and
-  // weld two segments solid (law 7). Applied to the MALE only — never to the
-  // envelope, which the cutter half-spaces anyway.
-  let capped = plate;
-  if (Number.isFinite(headCapMm) && headCapMm < q + geometry.bladeReachMm) {
-    const span = 4 * (geometry.bladeReachMm + 2);
-    // `cube(...).translate(...)` returns a NEW manifold and strands the cube, so
-    // the seed is bound and freed rather than chained away.
-    const boxSeed = ManifoldClass.cube([span, span, span], true);
-    const box = boxSeed.translate([0, 0, headCapMm - span / 2]);
-    boxSeed.delete();
-    capped = plate.intersect(box);
-    box.delete();
-    plate.delete();
+  // Belt and braces on the ladder's hoisted g6: the WHOLE ring must fit.
+  if (headCapMm < q + geometry.bladeReachMm) return null;
+  const tube = geometry.bladeThicknessMm / 2;
+  const centre = geometry.bladeReachMm - tube;
+  // The rod's cross-section, inscribed (vertices nominal) like the hoop's core
+  // spheres — a hair slimmer only ever widens the running clearance.
+  const pts: [number, number][] = [];
+  for (let k = 0; k < LINK_RING_TUBE_SEGMENTS; k += 1) {
+    const phi = (2 * Math.PI * k) / LINK_RING_TUBE_SEGMENTS;
+    pts.push([centre + tube * Math.cos(phi), tube * Math.sin(phi)]);
   }
-  let clipped = capped;
+  let ring: Manifold;
+  let profile: InstanceType<typeof CrossSection> | null = null;
+  try {
+    profile = new CrossSection([pts]);
+    ring = profile.revolve(LINK_BLADE_SEGMENTS);
+  } finally {
+    if (profile) profile.delete();
+  }
+  // The revolve's symmetry axis is local +Z; rotate it onto the pin axis
+  // (native +X) so the ring lies in the sagittal (u, s) plane, then centre it
+  // on the pivot.
+  const oriented = ring.rotate([0, 90, 0]).translate([0, 0, q]);
+  ring.delete();
+  let clipped = oriented;
   if (clip) {
-    clipped = capped.intersect(clip);
-    capped.delete();
+    clipped = oriented.intersect(clip);
+    oriented.delete();
   }
-  const blade = clipped.subtract(hoopEnvelope);
+  const result = clipped.subtract(hoopEnvelope);
   clipped.delete();
-  if (blade.status() !== 'NoError' || blade.isEmpty()) {
-    blade.delete();
+  if (result.status() !== 'NoError' || result.isEmpty()) {
+    result.delete();
     return null;
   }
-  return blade;
+  return result;
 }
 
-// The blade's own swept envelope, which relieves TAIL material so the plate can
-// swing. A disc centred on the pivot is INVARIANT under the pitch rotation (it
-// lies in the plane normal to the pin axis), so only the secondary yaw/roll has
-// to be swept.
-//
-// SPEC DEVIATION, deliberate and measured: the design built this as a union of
-// five rotated fat discs. This builds the exact CONTINUOUS envelope instead — a
-// single revolved bi-cone `{ ρ ≤ Rg, |v| ≤ halfT/cos(sec) + ρ·tan(sec) }`, which
-// is what you get by sweeping the fat plate about EVERY in-plane axis rather
-// than four sampled ones. It is therefore strictly more correct (the four
-// samples leave the diagonal azimuths uncovered), it is 90× cheaper (0.1ms and
-// 192 triangles against 28ms and 2000), and it is a verified superset: built
-// against a 24-sample reference envelope over the corners of the settings box,
-// `exact − biCone` measures 0.000000 mm³ every time. It respects the same
-// `keyGapMm` bound the sampled version does, since both reach `halfT + ρ·sin(sec)`
-// at the rim and the key gap is sized from exactly that.
-function buildLinkBladeEnvelope(
+// The ring's own swept envelope, which relieves TAIL material so the ring can
+// swing. A torus centred on the pivot and revolved about the pin axis is
+// INVARIANT under the pitch rotation (its centreline circle lies in the plane
+// normal to the pin axis and rotates onto itself), so — exactly like the old
+// blade disc — only the secondary yaw/roll has to be swept: a rotation by `sec`
+// about any in-plane axis through the pivot moves a point at distance `L` by at
+// most `2L·sin(sec/2)`, and every point of the fat ring has
+// `L ≤ bladeReachMm + c`. So a fat torus whose tube gains that sway is the
+// continuous envelope, with two facet corrections: the tube polygon's own
+// inscription (divide by `cos(π/n_tube)`) and the revolve chords' radial dip
+// (scale the whole profile out by `1/cos(π/N)` — outward-safe on the inner
+// edge, where chords dip INTO the hole and only over-cover).
+function buildLinkRingEnvelope(
   wasm: ManifoldToplevel,
   geometry: LinkJointGeometry,
   clearanceMm: number,
 ): Manifold | null {
   const { CrossSection } = wasm;
   const secRad = (geometry.secondaryTravelDeg * Math.PI) / 180;
-  const halfThickness =
-    (geometry.bladeThicknessMm / 2 + clearanceMm) / Math.cos(secRad);
-  // A point of the fat plate keeps its distance from the pivot under the
-  // rotation, so the in-plane radius can grow to the plate's corner distance.
-  const outer =
-    Math.hypot(
-      geometry.bladeReachMm + clearanceMm,
-      geometry.bladeThicknessMm / 2 + clearanceMm,
-    ) / Math.cos(Math.PI / LINK_BLADE_SEGMENTS);
-  const rim = halfThickness + outer * Math.tan(secRad);
-  const profile = new CrossSection([
-    [
-      [0, -halfThickness],
-      [outer, -rim],
-      [outer, rim],
-      [0, halfThickness],
-    ],
-  ]);
-  const revolved = profile.revolve(LINK_BLADE_SEGMENTS);
-  profile.delete();
-  // The revolve's symmetry axis is local +Z; rotate it onto the plate normal.
-  const oriented = revolved
+  const tube = geometry.bladeThicknessMm / 2;
+  const centre = geometry.bladeReachMm - tube;
+  const sway = 2 * (geometry.bladeReachMm + clearanceMm) * Math.sin(secRad / 2);
+  const fat =
+    (tube + clearanceMm + sway) / Math.cos(Math.PI / LINK_RING_TUBE_SEGMENTS);
+  const radialInflate = 1 / Math.cos(Math.PI / LINK_BLADE_SEGMENTS);
+  const pts: [number, number][] = [];
+  for (let k = 0; k < LINK_RING_TUBE_SEGMENTS; k += 1) {
+    const phi = (2 * Math.PI * k) / LINK_RING_TUBE_SEGMENTS;
+    pts.push([
+      Math.max(0.01, (centre + fat * Math.cos(phi)) * radialInflate),
+      fat * Math.sin(phi),
+    ]);
+  }
+  let envelope: Manifold;
+  let profile: InstanceType<typeof CrossSection> | null = null;
+  try {
+    profile = new CrossSection([pts]);
+    envelope = profile.revolve(LINK_BLADE_SEGMENTS);
+  } finally {
+    if (profile) profile.delete();
+  }
+  const oriented = envelope
     .rotate([0, 90, 0])
     .translate([0, 0, geometry.pivotOffsetMm]);
-  revolved.delete();
+  envelope.delete();
   return oriented;
 }
 
 // The cutter: a CONICAL ANNULAR KERF — a solid of revolution whose axial
 // thickness grows linearly with the radius — plus the two swing reliefs, each
-// HALF-SPACED to the side it must relieve.
+// HALF-SPACED to the side it must relieve, plus the OPEN POCKET (a sphere on
+// the joint centre that bares the interlocked loops; zero radius skips it).
 //
-//   cutter = kerfCone ∪ (hoopEnvelope ∩ {s ≥ 0}) ∪ (bladeEnvelope ∩ {s ≤ 0})
+//   cutter = kerfCone ∪ (hoopEnvelope ∩ {s ≥ 0}) ∪ (ringEnvelope ∩ {s ≤ 0})
+//            ∪ pocketSphere
+//
+// The pocket needs NO half-spacing: it is body material on both sides, the
+// males are re-added after the whole subtract chain, and `linkPocketBoundsMm`'s
+// caps guarantee each male still lands anchored in its own segment. It is
+// deliberately INSCRIBED (facet vertices at the nominal radius) so it can only
+// carve less than the wall budget assumed.
 //
 // The half-spacing is what keeps each male attached to its own body: the hoop's
-// legs at s < 0 ARE tail material and need no relief, the blade's root at s > 0
+// legs at s < 0 ARE tail material and need no relief, the ring's crown at s > 0
 // IS head material and needs none either, and an un-split envelope would cut
 // both males free.
 //
@@ -3270,8 +3325,9 @@ function buildLinkCutter(
   wasm: ManifoldToplevel,
   seam: LinkSeamProfile,
   hoopEnvelope: Manifold,
-  bladeEnvelope: Manifold,
+  ringEnvelope: Manifold,
   reachMm: number,
+  pocketRadiusMm: number,
 ): Manifold | null {
   const { Manifold: ManifoldClass, CrossSection } = wasm;
   const outer = seam.outerRadiusMm;
@@ -3298,7 +3354,7 @@ function buildLinkCutter(
   } else {
     // `revolve` spins the (x, y) section about ITS y-axis and lands the result
     // on +Z, so x is the radius and y the axial coordinate. Same CCW winding as
-    // `buildLinkBladeEnvelope`.
+    // `buildLinkRingEnvelope`.
     const pts: [number, number][] = [[0, -floor / 2]];
     if (knee > 1e-6) pts.push([knee, -floor / 2]);
     pts.push([outer, -rim / 2], [outer, rim / 2]);
@@ -3323,13 +3379,15 @@ function buildLinkCutter(
   const tailHalf = halfSeed.translate([0, 0, -span / 2]);
   halfSeed.delete();
   const hoopRelief = hoopEnvelope.intersect(headHalf);
-  const bladeRelief = bladeEnvelope.intersect(tailHalf);
+  const ringRelief = ringEnvelope.intersect(tailHalf);
   headHalf.delete();
   tailHalf.delete();
-  const cutter = ManifoldClass.union([kerf, hoopRelief, bladeRelief]);
-  kerf.delete();
-  hoopRelief.delete();
-  bladeRelief.delete();
+  const parts: Manifold[] = [kerf, hoopRelief, ringRelief];
+  if (pocketRadiusMm > 0) {
+    parts.push(ManifoldClass.sphere(pocketRadiusMm, LINK_RING_TUBE_SEGMENTS));
+  }
+  const cutter = ManifoldClass.union(parts);
+  for (const part of parts) part.delete();
   if (cutter.status() !== 'NoError' || cutter.isEmpty()) {
     cutter.delete();
     return null;

@@ -547,31 +547,32 @@ function linkVoidBelow(wasm, solid, origin, dir, maxMm, step = 0.01) {
   return null;
 }
 
-// The RADIAL RUN of blade material found marching outward from the pin axis, in
-// the blade's plane, at `azimuths` azimuths × three lateral stations. Started ON
+// The RADIAL RUN of ring material found marching outward from the pin axis, in
+// the ring's plane, at `azimuths` azimuths × five lateral stations. Started ON
 // the pin axis — which is inside the hoop, i.e. void for the head — so the inner
-// edge always has a bracket. Returns the worst run over all of them; 0 means the
-// ring is OPEN somewhere, which is the failure this probe exists to catch.
+// edge always has a bracket. The rod is ROUND now, so the expected run at a
+// lateral station `v` is the rod's own chord `2·√((t/2)² − v²)` (de-rated for
+// the tube's 32-gon facets), capped by the printable-wall contract at the
+// mid-plane. Returns the worst MARGIN (measured − expected) over all stations;
+// a large negative number means the ring is OPEN or NOTCHED somewhere — the
+// outer stations remain the built-solid witness that the hoop legs never creep
+// into the ring's slab (`legSlabClearMm`'s hypothesis).
 function linkRingClosure(wasm, head, geometry, at, azimuths) {
   const q = geometry.pivotOffsetMm;
   const reach = geometry.bladeReachMm;
+  const tube = geometry.bladeThicknessMm / 2;
   let worst = Infinity;
   for (let k = 0; k < azimuths; k += 1) {
     const theta = (2 * Math.PI * k) / azimuths;
     const cos = Math.cos(theta);
     const sin = Math.sin(theta);
-    // Three depths on each side. The outermost pair sits 0.02mm inside the blade
-    // FACE on purpose: that is where a hoop leg whose envelope has crept into the
-    // blade slab (`legSlabClearMm < 0`) would notch the ring, and it is the only
-    // built-solid witness of the hypothesis `eyeOuterMm` rests on — that the eye
-    // may be maximised over the ARC alone because the legs never reach the slab.
-    for (const lateral of [
-      0,
-      geometry.bladeThicknessMm / 2 - 0.15,
-      -(geometry.bladeThicknessMm / 2 - 0.15),
-      geometry.bladeThicknessMm / 2 - 0.02,
-      -(geometry.bladeThicknessMm / 2 - 0.02),
-    ]) {
+    for (const fraction of [0, 0.6, -0.6, 0.85, -0.85]) {
+      const lateral = fraction * tube;
+      const facetedTube = 0.99 * tube;
+      const chord =
+        2 *
+        Math.sqrt(Math.max(0, facetedTube * facetedTube - lateral * lateral));
+      const expected = Math.min(LINK_RING_WALL_CONTRACT_MM, chord);
       const origin = at(q, 0, lateral);
       const outward = [
         at(q + sin, cos, lateral)[0] - origin[0],
@@ -586,7 +587,7 @@ function linkRingClosure(wasm, head, geometry, at, azimuths) {
         reach + 1,
         'inner',
       );
-      if (inner === null) return 0;
+      if (inner === null) return -Infinity;
       const from = [
         origin[0] + outward[0] * (inner + 1e-3),
         origin[1] + outward[1] * (inner + 1e-3),
@@ -600,10 +601,10 @@ function linkRingClosure(wasm, head, geometry, at, azimuths) {
         reach + 2,
         'outer',
       );
-      worst = Math.min(worst, run === null ? reach + 2 : run);
+      worst = Math.min(worst, (run === null ? reach + 2 : run) - expected);
     }
   }
-  return Number.isFinite(worst) ? worst : 0;
+  return Number.isFinite(worst) ? worst : -Infinity;
 }
 
 // The two RIMS of a link seam, read off the built solids rather than re-solved:
@@ -881,7 +882,9 @@ function assertLinkStructure(
   );
   for (let k = 0; k < 12; k += 1) {
     const theta = (2 * Math.PI * k) / 12;
-    const radius = geometry.eyeOuterMm + LINK_RING_WALL_CONTRACT_MM / 2;
+    // The rod ring's CENTRELINE circle — the ring is a slender torus now, so
+    // the old `eyeOuter + wall/2` radius lands in the deliberate hole slack.
+    const radius = geometry.bladeReachMm - geometry.bladeThicknessMm / 2;
     assert.deepEqual(
       segmentsTouching(
         wasm,
@@ -890,7 +893,7 @@ function assertLinkStructure(
         0.3,
       ),
       [pk + 1],
-      `${label}: the blade ring around the eye is HEAD material at azimuth ${k}`,
+      `${label}: the ring rod around the eye is HEAD material at azimuth ${k}`,
     );
   }
 
@@ -900,10 +903,10 @@ function assertLinkStructure(
   // constant either, because zeroing the constant would zero the threshold
   // and `linkRingClosure` returns ≥ 0 by construction, so the assertion
   // would read `≥ −0.15` and pass vacuously.
-  const ringWall = linkRingClosure(wasm, head, geometry, at, 24);
+  const ringMargin = linkRingClosure(wasm, head, geometry, at, 24);
   assert.ok(
-    ringWall >= LINK_RING_WALL_CONTRACT_MM - 0.15,
-    `${label}: blade material round the eye is >= ${LINK_RING_WALL_CONTRACT_MM}mm at every azimuth and lateral station (worst ${ringWall.toFixed(3)})`,
+    ringMargin >= -0.15,
+    `${label}: ring rod material meets its own chord (contract-capped) at every azimuth and lateral station (worst margin ${ringMargin.toFixed(3)})`,
   );
 
   // --- L-LOOP: the hoop circuit is CLOSED — both legs, both TIPS and the arc
@@ -934,23 +937,28 @@ function assertLinkStructure(
   );
   for (const component of tailComponents) component.delete();
 
-  // --- L-BRIDGE: the print-in-place bridge. The carved eye must leave
-  // EXACTLY the clearance under the hoop crown at the mid-plane — this is
-  // the reference toy's own trick and the single most important
-  // printability fact. A ball-pocket eye (v1's design) would read metres
-  // wide here.
+  // --- L-BRIDGE: the space under the hoop crown is the DESIGNED dangle. The
+  // rod ring's hole edge sits `bladeReach − t` off the pin axis, so the void
+  // under the crown's underside is that minus the crown rod — the chain's
+  // deliberate free play (the reference toy's loose threading), no longer the
+  // old one-clearance bridge trick. Still a strong structural witness: a
+  // missing ring reads past the ceiling, a fused one reads under the floor.
+  const holeGap =
+    geometry.bladeReachMm -
+    geometry.bladeThicknessMm -
+    (geometry.tubeRadiusMm + 0.02);
   const void1 = linkVoidBelow(
     wasm,
     head,
     at(q, -(geometry.tubeRadiusMm + 0.02), 0),
     frame.up.map((v) => -v),
-    4,
+    holeGap + 3,
   );
   assert.ok(
     void1 !== null &&
       void1 >= settings.clearanceMm - 0.05 &&
-      void1 <= settings.clearanceMm + 0.3,
-    `${label}: the eye leaves ~one clearance under the hoop crown (got ${void1 === null ? 'nothing' : void1.toFixed(3)}, want ~${settings.clearanceMm})`,
+      Math.abs(void1 - holeGap) <= 0.45,
+    `${label}: the hole leaves the designed dangle under the hoop crown (got ${void1 === null ? 'nothing' : void1.toFixed(3)}, want ~${holeGap.toFixed(3)})`,
   );
 
   // --- L-ENG: the mechanism visibly engages past the rim (property L3),
@@ -1035,41 +1043,37 @@ function assertLinkStructure(
   // 0.36mm and the old ±0.30 tolerance was 95% consumed on the one fixture that
   // ran. The key gap is still the CEILING (the legs cannot be passed either), so
   // both bounds are asserted.
-  const secRad =
-    (Math.min(settings.bendAngleDeg, LINK_SECONDARY_CAP_CONTRACT_DEG) *
-      Math.PI) /
-    180;
-  const lateralPlayMm = Math.min(
-    geometry.keyGapMm,
-    settings.clearanceMm + (q + kerf / 2) * Math.sin(secRad),
-  );
-  for (const [name, direction, expected] of [
-    ['+ax', frame.ax, settings.clearanceMm],
-    ['-ax', frame.ax.map((v) => -v), settings.clearanceMm],
-    ['+up', frame.up, settings.clearanceMm],
-    ['-up', frame.up.map((v) => -v), settings.clearanceMm],
-    ['+lat', frame.lat, lateralPlayMm],
-    ['-lat', frame.lat.map((v) => -v), lateralPlayMm],
+  // The stops are no longer one-clearance contracts: the rod ring's hole is
+  // deliberately slack (the chain dangle), so in the HOLE PLANE (±ax, ±up) the
+  // ultimate catch is the crown rod meeting the ring's hole edge at
+  // `holePlay = (bladeReach − t) − a`, and body faces / bowl walls may stop the
+  // pair earlier. What survives as hard contract: the joint is CAPTIVE in all
+  // six directions, never tighter than the running clearance, laterally never
+  // past the key gap, and every stop is a real barrier.
+  const holePlayMm =
+    geometry.bladeReachMm - geometry.bladeThicknessMm - geometry.tubeRadiusMm;
+  for (const [name, direction, ceiling] of [
+    ['+ax', frame.ax, holePlayMm + 0.35],
+    ['-ax', frame.ax.map((v) => -v), holePlayMm + 0.35],
+    ['+up', frame.up, holePlayMm + 0.35],
+    ['-up', frame.up.map((v) => -v), holePlayMm + 0.35],
+    ['+lat', frame.lat, geometry.keyGapMm + 0.15],
+    ['-lat', frame.lat.map((v) => -v), geometry.keyGapMm + 0.15],
   ]) {
     const stop = firstContactDistance(
       head,
       tail,
       direction,
-      expected + 1.2,
+      holePlayMm + 1.2,
       0.02,
     );
     assert.ok(
       stop !== null,
       `${label}: translation ${name} is BLOCKED (the joint is captive)`,
     );
-    const tolerance = name.includes('lat')
-      ? settings.bendAngleDeg > 25
-        ? 0.25
-        : 0.15
-      : 0.2;
     assert.ok(
-      Math.abs(stop - expected) <= tolerance,
-      `${label}: translation ${name} stops at ${stop.toFixed(3)} (contract ${expected.toFixed(3)})`,
+      stop <= ceiling,
+      `${label}: translation ${name} stops by ${ceiling.toFixed(3)} (got ${stop.toFixed(3)})`,
     );
     // …and never below the clearance itself, whatever the solver says. A literal
     // floor, so a solver that quietly collapsed every gap could not take the
@@ -1078,12 +1082,6 @@ function assertLinkStructure(
       stop >= settings.clearanceMm - 0.05,
       `${label}: translation ${name} keeps at least the clearance (${stop.toFixed(3)} vs ${settings.clearanceMm})`,
     );
-    if (name.includes('lat')) {
-      assert.ok(
-        stop <= geometry.keyGapMm + 0.15,
-        `${label}: lateral play never exceeds the key gap (${stop.toFixed(3)} vs ${geometry.keyGapMm.toFixed(3)})`,
-      );
-    }
     assert.ok(
       overlapVolumeAfterShift(head, tail, direction, stop + 0.15) > 0,
       `${label}: the ${name} stop is a real barrier, not a graze`,
@@ -3525,15 +3523,13 @@ async function buildLink(fixture, overrides = {}) {
 // (L-SMALL) The six structural probes again, at the mechanism scale where link's
 // published floors actually bind.
 //
-// The cross-style loop's probe joint sits at r ~ 5.4. There
-// `LINK_BLADE_REACH_FRACTION·r` (0.95r) sets the blade reach and
-// `LINK_KEY_PAD_FRACTION·r` (0.11r) sets the key gap, so the 1.2mm ring wall and
-// the 0.5mm key pad are dominated terms and nothing about them is exercised on a
-// built solid. `jointScale: 0.6` puts the probe joint at r ~ 3.2 — the bottom of
-// the feasible range, and the only band where the ring-wall term binds the blade
-// reach at all (measured: it binds for r in [3.2, 3.5] and nowhere else) — and
-// bend 25 is where the leg sagitta makes the key pad the binding term rather
-// than 0.11r.
+// The cross-style loop's probe joint sits at r ~ 5.4, where every fractional
+// term (rod diameter 0.34r, key pad 0.11r, ring slack 0.2r) is comfortably off
+// its printable floor, so nothing about the floors is exercised on a built
+// solid. `jointScale: 0.6` puts the probe joint at r ~ 3.2 — the bottom of the
+// feasible range, where the 1.6mm rod floor and the 0.3mm slack floor actually
+// bind — and bend 25 is where the leg sagitta makes the key pad the binding
+// term rather than 0.11r.
 {
   const { settings, input, plan, outcome } = await buildLink('spindle', {
     jointScale: 0.6,
@@ -3891,16 +3887,13 @@ for (const fixture of ['spindle', 'eccentric']) {
           );
         }
       }
-      // CROSSING MEMBERS. Inside the kerf slab, exactly three things may be
-      // present: the tail's TWO hoop legs and the head's ONE blade. This kills a
-      // mechanism that quietly stopped crossing the seam — the failure that
-      // leaves every gap, clearance and body count looking perfect.
-      //
-      // SPEC DEVIATION, recorded: the design expected FOUR members (two legs and
-      // "two blade prongs"). The blade is a full disc whose eye is centred a
-      // pivot-offset HEAD-ward of this plane, so at the kerf the plate is a
-      // single chord with a waist where the hoop's arc carved it — one member,
-      // not two. Verified on the rendered sections (tmp/pig-style/section-*-D-kerf.png).
+      // CROSSING MEMBERS. Inside the kerf slab, exactly four things may be
+      // present: the tail's TWO hoop legs and the head ring's TWO rod sides.
+      // (The old blade disc crossed as ONE chord; the rod torus centred a
+      // pivot-offset head-ward crosses the cut plane as two tube sections at
+      // `u = ±√(Rc² − q²)`.) This kills a mechanism that quietly stopped
+      // crossing the seam — the failure that leaves every gap, clearance and
+      // body count looking perfect.
       // A THIN slab ON the cut plane, not the whole kerf: the hoop's arc dips
       // back to s ≈ 0 at its ends, so a full-kerf slab catches the bottom of the
       // arc and reads the two legs as one joined member. The cut plane is what
@@ -3926,7 +3919,7 @@ for (const fixture of ['spindle', 'eccentric']) {
       ]);
       for (const [side, index, want] of [
         ['tail', k, 2],
-        ['head', k + 1, 1],
+        ['head', k + 1, 2],
       ]) {
         const crossing = lookSegments[index].intersect(slab);
         const parts = crossing.isEmpty() ? [] : crossing.decompose();
@@ -3949,8 +3942,11 @@ for (const fixture of ['spindle', 'eccentric']) {
 }
 
 // (L-CLEAR) Every clearance preset reaches the geometry — and an UPPER bound
-// too: a joint that quietly stopped touching anywhere is a joint that stopped
-// working.
+// too, now a LOOSE one: the chain deliberately dangles, so the closest rest
+// pose approach is the leg/ring envelope allowance (clearance + secondary
+// sway + sagitta), not one clearance. A vanished mechanism is detected by the
+// crossing-member counts and local genus probes, not by this gap; the ceiling
+// here only catches bodies drifting apart wholesale.
 for (const fixture of ['spindle', 'eccentric']) {
   for (const clearanceMm of [0.3, 0.4, 0.55]) {
     const { outcome } = await buildLink(fixture, { clearanceMm });
@@ -3970,8 +3966,8 @@ for (const fixture of ['spindle', 'eccentric']) {
         `link clearance: ${fixture} c=${clearanceMm} segments ${i - 1}/${i} keep ${gap.toFixed(3)}mm`,
       );
       assert.ok(
-        gap <= clearanceMm + 0.35,
-        `link clearance: ${fixture} c=${clearanceMm} segments ${i - 1}/${i} still BEAR on each other (${gap.toFixed(3)}mm)`,
+        gap <= clearanceMm + 1.2,
+        `link clearance: ${fixture} c=${clearanceMm} segments ${i - 1}/${i} stay within the designed envelope allowance (${gap.toFixed(3)}mm)`,
       );
     }
     for (const segment of segments) segment.delete();

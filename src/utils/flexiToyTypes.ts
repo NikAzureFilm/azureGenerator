@@ -73,10 +73,13 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   key is the bar in its slot, which is deliberately loose (see
  *   `StrongJointGeometry`).
  * - 'link': a print-in-place CHAIN LINK. The tail body carries a round HOOP
- *   whose two legs root in it and whose crown rises through a hole (the EYE) in
- *   a flat BLADE plate rooted in the head body, so the two bodies are two
- *   threaded closed loops and are topologically interlocked — there is no ball,
- *   no socket, no throat and no capture margin anywhere in this style. The
+ *   whose two legs root in it and whose crown rises through the hole of a
+ *   slender rod RING (a torus about the pivot) rooted in the head body, so the
+ *   two bodies are two threaded closed loops and are topologically interlocked
+ *   — there is no ball, no socket, no throat and no capture margin anywhere in
+ *   this style. Both faces are scooped by an OPEN POCKET (a sphere on the joint
+ *   centre) so the interlocked loops sit in visible free air and can swing and
+ *   dangle like the reference chain toys. The
  *   bodies are separated by a CONICAL ANNULAR KERF — a solid of revolution whose
  *   axial thickness GROWS WITH THE RADIUS, `k(ρ) = 2·tan(bend/2)·ρ + c` — on the
  *   cut plane, which is what the eye reads as the joint and what limits the
@@ -89,11 +92,13 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   now follows the Link slider through 90°; when neighbouring cuts genuinely
  *   leave too little axial room, the build reduces that joint and reports
  *   'link-travel-reduced'. Clearance is correct BY
- *   CONSTRUCTION rather than by algebra: the eye is not computed, it is CARVED —
- *   `blade = plate − hoopEnvelope`, where the envelope is the hoop's own solid
- *   grown by `clearanceMm` and swept over the travel — so
- *   `dist(blade, hoop) ≥ clearanceMm` is a property of a boolean subtraction,
- *   and a solver slip can only produce a rounded fallback, never a fused part.
+ *   CONSTRUCTION rather than by algebra: the ring's hole edge is placed past
+ *   the hoop envelope's own carve radius (and the ring is additionally
+ *   subtracted by that envelope, belt and braces), where the envelope is the
+ *   hoop's own solid grown by `clearanceMm` and swept over the travel — so
+ *   `dist(ring, hoop) ≥ clearanceMm` is a property of containment in a boolean
+ *   solid, and a solver slip can only produce a rounded fallback, never a
+ *   fused part.
  *   Pitch is free of the MECHANISM (the crown is a rod ON the pivot axis, and
  *   rotation about that axis preserves every radius — law 1), so the kerf alone
  *   limits it, and the slider drives it directly. Yaw meets the SAME slot: the
@@ -109,8 +114,8 @@ export type FlexiAxisOverride = 'auto' | 'x' | 'y' | 'z';
  *   carved sweep spends the key gap the legs need — so it is a documented
  *   property of the style, not a shortfall, and the UI copy says "bends" of the
  *   pitch angle rather than promising it in every direction. Roll does not close
- *   the kerf at all and is keyed by the legs against the blade (measured
- *   10–23°).
+ *   the kerf at all and is keyed by the legs against the ring's slab (measured
+ *   10–23° on the old blade geometry).
  */
 export type FlexiJointStyle =
   | 'shell'
@@ -199,7 +204,7 @@ export type FlexiWarningCode =
    */
   | 'strong-travel-reduced'
   /**
-   * A joint could not be built as a link hoop-and-blade and was built with the
+   * A joint could not be built as a link hoop-and-ring and was built with the
    * rounded groove instead. Named separately from `strong-joint-fallback` on
    * purpose: that code's message names "a strong hinge", so reusing it would
    * make the code lie about which mechanism could not be realised.

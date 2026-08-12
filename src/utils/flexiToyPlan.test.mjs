@@ -2128,9 +2128,10 @@ for (const r of [3.2, 5, 7.236, 10, 15]) {
       }
     }
   }
-  // Pinned on the acceptance body at bend 8, c 0.30.
-  const legs = [1.061, 1.301, 1.435, 1.318];
-  const knees = [1.131, 1.25, 1.318, 1.259];
+  // Pinned on the acceptance body at bend 8, c 0.30. Re-measured for the
+  // rod-ring chain geometry (slimmer ring slab narrows the hoop bound).
+  const legs = [1.032, 1.252, 1.312, 1.265];
+  const knees = [1.116, 1.226, 1.256, 1.233];
   TROUT_STATIONS.forEach(([r, , rhoMax], i) => {
     const g = solveLinkJointGeometry(r, 0.3, 8);
     const seam = solveLinkSeam(g, rhoMax, 0.3, 8);
@@ -2298,37 +2299,30 @@ for (const r of LINK_RADII) {
 }
 
 // (L-MINR / L-RMAX) Feasibility is an INTERVAL in `r`, over the FULL advanced
-// joint-gap and 90° travel ranges — not just the presets.
+// joint-gap and 90° travel ranges — not just the presets. The rod-ring chain
+// geometry (slim ring slab, wider arc headroom) removed the old upper boundary
+// (`legOffset < 0.95·hoopRadius` saturates near 0.82 as r grows), so the
+// interval is now [3.2, ∞) at EVERY clearance — swept to r=100 with zero holes,
+// which is the property the sizing bisections actually rely on.
 {
-  const bounds = new Map([
-    [0.2, [4.95, 10.25]],
-    [0.25, [3.2, 12.85]],
-    [0.3, [3.2, 15.4]],
-    [0.35, [3.2, 17.95]],
-    [0.4, [3.2, 20.55]],
-    [0.45, [3.2, 23.1]],
-    [0.5, [3.2, 25.7]],
-    [0.55, [3.2, 28.25]],
-    [0.6, [3.2, 30.85]],
-    [0.65, [3.2, 33.4]],
-    [0.7, [3.2, 35.95]],
-    [0.75, [3.2, 38.55]],
-    [0.8, [3.2, 41.1]],
-  ]);
-  for (const [c, [wantLo, wantHi]] of bounds) {
+  for (const c of [
+    0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8,
+  ]) {
     let lo = null;
-    let hi = null;
+    let holes = 0;
+    let inside = false;
     for (let step = 50; step <= 1000; step += 1) {
       const r = step / 20; // 2.50 … 50.00 in 0.05 steps
       const ok = [5, 12, 25, 45, 90].every((b) =>
         solveLinkJointGeometry(r, c, b),
       );
       if (ok && lo === null) lo = r;
-      if (ok) hi = r;
+      if (!ok && inside) holes += 1;
+      if (ok) inside = true;
     }
     assert.ok(
-      Math.abs(lo - wantLo) < 0.051 && Math.abs(hi - wantHi) < 0.051,
-      `link feasible interval at c=${c} is [${wantLo}, ${wantHi}] (got [${lo}, ${hi}])`,
+      Math.abs(lo - 3.2) < 0.051 && holes === 0,
+      `link feasible interval at c=${c} is [3.2, ∞) with no holes (got lo=${lo}, holes=${holes})`,
     );
     assert.ok(
       lo >= LINK_MIN_HEAD_RADIUS_CONTRACT_MM - 1e-9,
@@ -2449,16 +2443,16 @@ for (const r of LINK_RADII) {
   }
 }
 
-// (L-BLADECAP) Gate g6 and the builder's truncation must read the SAME number,
-// and the margin must actually be charged. `buildLinkBlade` cuts the plate off at
-// `linkBladeHeadCapMm`; the ladder decides whether that cut would open the eye
-// with `linkBladeCapFits`. Both live in the plan module so they cannot drift, and
-// both are pinned AT THE BOUNDARY: a joint with only half the margin to spare must
-// be refused, because the plate would otherwise be truncated flush against its
-// neighbour with none of the slack the margin exists to reserve. The half-margin
-// is a LITERAL for the same reason as the travel floor above — zeroing the
-// constant has to fail here, and no fixture in the repo sits inside 0.2mm of this
-// boundary, so nothing else can see it.
+// (L-BLADECAP) Gate g6 and the builder's refusal must read the SAME number,
+// and the margin must actually be charged. A rod torus cannot be truncated the
+// way the old blade plate could — a plane past its outer edge opens or
+// knife-edges the loop — so the gate demands the WHOLE reach plus the margin,
+// and `buildLinkRing` refuses below exactly that. Both live in the plan module
+// so they cannot drift, and both are pinned AT THE BOUNDARY: a joint with only
+// half the margin to spare must be refused. The half-margin is a LITERAL for
+// the same reason as the travel floor above — zeroing the constant has to fail
+// here, and no fixture in the repo sits inside 0.2mm of this boundary, so
+// nothing else can see it.
 for (const r of LINK_RADII) {
   for (const c of LINK_CLEARANCES) {
     for (const bendAngleDeg of LINK_BENDS) {
@@ -2466,37 +2460,42 @@ for (const r of LINK_RADII) {
       if (!g) continue;
       const where = `r=${r} c=${c} b=${bendAngleDeg}`;
       const reach = g.pivotOffsetMm + g.bladeReachMm;
-      const need = g.pivotOffsetMm + g.eyeOuterMm + LINK_RING_WALL_MM;
       assert.equal(
         linkBladeHeadCapMm(g, Infinity),
         reach,
-        `no neighbour leaves the blade at its own reach (${where})`,
+        `no neighbour leaves the ring at its own reach (${where})`,
       );
       assert.ok(
         linkBladeCapFits(g, Infinity),
-        `an unbounded head room always keeps the whole eye (${where})`,
+        `an unbounded head room always fits the whole ring (${where})`,
       );
       assert.ok(
-        !linkBladeCapFits(g, need + 0.1),
+        !linkBladeCapFits(g, reach + 0.1),
         `half the head-cap margin is NOT enough room (${where})`,
       );
       assert.ok(
-        linkBladeCapFits(g, need + LINK_BLADE_CAP_MARGIN_MM),
+        linkBladeCapFits(g, reach + LINK_BLADE_CAP_MARGIN_MM),
         `exactly the head-cap margin IS enough room (${where})`,
       );
-      // A neighbour inside the plate's own reach truncates it EXACTLY the margin
-      // short — the number the builder cuts with.
+      // A neighbour inside the ring's own reach caps it EXACTLY the margin
+      // short — which the builder must refuse (an open ring is never shipped).
       assert.equal(
         linkBladeHeadCapMm(g, reach),
         reach - LINK_BLADE_CAP_MARGIN_MM,
-        `the blade stops one margin short of a neighbour inside its reach (${where})`,
+        `the cap stops one margin short of a neighbour inside the reach (${where})`,
       );
-      // The gate is the truncation: same number, one predicate.
-      for (const room of [need - 1, need, need + 0.1, need + 0.3, reach + 5]) {
+      // The gate is the builder's refusal: same number, one predicate.
+      for (const room of [
+        reach - 1,
+        reach,
+        reach + 0.1,
+        reach + LINK_BLADE_CAP_MARGIN_MM,
+        reach + 5,
+      ]) {
         assert.equal(
           linkBladeCapFits(g, room),
-          linkBladeHeadCapMm(g, room) >= need,
-          `the g6 gate is exactly "the truncation keeps the eye" (${where} room=${room.toFixed(3)})`,
+          linkBladeHeadCapMm(g, room) >= reach,
+          `the g6 gate is exactly "the whole ring fits" (${where} room=${room.toFixed(3)})`,
         );
       }
     }

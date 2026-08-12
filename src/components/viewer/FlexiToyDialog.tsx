@@ -662,7 +662,7 @@ export function FlexiToyDialog({
                 <StyleCard
                   selected={jointStyle === 'link'}
                   title="Link"
-                  description="Threaded rings — a hoop through a slot, with a flat gap"
+                  description="Chain links — two slim loops in an open pocket, free to swing"
                   onSelect={() => selectJointStyle('link')}
                 />
               </div>

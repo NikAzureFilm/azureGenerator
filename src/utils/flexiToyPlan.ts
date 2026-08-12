@@ -223,10 +223,10 @@ const strongAnchor = (r: number): number => Math.max(2.0, 0.5 * r);
 const LINK_MIN_HEAD_RADIUS_MM = 3.2;
 const LINK_TUBE_FRACTION = 0.22; // hoop tube radius a = 0.22·r
 const LINK_TUBE_MIN_MM = 0.8; // printable rod floor: Ø1.6mm
-const LINK_BLADE_FRACTION = 0.42; // blade thickness t = 0.42·r
-const LINK_BLADE_MIN_MM = 1.6; // plate thickness floor
-const LINK_ARC_HEADROOM_FRACTION = 0.12; // arc clears the fat blade by this …
-const LINK_ARC_HEADROOM_MIN_MM = 0.5; // … or this. Keeps the eye open.
+const LINK_BLADE_FRACTION = 0.34; // ring rod diameter t = 0.34·r (slim loop)
+const LINK_BLADE_MIN_MM = 1.6; // rod diameter floor
+const LINK_ARC_HEADROOM_FRACTION = 0.22; // arc clears the fat ring slab by this …
+const LINK_ARC_HEADROOM_MIN_MM = 0.5; // … or this. Visible air around the loops.
 /** Tilt of the hoop's plane away from the joint axis (reference: 37.1–38.1°). */
 export const LINK_TILT_DEG = 38;
 /**
@@ -257,7 +257,35 @@ const LINK_EYE_MARGIN_MM = 0.1; // safety added to the solver's eye estimate
 /** Blade material that must survive around the eye. Build-side and probe-side. */
 export const LINK_RING_WALL_MM = FLEXI_MIN_SOCKET_WALL_MM;
 const LINK_RING_SLACK_MM = 0.3;
-const LINK_BLADE_REACH_FRACTION = 0.95; // blade disc radius floor (buys interleave)
+/**
+ * The ring hole's AIR past the hoop's swept envelope, as a fraction of the
+ * mechanism scale (floored by LINK_RING_SLACK_MM). This is the visible gap
+ * between the two loops — the chain's dangle — not a clearance requirement:
+ * the envelope alone already guarantees the running clearance, so all of this
+ * is free play, exactly like the reference toy's loosely threaded links.
+ */
+const LINK_RING_SLACK_FRACTION = 0.2;
+/**
+ * Open-pocket sizing (the visible bowl carved around the interlocked loops so
+ * the joint reads as a chain in free air, per the user's reference toy).
+ * `BREATHE` is added past the mechanism's own clearance bound; `EMBED_DEG` is
+ * the half-arc of the ring's centreline that must stay buried in head material
+ * beyond the pocket, and `TIP_KEEP_MM` the leg-tip run that must stay buried in
+ * tail material. The pocket only ever SHRINKS under these caps — it is never
+ * load-bearing for clearance (the swept envelopes are) and it degrades to the
+ * plain envelope carve on bodies too thin to host it.
+ */
+const LINK_POCKET_BREATHE_MM = 1.0;
+const LINK_POCKET_EMBED_DEG = 30;
+const LINK_POCKET_TIP_KEEP_MM = 1.5;
+/**
+ * Ceiling, as a fraction of the mechanism scale `r`, on how far the leg anchor
+ * is DEEPENED past its base run to serve the pocket. A longer buried rod is
+ * only ever stronger; the cost is axial footprint (`linkAxialFootprint` reads
+ * `anchorMm`, so auto spacing reserves it honestly), which this cap keeps
+ * proportionate on bodies whose skin would never host the full bowl anyway.
+ */
+const LINK_POCKET_ANCHOR_MAX_FRACTION = 1.2;
 const LINK_ANCHOR_MIN_MM = 1.5; // buried leg run
 const LINK_ANCHOR_FRACTION = 0.35;
 /** How far past the tail rim the leg goes horizontal, i.e. how deep it buries. */
@@ -274,7 +302,7 @@ export const LINK_KERF_ALLOWANCE_MM = 4.5;
  * here without a cycle.
  */
 const LINK_KERF_OUT_FACTOR = 1.15;
-const LINK_SOLVE_ITERATIONS = 8; // keyGap ↔ bladeReach fixed point
+const LINK_SOLVE_ITERATIONS = 8; // keyGap <-> bladeReach fixed point
 /**
  * Hoop centreline resolution: points per HALF arc. The polyline has 2n+5 points.
  * 5 rather than 10 because halving it halves the hull count in both the core and
@@ -2266,9 +2294,14 @@ function strongFootprintMm(
  *   axis at `s = pivotOffsetMm` and whose two legs descend at exactly the tilt
  *   angle, cross the kerf and bury themselves `LINK_BURY_MM + anchorMm` into
  *   tail material.
- * Male B (HEAD) = BLADE: a flat disc of radius `bladeReachMm` and thickness
- *   `bladeThicknessMm` on the sagittal mid-plane, centred on the pivot, pierced
- *   by the EYE the hoop's own swept envelope carves out of it.
+ * Male B (HEAD) = RING: a slender torus of tube radius `bladeThicknessMm / 2`
+ *   on the sagittal mid-plane, centred on the pivot, revolved about the pin
+ *   axis. Its hole IS the eye: the centreline radius is
+ *   `eyeOuterMm + LINK_RING_SLACK_MM + bladeThicknessMm / 2`, so the solid can
+ *   never enter the hoop's swept envelope, and `bladeReachMm` is the ring's
+ *   OUTER radius from the pin axis. Two interlocked rod loops in an open
+ *   pocket — the classic chain-link flexi joint — rather than the old solid
+ *   disc, which filled the cavity.
  *
  * NB `headRadiusMm` is the planner's ball radius echoed back. Link has NO ball —
  * here `r` means "mechanism scale". The outer envelope it produces is comparable
@@ -2277,7 +2310,8 @@ function strongFootprintMm(
  *
  * Three facts this construction buys, each of which a plan probe pins:
  *  1. `ringWallMm ≥ LINK_RING_WALL_MM` ALWAYS, because `bladeReachMm` is
- *     *defined* as `eyeOuter + wall + slack` (or larger). The eye ring can never
+ *     *defined* as `eyeOuter + slack + tube diameter`, so the material between
+ *     the eye and the outside is the full printable rod. The ring can never
  *     open.
  *  2. `legSlabClearMm ≥ 0` ALWAYS, because `keyGapMm ≥ c + LINK_KEY_PAD_MIN_MM`
  *     and that constant is exactly `SECONDARY_INFLATE_MAX + LEG_SLAB_MARGIN`.
@@ -2293,7 +2327,9 @@ export type LinkJointGeometry = {
   headRadiusMm: number;
   /** Hoop tube radius `a`. */
   tubeRadiusMm: number;
-  /** Blade plate thickness `t`. */
+  /** Ring rod DIAMETER `t` (the sagittal slab the ring occupies is `t` thick,
+   *  so every slab-based clearance argument reads it exactly as it read the
+   *  old blade plate's thickness). */
   bladeThicknessMm: number;
   /** Radius of the hoop's centreline arc. */
   hoopRadiusMm: number;
@@ -2309,9 +2345,10 @@ export type LinkJointGeometry = {
   legSlabClearMm: number;
   /** Conservative max carve radius from the pin axis (the eye's outer bound). */
   eyeOuterMm: number;
-  /** Blade disc radius. */
+  /** Ring OUTER radius from the pin axis: `eyeOuter + slack + t`. Also the
+   *  ring's reach from the pivot in every in-plane direction. */
   bladeReachMm: number;
-  /** `bladeReach − eyeOuter`, ≥ LINK_RING_WALL_MM by construction. */
+  /** `bladeReach − eyeOuter` = slack + rod diameter, ≥ LINK_RING_WALL_MM. */
   ringWallMm: number;
   /** `q`: the pivot sits this far HEAD-ward of the cut plane. Kerf- and
    *  travel-INDEPENDENT — this is what makes the build's ladder monotone. */
@@ -2424,15 +2461,14 @@ function linkHardwareSagFactor(travelDeg: number): number {
  * plan then judges containment by the rounded cup and the build carves the
  * rounded groove); it never clamps a floor away silently.
  *
- * Feasibility is an INTERVAL in `r`, `[LINK_MIN_HEAD_RADIUS_MM, r_max(c)]`, not
- * a threshold: past `r_max ≈ 51.4·c` the fixed point's own
- * `legOffset < 0.95·hoopRadius` gate refuses (measured 15.40 / 20.55 / 28.25 at
- * c = 0.30 / 0.40 / 0.55 — reachable at jointScale 1.0 on any body with
- * `rho0 ≥ 28mm`). `jointOverlapCap`'s bisection and `sizeJoint`'s shrink loop
- * are both safe because both approach the interval from BELOW the upper
- * boundary — `sizeJoint` only ever shrinks, and it records the refusal on
- * `stationOut.linkSizeCapped` so the plan can say so rather than silently
- * handing back a smaller joint.
+ * Feasibility is an INTERVAL in `r`, `[LINK_MIN_HEAD_RADIUS_MM, ∞)`, not a
+ * threshold: the rod-ring proportions keep `legOffset / hoopRadius` saturating
+ * near 0.82 as `r` grows, so the `legOffset < 0.95·hoopRadius` gate never
+ * refuses above the floor (swept to r=100 across c=0.2–0.8 and bends 5–90 with
+ * zero holes — the plan suite pins this). `jointOverlapCap`'s bisection and
+ * `sizeJoint`'s shrink loop remain safe a fortiori: `sizeJoint` only ever
+ * shrinks, and the `stationOut.linkSizeCapped` refusal record stays for any
+ * future geometry that reintroduces an upper edge.
  */
 export function solveLinkJointGeometry(
   ballRadiusMm: number,
@@ -2466,7 +2502,7 @@ export function solveLinkJointGeometry(
   // the eye, which depends on where the legs leave the arc, which depends on the
   // key gap. A contraction — it settles in three passes in practice.
   let keyGap = c + LINK_KEY_PAD_MIN_MM;
-  let bladeReach = LINK_BLADE_REACH_FRACTION * r;
+  let bladeReach = 0; // overwritten from eyeOuter before first use
   let legOffset = t / 2 + keyGap + a;
   let arcHalf = 0;
   let eyeOuter = 0;
@@ -2498,10 +2534,14 @@ export function solveLinkJointGeometry(
       );
     }
     eyeOuter += LINK_EYE_MARGIN_MM;
-    bladeReach = Math.max(
-      eyeOuter + LINK_RING_WALL_MM + LINK_RING_SLACK_MM,
-      LINK_BLADE_REACH_FRACTION * r,
-    );
+    // The ring's OUTER radius: hole edge (eyeOuter + slack) plus the full rod
+    // diameter. The rod itself is the "wall" — a slender loop, not a plate —
+    // and because the hole edge sits past the hoop's swept envelope, the two
+    // loops keep the running clearance at every reachable pose by containment,
+    // exactly as the carved eye did. The slack scales with `r` so the loops
+    // read as loosely threaded chain links at every size.
+    bladeReach =
+      eyeOuter + Math.max(LINK_RING_SLACK_MM, LINK_RING_SLACK_FRACTION * r) + t;
     // How far the legs reach from the PIN AXIS in the worst case this joint can
     // ever be built at — evaluated at the kerf CEILING, which is the widest gap
     // any station can ask for, so this estimate is non-circular (it never reads
@@ -2551,6 +2591,45 @@ export function solveLinkJointGeometry(
   if (!(legOffset < 0.95 * hoopRadius)) return null;
   arcHalf = Math.asin(legOffset / hoopRadius);
 
+  // Pocket-serving anchor. The open pocket's tail bowl is capped by how much
+  // buried leg run survives beyond it (`linkPocketBoundsMm`), so the legs are
+  // buried deep enough that the bowl can reach its desired radius — evaluated
+  // at the SHALLOWEST knee the seam can produce, which minimises the tip depth
+  // and so is the conservative side. Deepening only ever strengthens the
+  // anchor; the footprint cost is budgeted by `linkAxialFootprint` reading the
+  // final `anchorMm`, and the fraction cap keeps it proportionate. The keyGap
+  // fixed point above is UNAFFECTED: its leg reach estimate is capped at
+  // `bladeReach` ("no second party past the ring's reach"), which a deeper tip
+  // only saturates harder.
+  const qFinal = (bladeReach - a) / 2;
+  const tubeFinal = t / 2;
+  const baseAnchor = Math.max(LINK_ANCHOR_MIN_MM, LINK_ANCHOR_FRACTION * r);
+  const desiredPocket =
+    Math.hypot(qFinal, bladeReach - tubeFinal) +
+    tubeFinal +
+    LINK_POCKET_BREATHE_MM;
+  const kneeFloor = LINK_KERF_MIN_MM / 2 + LINK_BURY_MM;
+  const arcEndAxialFinal = hoopRadius * (1 - Math.cos(arcHalf));
+  const endUFinal = -arcEndAxialFinal * Math.sin(tiltRad);
+  const endSFinal = qFinal - arcEndAxialFinal * Math.cos(tiltRad);
+  const dropRunFloor = Math.min(
+    Math.max(0.2, endSFinal + kneeFloor),
+    LINK_KERF_ALLOWANCE_MM / 2 + LINK_BURY_MM,
+  );
+  const lateralFloor = Math.hypot(
+    legOffset,
+    endUFinal - dropRunFloor * Math.tan(tiltRad),
+  );
+  const tipTargetS =
+    lateralFloor < desiredPocket
+      ? LINK_POCKET_TIP_KEEP_MM +
+        Math.sqrt(desiredPocket * desiredPocket - lateralFloor * lateralFloor)
+      : LINK_POCKET_TIP_KEEP_MM;
+  const anchorMm = Math.max(
+    baseAnchor,
+    Math.min(tipTargetS - kneeFloor, LINK_POCKET_ANCHOR_MAX_FRACTION * r),
+  );
+
   return {
     headRadiusMm: r,
     tubeRadiusMm: a,
@@ -2574,7 +2653,7 @@ export function solveLinkJointGeometry(
     bladeReachMm: bladeReach,
     ringWallMm: bladeReach - eyeOuter,
     pivotOffsetMm: (bladeReach - a) / 2,
-    anchorMm: Math.max(LINK_ANCHOR_MIN_MM, LINK_ANCHOR_FRACTION * r),
+    anchorMm,
     secondaryTravelDeg: secDeg,
     chordSagMm: chordSagOf(arcHalf),
   };
@@ -2851,13 +2930,68 @@ export function linkHoopOuterMm(poly: LinkHoopPolyline): number {
 }
 
 /**
- * Where the blade plate is truncated on the HEAD side: its own reach, or
- * `LINK_BLADE_CAP_MARGIN_MM` short of the neighbouring joint, whichever is less.
- * `Infinity` room (no neighbour) leaves the plate at its own reach.
+ * The open pocket: a sphere centred on the JOINT CENTRE that bares the two
+ * interlocked loops so the joint reads as a chain in free air (the reference
+ * toy look) and gives the mechanism visible room to swing and dangle.
  *
- * Shared so the ladder's gate and the builder cannot drift: the builder truncates
- * against exactly this number and the gate below decides whether that truncation
- * would eat the eye.
+ * `desiredMm` wants the whole interlock region — the hoop's fat ARC (the legs
+ * are excluded: they are supposed to leave the pocket and bury) and the ring's
+ * widest excursion from the centre, `hypot(q, R)` at its side lobes — plus a
+ * breathing margin.
+ *
+ * `capMm` is what ANCHORING allows. The ring's centreline must stay buried in
+ * head material over at least ±LINK_POCKET_EMBED_DEG of arc about its head
+ * crown, and each hoop leg must keep LINK_POCKET_TIP_KEEP_MM of its tip run
+ * buried in tail material — otherwise a male would float free in the bowl and
+ * the orphan guard would (correctly) kill the build.
+ *
+ * The caller additionally caps by the measured skin (wall stays printable), by
+ * the law-7 neighbour rooms, and skips the pocket entirely when it would not
+ * even clear the hoop's crown — the pocket is never load-bearing: the swept
+ * envelopes alone already guarantee every clearance, so shrinking or skipping
+ * it costs looks, never function.
+ */
+export function linkPocketBoundsMm(
+  geometry: LinkJointGeometry,
+  poly: LinkHoopPolyline,
+): { desiredMm: number; capMm: number } {
+  const q = geometry.pivotOffsetMm;
+  const tube = geometry.bladeThicknessMm / 2;
+  const ringCentre = geometry.bladeReachMm - tube;
+  let desired = Math.hypot(q, ringCentre) + tube + LINK_POCKET_BREATHE_MM;
+  for (let i = 2; i + 2 < poly.points.length; i += 1) {
+    const p = poly.points[i];
+    desired = Math.max(
+      desired,
+      Math.hypot(p[0], p[1], p[2]) +
+        poly.envRadiusMm[i] +
+        LINK_POCKET_BREATHE_MM,
+    );
+  }
+  const embedRad = (LINK_POCKET_EMBED_DEG * Math.PI) / 180;
+  const crownCap = Math.sqrt(
+    q * q + ringCentre * ringCentre + 2 * q * ringCentre * Math.cos(embedRad),
+  );
+  // The buried leg run is AXIAL at a fixed lateral offset, so the largest
+  // sphere that still leaves `TIP_KEEP` of run outside satisfies
+  // `R² ≤ lateral² + (|tipS| − TIP_KEEP)²` — not the naive `|tip| − TIP_KEEP`,
+  // which under-reads the bowl by the whole lateral offset.
+  const tip = poly.points[poly.points.length - 1];
+  const lateral = Math.hypot(tip[0], tip[1]);
+  const tipCap = Math.hypot(
+    lateral,
+    Math.max(0, Math.abs(tip[2]) - LINK_POCKET_TIP_KEEP_MM),
+  );
+  return { desiredMm: desired, capMm: Math.min(crownCap, tipCap) };
+}
+
+/**
+ * The head-ward room the ring is allowed: its own reach, or
+ * `LINK_BLADE_CAP_MARGIN_MM` short of the neighbouring joint, whichever is less.
+ * `Infinity` room (no neighbour) leaves the ring at its own reach.
+ *
+ * Shared so the ladder's gate and the builder cannot drift: the builder refuses
+ * against exactly this number and the gate below decides whether the ring fits.
  */
 export function linkBladeHeadCapMm(
   geometry: LinkJointGeometry,
@@ -2870,17 +3004,14 @@ export function linkBladeHeadCapMm(
 }
 
 /**
- * Gate g6, travel-free: the blade's head-ward truncation must leave the WHOLE
- * eye ring — plus its printable wall — behind. `buildLinkBlade` truncates the
- * plate against `linkBladeHeadCapMm` and nothing used to compare that against the
- * eye, so a joint whose ring had been cut open still reported 'ok' with an open
- * link. Attributed to the NEIGHBOURS, because `headRoomMm` is a neighbour
- * quantity and the remedy is fewer segments.
- *
- * The margin is load-bearing rather than cosmetic: it is the slack that keeps the
- * plate from being truncated flush against the neighbouring joint's own material,
- * so a body whose room is inside `LINK_BLADE_CAP_MARGIN_MM` of the eye must fall
- * back rather than ship a ring the cut will open.
+ * Gate g6, travel-free: the WHOLE ring must fit inside the head-ward room.
+ * The old blade plate could be truncated as long as the eye ring survived; a
+ * rod torus cannot — a plane past its outer edge first thins the crown to a
+ * knife edge and then opens the loop, and every gap, clearance and body count
+ * downstream still reads perfect. So the gate demands the full reach and the
+ * builder refuses (per-joint rounded fallback) rather than shaving.
+ * Attributed to the NEIGHBOURS, because `headRoomMm` is a neighbour quantity
+ * and the remedy is fewer segments.
  */
 export function linkBladeCapFits(
   geometry: LinkJointGeometry,
@@ -2888,7 +3019,7 @@ export function linkBladeCapFits(
 ): boolean {
   return (
     linkBladeHeadCapMm(geometry, headRoomMm) >=
-    geometry.pivotOffsetMm + geometry.eyeOuterMm + LINK_RING_WALL_MM
+    geometry.pivotOffsetMm + geometry.bladeReachMm
   );
 }
 
@@ -3050,9 +3181,17 @@ function linkFootprintMm(
       kerfTerm / 2,
       q + geometry.tubeRadiusMm + clearance + LINK_SECONDARY_INFLATE_MAX_MM,
     ) + FLEXI_MIN_SOCKET_WALL_MM;
+  // The legs' knee sits below the LEG kerf (the cone read at the hoop's own
+  // outer bound — `seam.kneeDepthMm` = legKerf/2 + bury), not below the rim
+  // kerf at the full extent. Summing the rim kerf with the anchor double-
+  // charged the tail at high bends (the cone at a fin's radius plus a buried
+  // run that actually starts far shallower), which cost a whole joint at 90°
+  // once the pocket-serving anchor deepened the legs. Each term is a real
+  // reach; the budget is their max.
   const tail =
     Math.max(
-      kerfTerm / 2 + LINK_BURY_MM + geometry.anchorMm,
+      kerfTerm / 2,
+      seam.kneeDepthMm + geometry.anchorMm,
       geometry.bladeReachMm - q + clearance,
     ) + FLEXI_MIN_SOCKET_WALL_MM;
   return head + tail + OVERLAP_MARGIN_MM;
