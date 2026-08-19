@@ -68,11 +68,17 @@ import {
   type FlexiUiJointStyle,
 } from './flexiToy/flexiToyUi';
 
-const RECOMPUTE_DEBOUNCE_MS = 350;
+// Short, because the scrub gate below does the heavy lifting now: while a
+// slider is held no compute is queued at all, so this only has to collapse
+// discrete changes (preset clicks, keyboard steps, a released drag).
+const RECOMPUTE_DEBOUNCE_MS = 200;
 
 // Each cached result holds full-toy typed arrays, so keep only the most
 // recently used handful (insertion-order LRU over the Map).
 const FLEXI_RESULT_CACHE_LIMIT = 12;
+// Final-quality results are the exact, unsimplified build — heavier than a
+// preview and only ever asked for by a download, so a much smaller LRU.
+const FLEXI_FINAL_CACHE_LIMIT = 3;
 
 function disposeScene(scene: THREE.Scene | null | undefined): void {
   scene?.traverse((child) => {
@@ -143,6 +149,10 @@ export function FlexiToyDialog({
   const [hoverJointIndex, setHoverJointIndex] = useState<number | null>(null);
   const [dragState, setDragState] = useState<FlexiDragState>(null);
 
+  // True while a pointer is holding one of the settings sliders. The values and
+  // read-outs still follow the drag live; only the compute waits for release.
+  const [scrubbing, setScrubbing] = useState(false);
+
   const [result, setResult] = useState<FlexiToyResult | null>(null);
   const [isComputing, setIsComputing] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
@@ -165,6 +175,9 @@ export function FlexiToyDialog({
     promise: Promise<FlexiMeshInput>;
   } | null>(null);
   const resultCacheRef = useRef(new Map<string, FlexiToyResult>());
+  // Kept apart from the preview cache: same keys, different geometry (exact vs
+  // simplified), and mixing them would let a download export a preview.
+  const finalCacheRef = useRef(new Map<string, FlexiToyResult>());
   const computeTokenRef = useRef(0);
 
   const ensureMeshInput = useCallback((g: GLTF): Promise<FlexiMeshInput> => {
@@ -269,6 +282,7 @@ export function FlexiToyDialog({
 
     if (meshInputRef.current?.forGltf !== gltf) {
       resultCacheRef.current.clear();
+      finalCacheRef.current.clear();
       setResult(null);
     }
 
@@ -282,6 +296,15 @@ export function FlexiToyDialog({
   // after a newer request, and a per-settings cache skips repeated work.
   useEffect(() => {
     if (!open || !gltf) {
+      return;
+    }
+
+    // Compute on release. A drag crosses dozens of values, and every debounce
+    // pause inside it used to start a full build that the next pause threw
+    // away; waiting for the pointer to lift means one build per gesture. The
+    // release itself re-runs this effect (`scrubbing` is a dep), so nothing is
+    // lost by doing nothing here.
+    if (scrubbing) {
       return;
     }
 
@@ -304,11 +327,17 @@ export function FlexiToyDialog({
     const timeout = window.setTimeout(async () => {
       try {
         const input = await ensureMeshInput(gltf);
-        const outcome = await computeFlexiToy(input, settings);
+        // Preview quality: the simplified body and coarser joint solids are
+        // several times cheaper and indistinguishable at preview size. The
+        // downloads re-run this at 'final'.
+        const outcome = await computeFlexiToy(input, settings, 'preview');
 
         if (computeTokenRef.current !== token) {
           return;
         }
+        // Superseded by a newer request — either another settings change or a
+        // download's final build. Its own effect run owns the outcome; this one
+        // just steps aside without touching the result or the error state.
         if (outcome.status === 'superseded') {
           return;
         }
@@ -350,7 +379,7 @@ export function FlexiToyDialog({
     }, RECOMPUTE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [open, gltf, settingsKey, settings, ensureMeshInput]);
+  }, [open, gltf, settingsKey, settings, scrubbing, ensureMeshInput]);
 
   // A landed result carries the planner's own station placement, so any live
   // drag offset has served its purpose.
@@ -463,6 +492,44 @@ export function FlexiToyDialog({
 
   const handleStripReset = clearPinnedPositions;
 
+  // The toy on screen is a PREVIEW build (simplified body, coarser joint
+  // solids). A file has to be the exact geometry, so a download re-runs the
+  // same settings at 'final' quality and exports that. Results are cached by
+  // the same settings key as the preview, so downloading both formats of an
+  // unchanged toy only builds once.
+  const ensureFinalResult = async (): Promise<
+    | { status: 'ok'; result: FlexiToyResult }
+    | { status: 'superseded' }
+    | { status: 'error' }
+  > => {
+    const cache = finalCacheRef.current;
+    const cached = cache.get(settingsKey);
+    if (cached) {
+      // Refresh recency (delete + re-insert moves the key to the newest slot).
+      cache.delete(settingsKey);
+      cache.set(settingsKey, cached);
+      return { status: 'ok', result: cached };
+    }
+
+    const input = await ensureMeshInput(gltf);
+    const outcome = await computeFlexiToy(input, settings, 'final');
+    if (outcome.status !== 'ok') {
+      return outcome.status === 'superseded'
+        ? { status: 'superseded' }
+        : { status: 'error' };
+    }
+
+    cache.set(settingsKey, outcome.result);
+    while (cache.size > FLEXI_FINAL_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      cache.delete(oldest);
+    }
+    return { status: 'ok', result: outcome.result };
+  };
+
   const handleDownload = async (format: 'stl' | '3mf') => {
     if (!result) {
       return;
@@ -478,10 +545,43 @@ export function FlexiToyDialog({
 
     setIsDownloading(format);
     try {
+      let final: Awaited<ReturnType<typeof ensureFinalResult>>;
+      try {
+        final = await ensureFinalResult();
+      } catch (error) {
+        Sentry.captureException(error, {
+          extra: { context: 'flexi toy final build', format },
+        });
+        final = { status: 'error' };
+      }
+
+      if (final.status === 'superseded') {
+        // A settings change (the user kept tuning) took the worker while the
+        // file was being built. Exporting the old preview would hand them a
+        // file that no longer matches the screen, so stop and say so.
+        toast({
+          title: 'Download cancelled',
+          description:
+            'Settings changed while preparing the file — click download again.',
+        });
+        return;
+      }
+
+      // A failed final build must not lose the user their download: the preview
+      // geometry is the same toy, just coarser, so export it and be honest.
+      if (final.status === 'error') {
+        toast({
+          title: 'Downloaded a preview-quality file',
+          description:
+            'The full-quality build failed, so the preview-quality version was downloaded.',
+        });
+      }
+      const exported = final.status === 'ok' ? final.result : result;
+
       const blob =
         format === 'stl'
-          ? await flexiResultToStlBlob(result)
-          : await flexiResultToThreeMfBlob(result, filenameBase);
+          ? await flexiResultToStlBlob(exported)
+          : await flexiResultToThreeMfBlob(exported, filenameBase);
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -732,6 +832,7 @@ export function FlexiToyDialog({
               </div>
               {segmentMode === 'custom' ? (
                 <Slider
+                  aria-label="Segments"
                   className="mt-2 h-11 sm:h-8"
                   value={[segmentCountCustom]}
                   min={FLEXI_MIN_SEGMENTS}
@@ -739,6 +840,7 @@ export function FlexiToyDialog({
                   step={1}
                   defaultValue={[LINK_DEFAULTS.segmentCountCustom]}
                   onValueChange={([value]) => changeSegmentCount(value)}
+                  onScrubChange={setScrubbing}
                 />
               ) : (
                 <p className="mt-2 text-xs text-adam-text-secondary/80">
@@ -786,6 +888,7 @@ export function FlexiToyDialog({
                     </span>
                   </div>
                   <Slider
+                    aria-label="Joint gap"
                     className="h-11 sm:h-8"
                     value={[clearanceMm]}
                     min={FLEXI_MIN_CLEARANCE_MM}
@@ -795,6 +898,7 @@ export function FlexiToyDialog({
                     onValueChange={([value]) =>
                       setClearanceMm(Number(value.toFixed(2)))
                     }
+                    onScrubChange={setScrubbing}
                   />
                 </div>
               ) : (
@@ -821,6 +925,7 @@ export function FlexiToyDialog({
                 </div>
               </div>
               <Slider
+                aria-label="Toy length"
                 className="h-11 sm:h-8"
                 value={[targetLengthMm]}
                 min={FLEXI_MIN_LENGTH_MM}
@@ -828,6 +933,7 @@ export function FlexiToyDialog({
                 step={5}
                 defaultValue={[LINK_DEFAULTS.targetLengthMm]}
                 onValueChange={([value]) => changeLength(value)}
+                onScrubChange={setScrubbing}
               />
             </div>
 
@@ -837,6 +943,7 @@ export function FlexiToyDialog({
                 value={`${jointScale.toFixed(2)}×`}
               />
               <Slider
+                aria-label="Joint size"
                 className="h-11 sm:h-8"
                 value={[jointScale]}
                 min={FLEXI_MIN_JOINT_SCALE}
@@ -846,6 +953,7 @@ export function FlexiToyDialog({
                 onValueChange={([value]) =>
                   setJointScale(Number(value.toFixed(2)))
                 }
+                onScrubChange={setScrubbing}
               />
               <p className="mt-1 text-xs text-adam-text-secondary/80">
                 Chunkier or slimmer joints.
@@ -869,6 +977,7 @@ export function FlexiToyDialog({
                   onValueChange={([value]) =>
                     setLinkThicknessScale(Number(value.toFixed(2)))
                   }
+                  onScrubChange={setScrubbing}
                 />
                 <p className="mt-1 text-xs text-adam-text-secondary/80">
                   Thicker or thinner chain loops. Thicker loops are sturdier but
@@ -889,6 +998,7 @@ export function FlexiToyDialog({
                 step={1}
                 defaultValue={[LINK_DEFAULTS.bendAngleDeg]}
                 onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
+                onScrubChange={setScrubbing}
               />
               {/* A switch, not a ternary, so a fourth style is a
                   compile-visible edit rather than a silent fall-through. */}
@@ -934,9 +1044,16 @@ export function FlexiToyDialog({
         </div>
 
         <div className="sticky bottom-0 z-10 flex shrink-0 flex-col gap-2 border-t border-adam-neutral-800 bg-background-color/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[11px] leading-snug text-adam-text-secondary/70 sm:max-w-sm">
-            Prints in place — no supports. 0.2 mm layers, 2–3 walls, no infill
-            recommended.
+          {/* While a download runs this line says what the wait is for — the
+              file is built at full quality, which takes longer than the
+              preview the user has been adjusting. */}
+          <p
+            className="text-[11px] leading-snug text-adam-text-secondary/70 sm:max-w-sm"
+            aria-live="polite"
+          >
+            {isDownloading
+              ? 'Preparing full-quality file…'
+              : 'Prints in place — no supports. 0.2 mm layers, 2–3 walls, no infill recommended.'}
           </p>
           <div className="flex items-center gap-2">
             <Button

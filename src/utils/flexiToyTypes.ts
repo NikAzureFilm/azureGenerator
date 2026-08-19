@@ -357,13 +357,39 @@ export type FlexiToyOutcome =
   | { status: 'error'; code: FlexiToyErrorCode; message: string }
   | { status: 'superseded' };
 
-/** Worker protocol. */
-export type FlexiWorkerRequest = {
-  type: 'compute';
-  requestId: number;
-  input: FlexiMeshInput;
-  settings: FlexiToySettings;
-};
+/**
+ * Build quality. `preview` is what the dialog shows while you adjust: the body
+ * is simplified to a small tolerance and the joint solids use a coarser (but
+ * still conservative) tessellation, so it is several times cheaper. `final` is
+ * the exact, full-resolution build the downloads are made from.
+ */
+export type FlexiBuildQuality = 'preview' | 'final';
+
+/**
+ * Worker protocol. The mesh is REGISTERED once (structured-cloned a single
+ * time) and every compute afterwards refers to it by id, so a slider tweak
+ * posts a few hundred bytes of settings rather than megabytes of vertices.
+ * `cancel` asks the worker to abandon a running build at its next checkpoint
+ * (between joints); the worker still answers that requestId so the client's
+ * back-pressure bookkeeping stays balanced.
+ */
+export type FlexiWorkerRequest =
+  | {
+      type: 'register';
+      meshId: number;
+      input: FlexiMeshInput;
+    }
+  | {
+      type: 'compute';
+      requestId: number;
+      meshId: number;
+      settings: FlexiToySettings;
+      quality: FlexiBuildQuality;
+    }
+  | {
+      type: 'cancel';
+      requestId: number;
+    };
 
 export type FlexiWorkerResponse = {
   type: 'result';

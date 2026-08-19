@@ -9,6 +9,13 @@ const Slider = React.forwardRef<
     hideDefaultMarker?: boolean;
     variant?: 'default' | 'capsule';
     defaultMarkerStyle?: 'dot' | 'line';
+    /**
+     * Fires true when a pointer takes hold of the track and false when it lets
+     * go, so an owner can defer expensive work until the drag ends while still
+     * following the live value. Keyboard changes never scrub — they are single
+     * committed steps, not a continuous stream.
+     */
+    onScrubChange?: (scrubbing: boolean) => void;
   }
 >(
   (
@@ -16,6 +23,7 @@ const Slider = React.forwardRef<
       className,
       onValueChange,
       onValueCommit,
+      onScrubChange,
       value,
       min = 0,
       max = 100,
@@ -85,6 +93,14 @@ const Slider = React.forwardRef<
         }
       };
     }, []);
+
+    // Scrub reporting. Driven by the derived flag rather than by the pointer
+    // handlers so it cannot double-fire (press already sets two pieces of
+    // state) and so a pointer cancel is covered by the same path as a release.
+    const isScrubbing = isDragging || isPointerDown;
+    React.useEffect(() => {
+      onScrubChange?.(isScrubbing);
+    }, [isScrubbing, onScrubChange]);
 
     const handlePointerDown = (event: React.PointerEvent) => {
       if (!trackRef.current) return;

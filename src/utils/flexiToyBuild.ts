@@ -29,6 +29,7 @@ import type {
   FlexiToyResult,
   FlexiToyWarning,
   FlexiToyOutcome,
+  FlexiBuildQuality,
 } from './flexiToyTypes.ts';
 import {
   crossSectionExtentsSampler,
@@ -72,11 +73,65 @@ import type {
   LinkHoopPolyline,
 } from './flexiToyPlan.ts';
 
-/** Non-superseded outcome the worker forwards to the main thread. */
-export type FlexiBuildOutcome = Exclude<
-  FlexiToyOutcome,
-  { status: 'superseded' }
->;
+/**
+ * Non-superseded outcome the worker forwards to the main thread, plus the
+ * build's own `aborted`: a build the caller cancelled at a joint checkpoint has
+ * no result and is NOT an error — the UI simply has nothing new to show.
+ */
+export type FlexiBuildOutcome =
+  | Exclude<FlexiToyOutcome, { status: 'superseded' }>
+  | { status: 'aborted' };
+
+/**
+ * Cancellation hook. `buildFlexiToy` calls `checkpoint()` between joints; a
+ * resolved `true` means "a newer request has arrived, stop now" and the build
+ * returns `{ status: 'aborted' }` having freed everything it allocated.
+ *
+ * It is a PROMISE so the worker can yield to its message loop there (that is
+ * the only way a `cancel` message can be seen at all in a single-threaded
+ * worker). The default never yields and never aborts, so existing callers keep
+ * today's timing to within one microtask per joint.
+ */
+export type FlexiBuildControl = {
+  /** Called between joints. Resolves true if the build must abort now. May yield to the event loop. */
+  checkpoint: () => Promise<boolean>;
+};
+
+const NEVER_ABORT: FlexiBuildControl = { checkpoint: async () => false };
+
+/**
+ * The nearest-input-vertex colour lookup, opaque to callers: it is built once
+ * per registered mesh and handed back to every build of that mesh so the
+ * O(vertices) grid construction is not repeated per slider tweak.
+ */
+export type FlexiColorGrid = ColorGrid;
+
+/**
+ * A base manifold the CALLER owns, so a worker can build it once per mesh and
+ * reuse it across the many builds a slider drag produces. `buildFlexiToy` never
+ * deletes it and never registers it in its garbage sweep.
+ */
+export type FlexiPreparedBody = {
+  manifold: Manifold;
+  /** True if the ITK repair chain was needed (drives the 'mesh-repaired' warning). */
+  repaired: boolean;
+  /** Built from the FULL-resolution coloured input, shared with preview bodies. */
+  colorGrid: FlexiColorGrid;
+};
+
+export type FlexiBuildOptions = {
+  /**
+   * Use this body instead of constructing one. The `meshInput` passed to
+   * `buildFlexiToy` MUST be the mesh this body was made from — the plan's
+   * samplers and the fallback colour grid both read it — so a preview build
+   * passes the `meshInput` `deriveFlexiPreviewBody` returned, not the original.
+   */
+  prepared?: FlexiPreparedBody;
+  /** Defaults to a control that never aborts and never yields. */
+  control?: FlexiBuildControl;
+  /** Defaults to 'final': existing callers and the tests get today's geometry. */
+  quality?: FlexiBuildQuality;
+};
 
 const SPHERE_SEGMENTS = 48;
 // Below this triangle count the ITK repair filter is not worth loading; the mesh
@@ -109,6 +164,247 @@ const GROOVE_OUT_FACTOR = 1.15;
 // at the widest feature (mirrors the plan's GAP_BAND_KEEP_MM).
 const GAP_BAND_KEEP_MM = 3;
 
+/** Facets of the ring rod's circular cross-section. 32 keeps the envelope's
+ *  inscription inflation (`1/cos(π/32) ≈ 1.005`) inside the key-gap margin.
+ *  Declared up here beside the other tessellation counts because `RES` seeds
+ *  from it (a `const` referenced before its line is a TDZ throw at load). */
+const LINK_RING_TUBE_SEGMENTS = 32;
+
+// --- Tessellation resolution profile ---------------------------------------
+//
+// The six counts below are how finely the per-joint solids are faceted. They
+// are the ONLY tessellation knobs a preview may coarsen, and the two properties
+// that let it are different for the two groups:
+//
+//  · The link envelopes are SELF-CONSISTENT: each derives its inscription
+//    inflation from the same count it is built and revolved with (see
+//    `RES.linkRingTubeSegments` / `RES.linkBladeSegments` in
+//    `buildLinkRingEnvelope`), so a coarse envelope inflates further and stays
+//    a superset of the swept solid exactly as the fine one does.
+//  · The revolved cutters (rounded, shell, strong seam) inscribe their profile,
+//    so a coarser revolve carves marginally LESS in the facet valleys and a
+//    preview joint's running clearance is a hair tighter than the final's. That
+//    is acceptable precisely because a preview is never printed: the download
+//    always comes from a `final` build, which rebuilds every solid at the fine
+//    profile.
+//
+// Deliberately NOT here: LINK_SPHERE_SEGMENTS / LINK_SPHERE_INFLATION and
+// STRONG_SPHERE_SEGMENTS / STRONG_SPHERE_INFLATION. The PLAN solves against
+// those, so changing them per quality would make a preview's mechanism a
+// different mechanism from the final's — the preview would stop predicting the
+// thing it is previewing.
+//
+// `RES` is mutable module state, set at `buildFlexiToy` entry and restored to
+// the final profile in its `finally`. INVARIANT: one build at a time per worker
+// — the only `await` inside a build is the caller's checkpoint, and a caller
+// that starts a second build before the first has returned would see the two
+// profiles interleave.
+const RES = {
+  sphereSegments: SPHERE_SEGMENTS,
+  cutterRevolveSegments: CUTTER_REVOLVE_SEGMENTS,
+  shellRevolveSegments: SHELL_REVOLVE_SEGMENTS,
+  linkBladeSegments: LINK_BLADE_SEGMENTS,
+  linkKerfSegments: LINK_KERF_SEGMENTS,
+  linkRingTubeSegments: LINK_RING_TUBE_SEGMENTS,
+};
+
+type ResolutionProfile = typeof RES;
+
+const FINAL_RESOLUTION: ResolutionProfile = { ...RES };
+
+// Roughly two-thirds of the final counts: coarse enough to halve the boolean
+// cost of the per-joint solids, fine enough that the preview still reads as the
+// shape the final build will produce.
+const PREVIEW_RESOLUTION: ResolutionProfile = {
+  sphereSegments: 32,
+  cutterRevolveSegments: 64,
+  shellRevolveSegments: 48,
+  linkBladeSegments: 32,
+  linkKerfSegments: 48,
+  linkRingTubeSegments: 20,
+};
+
+function applyResolutionProfile(quality: FlexiBuildQuality): void {
+  Object.assign(
+    RES,
+    quality === 'preview' ? PREVIEW_RESOLUTION : FINAL_RESOLUTION,
+  );
+}
+
+// --- Per-joint solid cache -------------------------------------------------
+//
+// Every per-joint SOLID (the link cutter/hoop/ring, the strong cutter/male, the
+// rounded and shell cutters) is a pure function of a handful of numbers: the
+// joint's pose and radius, the solved geometry/seam, the clearance and the
+// tessellation profile. Nothing about the BODY enters them. Dragging a slider
+// therefore rebuilds a great many solids that are bit-identical to ones the
+// previous build already paid for — measured at 850–970ms of a ~1350ms link
+// build, and independent of the mesh size.
+//
+// So they are cached for the life of the worker, keyed on an exact serialisation
+// (see `cacheKey`) of EVERY input, the quality profile included. Manifold
+// results are deterministic for identical inputs, so a hit is bit-identical to a
+// rebuild; there is no tolerance and no approximation here.
+//
+// OWNERSHIP. A cached solid is BORROWED by the loop that uses it: it must be
+// passed to booleans (which never consume their inputs) and then dropped, never
+// deleted. `release()` is the one place that knows the difference. Entries are
+// PINNED while a loop holds them so eviction can never free a handle that is
+// still in a `males` array waiting for the final union.
+const SOLID_CACHE_MAX = 32;
+
+type SolidCacheEntry = {
+  solids: Manifold[];
+  /** Live borrows. An entry with pins > 0 is never evicted. */
+  pins: number;
+};
+
+// Insertion-ordered, so the first key is the least recently used (a hit
+// re-inserts).
+const solidCache = new Map<string, SolidCacheEntry>();
+
+function trimSolidCache(): void {
+  if (solidCache.size <= SOLID_CACHE_MAX) return;
+  for (const [key, entry] of solidCache) {
+    if (solidCache.size <= SOLID_CACHE_MAX) break;
+    if (entry.pins > 0) continue;
+    solidCache.delete(key);
+    for (const solid of entry.solids) {
+      try {
+        solid.delete();
+      } catch {
+        // Already freed or invalid handle; nothing to do.
+      }
+    }
+  }
+}
+
+/**
+ * Drop every cached solid (worker teardown, or a test wanting a cold build).
+ * Frees PINNED entries too, so it must not be called while a build is running —
+ * that would pull the solids out from under it.
+ */
+export function clearFlexiSolidCache(): void {
+  for (const entry of solidCache.values()) {
+    for (const solid of entry.solids) {
+      try {
+        solid.delete();
+      } catch {
+        // Already freed or invalid handle; nothing to do.
+      }
+    }
+  }
+  solidCache.clear();
+}
+
+/**
+ * Per-build borrow bookkeeping. Created by `buildFlexiToy` and released in its
+ * `finally`, so every exit path — success, error, abort, throw — unpins.
+ */
+type SolidBorrow = {
+  /** Cached solids for `key`, borrowed for the life of this build, or null. */
+  take: (key: string) => Manifold[] | null;
+  /** Take ownership of freshly built solids and borrow them back. */
+  store: (key: string, solids: Manifold[]) => void;
+  /** Delete `manifold` unless it is a borrowed cache handle. */
+  release: (manifold: Manifold | null | undefined) => void;
+  /** Unpin everything this build borrowed, then evict down to the cap. */
+  done: () => void;
+};
+
+function createSolidBorrow(): SolidBorrow {
+  const borrowed = new Set<Manifold>();
+  const pinned: SolidCacheEntry[] = [];
+  const pin = (entry: SolidCacheEntry): Manifold[] => {
+    entry.pins += 1;
+    pinned.push(entry);
+    for (const solid of entry.solids) borrowed.add(solid);
+    return entry.solids;
+  };
+  return {
+    take: (key) => {
+      const entry = solidCache.get(key);
+      if (!entry) return null;
+      // Re-insert so the map's iteration order stays least-recently-used first.
+      solidCache.delete(key);
+      solidCache.set(key, entry);
+      return pin(entry);
+    },
+    store: (key, solids) => {
+      // NO EXPLICIT EVALUATION HERE, and that is deliberate — measured, not
+      // assumed.
+      //
+      // The worry a cache has to answer is that manifold booleans are lazy, so
+      // an unevaluated node would drag its whole boolean tree into every later
+      // build that reuses it. It does not arise: every builder already forces
+      // its solid with a `status()` check before returning (see
+      // `buildLinkCutter`, `buildLinkRing`, `buildStrongCutter`,
+      // `buildStrongMale`, `buildRoundedCutter`, `buildShellCutter`), so the
+      // only lazy residue is the trailing `transform` onto the joint frame — a
+      // leaf transform, not a boolean.
+      //
+      // Baking that residue with a `numTri()` here is not free: link's males go
+      // into ONE n-ary `Manifold.union(males)`, and manifold flattens an
+      // unevaluated child into that batch but treats a baked one as an opaque
+      // leaf. The two routes give equally valid but DIFFERENT tessellations
+      // (measured: 36834 triangles against the reference 36706 on the profiling
+      // spindle) — a silent change to shipped geometry, and it was also 10%
+      // slower on the second build. So the solids are stored exactly as their
+      // builders returned them.
+      const entry: SolidCacheEntry = { solids, pins: 0 };
+      solidCache.set(key, entry);
+      pin(entry);
+      trimSolidCache();
+    },
+    release: (manifold) => {
+      if (!manifold) return;
+      if (borrowed.has(manifold)) return;
+      try {
+        manifold.delete();
+      } catch {
+        // Already freed or invalid handle; nothing to do.
+      }
+    },
+    done: () => {
+      for (const entry of pinned) entry.pins -= 1;
+      pinned.length = 0;
+      borrowed.clear();
+      trimSolidCache();
+    },
+  };
+}
+
+/**
+ * The pose-and-size fields every per-joint solid reads. Kept as one helper so
+ * the three cache keys cannot drift from each other, and deliberately a WHITELIST
+ * rather than the whole plan object: a field the solids do not read (the plan's
+ * own bookkeeping) would only lower the hit rate.
+ */
+function jointCacheKeyPart(joint: FlexiJointPlan): unknown {
+  return [
+    joint.center,
+    joint.axis,
+    joint.ballRadiusMm,
+    joint.socketDepthMm,
+    joint.faceGapMm,
+  ];
+}
+
+/**
+ * `JSON.stringify` for a cache key. The replacer exists because plain
+ * stringify writes `null` for Infinity, -Infinity AND NaN alike, and the link
+ * inputs legitimately carry Infinity (an end joint has no neighbour, so its
+ * head or tail room is unbounded). Three different inputs sharing one key would
+ * be a silent wrong-solid bug; tagging them keeps the key injective.
+ */
+function cacheKey(parts: unknown[]): string {
+  return JSON.stringify(parts, (_k, value) =>
+    typeof value === 'number' && !Number.isFinite(value)
+      ? `#${String(value)}`
+      : value,
+  );
+}
+
 let cachedWasm: Promise<ManifoldToplevel> | null = null;
 
 /**
@@ -138,15 +434,29 @@ export async function buildFlexiToy(
   meshInput: FlexiMeshInput,
   plan: FlexiToyPlan,
   settings: FlexiToySettings,
+  options?: FlexiBuildOptions,
 ): Promise<FlexiBuildOutcome> {
   const garbage: Manifold[] = [];
   const keep = (manifold: Manifold): Manifold => {
     garbage.push(manifold);
     return manifold;
   };
+  const quality: FlexiBuildQuality = options?.quality ?? 'final';
+  const control = options?.control ?? NEVER_ABORT;
+  const prepared = options?.prepared;
+  // Both are undone in the `finally`: the profile because it is module state
+  // every other build reads, the borrows because a cached solid pinned by a
+  // build that has returned would never be evictable again.
+  applyResolutionProfile(quality);
+  const borrow = createSolidBorrow();
 
   try {
-    const base = await buildBaseManifold(wasm, meshInput, keep);
+    // A caller-owned prepared body is used AS IS and never `keep`ed: the
+    // garbage sweep below would free a manifold the caller still holds for its
+    // next build.
+    const base: BaseManifold | null = prepared
+      ? { manifold: prepared.manifold, repaired: prepared.repaired }
+      : await buildBaseManifold(wasm, meshInput, keep);
     if (!base) {
       return {
         status: 'error',
@@ -207,9 +517,12 @@ export async function buildFlexiToy(
             travelClampedJoints: 0,
             minTravelDeg: settings.bendAngleDeg,
           };
-          const grouped = buildStrongSegments(
+          const grouped = await buildStrongSegments(
             wasm,
             keep,
+            borrow,
+            control,
+            quality,
             base.manifold,
             cutJoints,
             meshInput,
@@ -217,6 +530,7 @@ export async function buildFlexiToy(
             settings.bendAngleDeg,
             notes,
           );
+          if (grouped === 'aborted') return { status: 'aborted' };
           if (grouped === 'uncut') {
             return {
               status: 'error',
@@ -256,9 +570,12 @@ export async function buildFlexiToy(
             sidewaysClampedJoints: 0,
             minSidewaysDeg: Infinity,
           };
-          const grouped = buildLinkSegments(
+          const grouped = await buildLinkSegments(
             wasm,
             keep,
+            borrow,
+            control,
+            quality,
             base.manifold,
             cutJoints,
             meshInput,
@@ -267,6 +584,7 @@ export async function buildFlexiToy(
             resolveLinkThicknessScale(settings),
             notes,
           );
+          if (grouped === 'aborted') return { status: 'aborted' };
           if (grouped === 'uncut') {
             return {
               status: 'error',
@@ -293,13 +611,15 @@ export async function buildFlexiToy(
           break;
         }
         case 'classic': {
-          const pieces = buildClassicSegments(
+          const pieces = await buildClassicSegments(
             wasm,
             keep,
+            control,
             base.manifold,
             cutJoints,
             clearance,
           );
+          if (pieces === 'aborted') return { status: 'aborted' };
           if (!pieces) {
             return {
               status: 'error',
@@ -313,9 +633,12 @@ export async function buildFlexiToy(
         case 'shell':
         case 'rounded': {
           const notes = { shellFallbackJoints: 0 };
-          const grouped = buildRoundedSegments(
+          const grouped = await buildRoundedSegments(
             wasm,
             keep,
+            borrow,
+            control,
+            quality,
             base.manifold,
             cutJoints,
             meshInput,
@@ -324,6 +647,7 @@ export async function buildFlexiToy(
             jointStyle,
             notes,
           );
+          if (grouped === 'aborted') return { status: 'aborted' };
           if (grouped === 'uncut') {
             return {
               status: 'error',
@@ -348,7 +672,7 @@ export async function buildFlexiToy(
       }
     }
 
-    const assembled = assemblePieces(segments, meshInput);
+    const assembled = assemblePieces(segments, meshInput, prepared?.colorGrid);
 
     const warnings: FlexiToyWarning[] = [...plan.warnings];
     if (shellFallbackJoints > 0) {
@@ -503,6 +827,10 @@ export async function buildFlexiToy(
           : 'The flexi toy could not be built from this model.',
     };
   } finally {
+    // Unpin first: the trim inside `done()` is what actually evicts, and it
+    // must not run while this build's handles are still borrowed.
+    borrow.done();
+    applyResolutionProfile('final');
     for (const manifold of garbage) {
       try {
         manifold.delete();
@@ -516,6 +844,114 @@ export async function buildFlexiToy(
 // --- Base manifold construction + repair chain ----------------------------
 
 type BaseManifold = { manifold: Manifold; repaired: boolean };
+
+/**
+ * Build the base body ONCE, for a caller that will run many builds against it.
+ * Same direct → weld → ITK ladder `buildBaseManifold` uses, plus the colour grid
+ * — both are O(vertices) and neither depends on the settings, so re-paying them
+ * on every slider tweak is pure waste (25–270ms of base construction and, on a
+ * dense body, the larger share of assembly).
+ *
+ * The CALLER owns the returned manifold: `buildFlexiToy` neither deletes it nor
+ * registers it in its garbage sweep. Free it with `disposeFlexiPreparedBody`.
+ * Returns null when the mesh cannot be made manifold (the caller reports the
+ * same 'not-watertight' error `buildFlexiToy` would have).
+ */
+export async function prepareFlexiBody(
+  wasm: ManifoldToplevel,
+  meshInput: FlexiMeshInput,
+): Promise<FlexiPreparedBody | null> {
+  // An identity `keep`: the ladder only ever hands `keep` the ONE manifold it
+  // returns (every failed attempt is deleted inside `tryManifoldFromProperties`),
+  // so there is nothing here to sweep and the survivor belongs to the caller.
+  const base = await buildBaseManifold(wasm, meshInput, (manifold) => manifold);
+  if (!base) return null;
+  return {
+    manifold: base.manifold,
+    repaired: base.repaired,
+    // From the FULL-resolution coloured input, always: a preview body shares
+    // this grid, so colours must never be sampled from a simplified mesh.
+    colorGrid: buildColorGrid(meshInput),
+  };
+}
+
+/** Free a prepared body's manifold. Safe to call twice. */
+export function disposeFlexiPreparedBody(body: FlexiPreparedBody): void {
+  try {
+    body.manifold.delete();
+  } catch {
+    // Already freed or invalid handle; nothing to do.
+  }
+}
+
+/**
+ * Derive a cheap preview body from a full one by decimating it to `toleranceMm`
+ * (measured: 128k tris → 16.5k at 0.05mm in ~130ms, 15k → 4.5k), and rebuild the
+ * `FlexiMeshInput` that goes with it — the plan's cross-section samplers and the
+ * build's own band measurements read the mesh, not the manifold, so handing
+ * `buildFlexiToy` the ORIGINAL input beside a simplified body would measure one
+ * shape and cut another.
+ *
+ * The returned body owns its manifold (dispose it) but SHARES `full.colorGrid`,
+ * which is why the preview's per-vertex colours are still the full-resolution
+ * ones. Returns null if the decimation fails or collapses the body.
+ *
+ * `_wasm` completes the `(wasm, …)` shape every other entry point takes;
+ * `simplify` is a method on the manifold itself, so nothing here needs it.
+ */
+export function deriveFlexiPreviewBody(
+  _wasm: ManifoldToplevel,
+  full: FlexiPreparedBody,
+  toleranceMm: number,
+): { body: FlexiPreparedBody; meshInput: FlexiMeshInput } | null {
+  let simplified: Manifold | null = null;
+  try {
+    simplified = full.manifold.simplify(toleranceMm);
+    if (simplified.status() !== 'NoError' || simplified.isEmpty()) {
+      simplified.delete();
+      return null;
+    }
+    const mesh = simplified.getMesh();
+    const numProp = mesh.numProp;
+    const vertexCount = Math.floor(mesh.vertProperties.length / numProp);
+    if (vertexCount === 0 || mesh.triVerts.length === 0) {
+      simplified.delete();
+      return null;
+    }
+    const positions = new Float32Array(vertexCount * 3);
+    const colors = new Float32Array(vertexCount * 3);
+    for (let v = 0; v < vertexCount; v += 1) {
+      const x = mesh.vertProperties[v * numProp];
+      const y = mesh.vertProperties[v * numProp + 1];
+      const z = mesh.vertProperties[v * numProp + 2];
+      positions[v * 3] = x;
+      positions[v * 3 + 1] = y;
+      positions[v * 3 + 2] = z;
+      full.colorGrid.fillNearest(x, y, z, colors, v * 3);
+    }
+    return {
+      body: {
+        manifold: simplified,
+        repaired: full.repaired,
+        colorGrid: full.colorGrid,
+      },
+      meshInput: {
+        positions,
+        indices: new Uint32Array(mesh.triVerts),
+        colors,
+      },
+    };
+  } catch {
+    if (simplified) {
+      try {
+        simplified.delete();
+      } catch {
+        // Already freed or invalid handle; nothing to do.
+      }
+    }
+    return null;
+  }
+}
 
 async function buildBaseManifold(
   wasm: ManifoldToplevel,
@@ -665,67 +1101,98 @@ type AssembledGeometry = {
   segmentTriangleRanges: Array<{ start: number; count: number }>;
 };
 
+/**
+ * Concatenate the component meshes into one buffer set.
+ *
+ * Two passes over PRE-SIZED typed arrays rather than one pass pushing onto
+ * `number[]`: at 100k+ output triangles the JS arrays were the whole cost here
+ * (three boxed doubles per vertex, an index push per triangle corner, then a
+ * full copy into the Float32Array). `getMesh()` is called exactly ONCE per
+ * component — it copies out of wasm memory, so a counting pass that called it
+ * again would cost more than it saved.
+ *
+ * `colorGrid` is the prepared body's grid when there is one; without it the grid
+ * is built here from `meshInput`, exactly as before.
+ */
 function assemblePieces(
   segments: Manifold[][],
   meshInput: FlexiMeshInput,
+  colorGrid?: FlexiColorGrid,
 ): AssembledGeometry {
-  const positions: number[] = [];
-  const indices: number[] = [];
-  const segmentTriangleRanges: Array<{ start: number; count: number }> = [];
-  const colorGrid = buildColorGrid(meshInput);
+  const grid = colorGrid ?? buildColorGrid(meshInput);
+  const meshes = segments.map((components) =>
+    components.map((component) => component.getMesh()),
+  );
 
+  let totalVertices = 0;
+  let totalIndices = 0;
+  for (const group of meshes) {
+    for (const mesh of group) {
+      totalVertices += mesh.vertProperties.length / mesh.numProp;
+      totalIndices += mesh.triVerts.length;
+    }
+  }
+
+  const positionArray = new Float32Array(totalVertices * 3);
+  const indexArray = new Uint32Array(totalIndices);
+  const segmentTriangleRanges: Array<{ start: number; count: number }> = [];
+
+  let vertexCursor = 0;
+  let indexCursor = 0;
   let minY = Infinity;
-  for (const components of segments) {
+  for (const group of meshes) {
     // One triangle range per SEGMENT — its components are concatenated so the UI
     // can tint a fin sliver together with the piece it belongs to.
-    const start = indices.length;
-    for (const component of components) {
-      const mesh = component.getMesh();
+    const start = indexCursor;
+    for (const mesh of group) {
       const numProp = mesh.numProp;
-      const vertexOffset = positions.length / 3;
+      const vertexOffset = vertexCursor;
       const vertexCount = mesh.vertProperties.length / numProp;
 
       for (let v = 0; v < vertexCount; v += 1) {
-        const x = mesh.vertProperties[v * numProp];
+        const at = (vertexOffset + v) * 3;
         const y = mesh.vertProperties[v * numProp + 1];
-        const z = mesh.vertProperties[v * numProp + 2];
-        positions.push(x, y, z);
+        positionArray[at] = mesh.vertProperties[v * numProp];
+        positionArray[at + 1] = y;
+        positionArray[at + 2] = mesh.vertProperties[v * numProp + 2];
         if (y < minY) minY = y;
       }
+      vertexCursor += vertexCount;
 
       for (let i = 0; i < mesh.triVerts.length; i += 1) {
-        indices.push(mesh.triVerts[i] + vertexOffset);
+        indexArray[indexCursor + i] = mesh.triVerts[i] + vertexOffset;
       }
+      indexCursor += mesh.triVerts.length;
     }
-    segmentTriangleRanges.push({ start, count: indices.length - start });
-  }
-
-  // Floor-align: min-Y to 0.
-  const shift = Number.isFinite(minY) ? minY : 0;
-  const positionArray = new Float32Array(positions.length);
-  for (let i = 0; i < positions.length; i += 3) {
-    positionArray[i] = positions[i];
-    positionArray[i + 1] = positions[i + 1] - shift;
-    positionArray[i + 2] = positions[i + 2];
+    segmentTriangleRanges.push({ start, count: indexCursor - start });
   }
 
   // Per-vertex colour by nearest input vertex (carries the body's colours onto
   // cut and ball faces without routing colour through the boolean ops).
-  const colors = new Float32Array(positions.length);
-  for (let v = 0; v < positions.length / 3; v += 1) {
-    const [r, g, b] = colorGrid.nearest(
-      positions[v * 3],
-      positions[v * 3 + 1],
-      positions[v * 3 + 2],
+  // BEFORE the floor shift, because the grid is indexed in the input's own
+  // (unshifted) space.
+  const colors = new Float32Array(positionArray.length);
+  for (let v = 0; v < totalVertices; v += 1) {
+    grid.fillNearest(
+      positionArray[v * 3],
+      positionArray[v * 3 + 1],
+      positionArray[v * 3 + 2],
+      colors,
+      v * 3,
     );
-    colors[v * 3] = r;
-    colors[v * 3 + 1] = g;
-    colors[v * 3 + 2] = b;
+  }
+
+  // Floor-align: min-Y to 0.
+  const shift = Number.isFinite(minY) ? minY : 0;
+  if (shift !== 0) {
+    for (let i = 1; i < positionArray.length; i += 3) {
+      positionArray[i] -= shift;
+    }
   }
 
   return {
     positions: positionArray,
-    indices: new Uint32Array(indices),
+    indices: indexArray,
     colors,
     segmentTriangleRanges,
   };
@@ -736,16 +1203,20 @@ function assemblePieces(
 // Cut the body into segments with flat ring faces: trim each end plane, subtract
 // the tail socket cavity, add the head ball. Returns one manifold per segment,
 // or null on a degenerate/empty piece.
-function buildClassicSegments(
+async function buildClassicSegments(
   wasm: ManifoldToplevel,
   keep: (manifold: Manifold) => Manifold,
+  control: FlexiBuildControl,
   body: Manifold,
   cutJoints: FlexiJointPlan[],
   clearance: number,
-): Manifold[] | null {
+): Promise<Manifold[] | 'aborted' | null> {
   const pieceCount = cutJoints.length + 1;
   const pieces: Manifold[] = [];
   for (let p = 0; p < pieceCount; p += 1) {
+    // Nothing transient to free: every intermediate here is `keep`ed, so the
+    // caller's garbage sweep collects them on the abort path too.
+    if (await control.checkpoint()) return 'aborted';
     const tailJoint = p > 0 ? cutJoints[p - 1] : null;
     const headJoint = p < pieceCount - 1 ? cutJoints[p] : null;
     let piece = body;
@@ -802,9 +1273,12 @@ function buildClassicSegments(
 // when a cut left an interval empty (a bridging feature the rounded style could
 // not sever — the caller surfaces 'rounded-uncut' so the UI can suggest
 // Classic); null on a genuine degenerate/boolean failure.
-function buildRoundedSegments(
+async function buildRoundedSegments(
   wasm: ManifoldToplevel,
   keep: (manifold: Manifold) => Manifold,
+  borrow: SolidBorrow,
+  control: FlexiBuildControl,
+  quality: FlexiBuildQuality,
   body: Manifold,
   cutJoints: FlexiJointPlan[],
   meshInput: FlexiMeshInput,
@@ -812,11 +1286,16 @@ function buildRoundedSegments(
   bendAngleDeg: number,
   jointStyle: FlexiJointStyle = 'rounded',
   notes: { shellFallbackJoints: number } = { shellFallbackJoints: 0 },
-): Manifold[][] | 'uncut' | null {
+): Promise<Manifold[][] | 'uncut' | 'aborted' | null> {
   // Sequential subtract, freeing each intermediate immediately so a 19-joint
   // body doesn't pile up full-body copies (only the running cut is retained).
   let cut = body;
   for (const joint of cutJoints) {
+    // The only transient at the top of an iteration is the running cut.
+    if (await control.checkpoint()) {
+      if (cut !== body) cut.delete();
+      return 'aborted';
+    }
     // Groove floor from the THINNEST cross-section direction at the cut plane;
     // wedge outer radius from the WIDEST direction over the wedge's whole
     // axial band, so the gap punches through the skin (fins included) even on
@@ -888,6 +1367,21 @@ function buildRoundedSegments(
     // skin; where the body cannot host one, that joint falls back to the
     // rounded wedge.
     let cutter: Manifold | null = null;
+    // The cutter is a pure function of the pose, the clearance, the solved
+    // angles and the solved wedge/shell (plus the loft's radial map) — nothing
+    // about the body reaches past the solve — so an identical solve yields an
+    // identical solid and the cache can return the previous build's.
+    const cutterKey = (shape: unknown, loft?: ShellLoft | null): string =>
+      cacheKey([
+        'rounded',
+        jointStyle,
+        quality,
+        jointCacheKeyPart(joint),
+        clearance,
+        angles,
+        shape,
+        loft ?? null,
+      ]);
     if (jointStyle === 'shell') {
       // Skin-lofted shell first: per-azimuth seam radii follow the local
       // skin, so flattened bodies get a uniform shallow seam instead of a
@@ -902,14 +1396,23 @@ function buildRoundedSegments(
           loft,
         );
         if (lofted) {
-          cutter = buildShellCutter(
-            wasm,
-            joint,
-            clearance,
-            angles,
-            lofted,
-            loft,
-          );
+          const key = cutterKey(lofted, loft);
+          const cached = borrow.take(key);
+          if (cached) {
+            cutter = cached[0];
+          } else {
+            cutter = buildShellCutter(
+              wasm,
+              joint,
+              clearance,
+              angles,
+              lofted,
+              loft,
+            );
+            // Never cache a null: a refusal is cheap to re-derive and caching it
+            // would pin a "this cannot be built" verdict past a code change.
+            if (cutter) borrow.store(key, [cutter]);
+          }
         }
       }
       // Plain revolved shell when the loft could not be solved or its warp
@@ -934,7 +1437,14 @@ function buildRoundedSegments(
           if (settled) break;
         }
         if (shell) {
-          cutter = buildShellCutter(wasm, joint, clearance, angles, shell);
+          const key = cutterKey(shell);
+          const cached = borrow.take(key);
+          if (cached) {
+            cutter = cached[0];
+          } else {
+            cutter = buildShellCutter(wasm, joint, clearance, angles, shell);
+            if (cutter) borrow.store(key, [cutter]);
+          }
         }
       }
       if (!cutter) {
@@ -969,14 +1479,23 @@ function buildRoundedSegments(
         wedge = next;
         if (settled) break;
       }
-      cutter = buildRoundedCutter(wasm, joint, clearance, angles, wedge);
+      const key = cutterKey(wedge);
+      const cached = borrow.take(key);
+      if (cached) {
+        cutter = cached[0];
+      } else {
+        cutter = buildRoundedCutter(wasm, joint, clearance, angles, wedge);
+        if (cutter) borrow.store(key, [cutter]);
+      }
     }
     if (!cutter) {
       if (cut !== body) cut.delete();
       return null;
     }
     const next = cut.subtract(cutter);
-    cutter.delete();
+    // A cached cutter is BORROWED — `release` deletes only handles this loop
+    // owns. (`subtract` does not consume its argument either way.)
+    borrow.release(cutter);
     if (cut !== body) cut.delete();
     cut = next;
   }
@@ -1257,7 +1776,7 @@ function buildRoundedCutter(
   const { CrossSection } = wasm;
   const revolve = (poly: number[][]): Manifold => {
     const section = new CrossSection(poly as [number, number][]);
-    const solid = section.revolve(CUTTER_REVOLVE_SEGMENTS);
+    const solid = section.revolve(RES.cutterRevolveSegments);
     section.delete();
     return solid;
   };
@@ -2007,7 +2526,7 @@ function buildStrongCutter(
   if (polygon.length < 3) return null;
 
   const section = new CrossSection(polygon as [number, number][]);
-  const seamSolid = section.revolve(SHELL_REVOLVE_SEGMENTS);
+  const seamSolid = section.revolve(RES.shellRevolveSegments);
   section.delete();
 
   // The pocket is a ball CONCENTRIC with the head, so a bend about the pivot
@@ -2186,9 +2705,12 @@ function buildRoundedFallbackCutter(
 // back in ONE whole-body union, decompose, and group components into segment
 // intervals exactly as the rounded family does. The male fuses to its TAIL
 // segment (its bar is anchored there), so bodies == segments still holds.
-function buildStrongSegments(
+async function buildStrongSegments(
   wasm: ManifoldToplevel,
   keep: (manifold: Manifold) => Manifold,
+  borrow: SolidBorrow,
+  control: FlexiBuildControl,
+  quality: FlexiBuildQuality,
   body: Manifold,
   cutJoints: FlexiJointPlan[],
   meshInput: FlexiMeshInput,
@@ -2199,16 +2721,26 @@ function buildStrongSegments(
     travelClampedJoints: number;
     minTravelDeg: number;
   },
-): Manifold[][] | 'uncut' | null {
+): Promise<Manifold[][] | 'uncut' | 'aborted' | null> {
   let cut = body;
   const males: Manifold[] = [];
-  const abandon = (): null => {
+  // The running cut plus every male still waiting for the final union — the
+  // full transient set at any point in the loop. `release` skips borrowed cache
+  // handles, so a male that came from the cache is dropped, not freed.
+  const freeTransient = (): void => {
     if (cut !== body) cut.delete();
-    for (const male of males) male.delete();
+    for (const male of males) borrow.release(male);
+  };
+  const abandon = (): null => {
+    freeTransient();
     return null;
   };
 
   for (let index = 0; index < cutJoints.length; index += 1) {
+    if (await control.checkpoint()) {
+      freeTransient();
+      return 'aborted';
+    }
     const joint = cutJoints[index];
     // One profile pass per joint; every later query is a bin scan.
     const measure = crossSectionExtentsSampler(
@@ -2378,15 +2910,34 @@ function buildStrongSegments(
     let cutter: Manifold | null = null;
     let male: Manifold | null = null;
     if (solved) {
-      cutter = buildStrongCutter(wasm, joint, solved.geometry, solved.seam);
-      if (cutter) {
-        male = buildStrongMale(wasm, joint, solved.geometry, solved.seam);
-      }
-      if (!cutter || !male) {
-        if (cutter) cutter.delete();
-        if (male) male.delete();
-        cutter = null;
-        male = null;
+      // Both solids are pure functions of the pose, the solved geometry and the
+      // solved seam, so they are cached as ONE entry: they are always wanted
+      // together and a half-hit would be useless.
+      const key = cacheKey([
+        'strong',
+        quality,
+        jointCacheKeyPart(joint),
+        solved.geometry,
+        solved.seam,
+      ]);
+      const cached = borrow.take(key);
+      if (cached) {
+        cutter = cached[0];
+        male = cached[1];
+      } else {
+        cutter = buildStrongCutter(wasm, joint, solved.geometry, solved.seam);
+        if (cutter) {
+          male = buildStrongMale(wasm, joint, solved.geometry, solved.seam);
+        }
+        if (!cutter || !male) {
+          // Freshly built and never stored, so a plain delete is right here.
+          if (cutter) cutter.delete();
+          if (male) male.delete();
+          cutter = null;
+          male = null;
+        } else {
+          borrow.store(key, [cutter, male]);
+        }
       }
     }
     if (!cutter) {
@@ -2407,7 +2958,9 @@ function buildStrongSegments(
     }
 
     const next = cut.subtract(cutter);
-    cutter.delete();
+    // Borrowed when it came from the cache, owned when the rounded fallback
+    // built it — `release` tells them apart.
+    borrow.release(cutter);
     if (cut !== body) cut.delete();
     cut = next;
     if (male) males.push(male);
@@ -2429,8 +2982,7 @@ function buildStrongSegments(
     const orphan = anchored.isEmpty();
     anchored.delete();
     if (orphan) {
-      if (cut !== body) cut.delete();
-      for (const other of males) other.delete();
+      freeTransient();
       return 'uncut';
     }
   }
@@ -2442,12 +2994,14 @@ function buildStrongSegments(
     let union = males[0];
     for (let i = 1; i < males.length; i += 1) {
       const merged = union.add(males[i]);
-      union.delete();
-      males[i].delete();
+      // `union` is males[0] (possibly borrowed) on the first pass and an owned
+      // intermediate after that; `release` covers both.
+      borrow.release(union);
+      borrow.release(males[i]);
       union = merged;
     }
     const joined = cut.add(union);
-    union.delete();
+    borrow.release(union);
     if (cut !== body) cut.delete();
     cut = joined;
   }
@@ -2518,9 +3072,12 @@ export type FlexiLinkNotes = {
 // components into segment intervals. A top-level arm rather than a branch inside
 // buildRoundedSegments for the same reasons `strong` is one, plus one more: link
 // adds two males per joint and so needs two orphan guards of its own.
-function buildLinkSegments(
+async function buildLinkSegments(
   wasm: ManifoldToplevel,
   keep: (manifold: Manifold) => Manifold,
+  borrow: SolidBorrow,
+  control: FlexiBuildControl,
+  quality: FlexiBuildQuality,
   body: Manifold,
   cutJoints: FlexiJointPlan[],
   meshInput: FlexiMeshInput,
@@ -2528,16 +3085,26 @@ function buildLinkSegments(
   bendAngleDeg: number,
   linkThicknessScale: number,
   notes: FlexiLinkNotes,
-): Manifold[][] | 'uncut' | null {
+): Promise<Manifold[][] | 'uncut' | 'aborted' | null> {
   let cut = body;
   const males: Manifold[] = [];
-  const abandon = (): null => {
+  // The running cut plus every hoop/ring still waiting for the final union.
+  // `release` skips borrowed cache handles, so a cached male is dropped here
+  // rather than freed.
+  const freeTransient = (): void => {
     if (cut !== body) cut.delete();
-    for (const male of males) male.delete();
+    for (const male of males) borrow.release(male);
+  };
+  const abandon = (): null => {
+    freeTransient();
     return null;
   };
 
   for (let index = 0; index < cutJoints.length; index += 1) {
+    if (await control.checkpoint()) {
+      freeTransient();
+      return 'aborted';
+    }
     const joint = cutJoints[index];
     // ONE profile pass per joint; every later query is a bin scan.
     const measure = crossSectionExtentsSampler(
@@ -2867,24 +3434,47 @@ function buildLinkSegments(
         geometry.pivotOffsetMm + geometry.tubeRadiusMm + clearance + 0.5
           ? pocket
           : 0;
-      const built = buildLinkJoint(
-        wasm,
-        joint,
+      // All three solids come out of ONE pure function of the pose, the solved
+      // geometry/seam and the four measured scalars below, so they cache as one
+      // entry. `poly` is omitted from the key on purpose: it is derived from
+      // (geometry, seam, clearance), all three of which are in it already.
+      const key = cacheKey([
+        'link',
+        quality,
+        jointCacheKeyPart(joint),
         geometry,
         solved.seam,
-        solved.poly,
         clearance,
         rhoClip,
         headRoom,
         pocketRadiusMm,
-      );
-      if (built) {
-        cutter = built.cutter;
-        hoop = built.hoop;
-        ring = built.ring;
+      ]);
+      const cached = borrow.take(key);
+      if (cached) {
+        cutter = cached[0];
+        hoop = cached[1];
+        ring = cached[2];
       } else {
-        // Every solid was solvable and the booleans still refused.
-        reason = 'boolean';
+        const built = buildLinkJoint(
+          wasm,
+          joint,
+          geometry,
+          solved.seam,
+          solved.poly,
+          clearance,
+          rhoClip,
+          headRoom,
+          pocketRadiusMm,
+        );
+        if (built) {
+          cutter = built.cutter;
+          hoop = built.hoop;
+          ring = built.ring;
+          borrow.store(key, [cutter, hoop, ring]);
+        } else {
+          // Every solid was solvable and the booleans still refused.
+          reason = 'boolean';
+        }
       }
     }
     if (!cutter) {
@@ -2902,13 +3492,18 @@ function buildLinkSegments(
       );
     }
     if (!cutter) {
-      if (hoop) hoop.delete();
-      if (ring) ring.delete();
+      // Unreachable in practice (a null cutter means `buildLinkJoint` refused,
+      // which leaves both males null too) but kept exact: the two males are
+      // dropped here rather than deleted when they are cache handles.
+      borrow.release(hoop);
+      borrow.release(ring);
       return abandon();
     }
 
     const next = cut.subtract(cutter);
-    cutter.delete();
+    // Borrowed when it came from the cache, owned when the rounded fallback
+    // built it.
+    borrow.release(cutter);
     if (cut !== body) cut.delete();
     cut = next;
     if (hoop) males.push(hoop);
@@ -2926,8 +3521,7 @@ function buildLinkSegments(
     const orphan = anchored.isEmpty();
     anchored.delete();
     if (orphan) {
-      if (cut !== body) cut.delete();
-      for (const other of males) other.delete();
+      freeTransient();
       return 'uncut';
     }
   }
@@ -2936,8 +3530,10 @@ function buildLinkSegments(
   // male's swept envelope, so the males can only be added AFTER the whole
   // subtract chain. One whole-body union for the entire build.
   if (males.length > 0) {
+    // `union` does not consume its inputs, so passing borrowed cache handles is
+    // safe; `release` then drops the borrowed ones and frees the owned ones.
     const union = wasm.Manifold.union(males);
-    for (const male of males) male.delete();
+    for (const male of males) borrow.release(male);
     const joined = cut.add(union);
     union.delete();
     if (cut !== body) cut.delete();
@@ -3180,10 +3776,6 @@ function buildLinkHoopEnvelope(
   return envelope;
 }
 
-/** Facets of the ring rod's circular cross-section. 32 keeps the envelope's
- *  inscription inflation (`1/cos(π/32) ≈ 1.005`) inside the key-gap margin. */
-const LINK_RING_TUBE_SEGMENTS = 32;
-
 /** The open pocket never exceeds this fraction of the thinnest local skin
  *  half-extent: the bowl keeps a solid rim (the reference-toy look) and stays
  *  clear of the 0.75·ρ_min radius the seam-rim probes measure the kerf at. */
@@ -3216,16 +3808,17 @@ function buildLinkRing(
   const centre = geometry.bladeReachMm - tube;
   // The rod's cross-section, inscribed (vertices nominal) like the hoop's core
   // spheres — a hair slimmer only ever widens the running clearance.
+  const tubeSegments = RES.linkRingTubeSegments;
   const pts: [number, number][] = [];
-  for (let k = 0; k < LINK_RING_TUBE_SEGMENTS; k += 1) {
-    const phi = (2 * Math.PI * k) / LINK_RING_TUBE_SEGMENTS;
+  for (let k = 0; k < tubeSegments; k += 1) {
+    const phi = (2 * Math.PI * k) / tubeSegments;
     pts.push([centre + tube * Math.cos(phi), tube * Math.sin(phi)]);
   }
   let ring: Manifold;
   let profile: InstanceType<typeof CrossSection> | null = null;
   try {
     profile = new CrossSection([pts]);
-    ring = profile.revolve(LINK_BLADE_SEGMENTS);
+    ring = profile.revolve(RES.linkBladeSegments);
   } finally {
     if (profile) profile.delete();
   }
@@ -3270,12 +3863,16 @@ function buildLinkRingEnvelope(
   const tube = geometry.bladeThicknessMm / 2;
   const centre = geometry.bladeReachMm - tube;
   const sway = 2 * (geometry.bladeReachMm + clearanceMm) * Math.sin(secRad / 2);
-  const fat =
-    (tube + clearanceMm + sway) / Math.cos(Math.PI / LINK_RING_TUBE_SEGMENTS);
-  const radialInflate = 1 / Math.cos(Math.PI / LINK_BLADE_SEGMENTS);
+  // BOTH facet corrections read the SAME counts the profile below is built and
+  // revolved with, so a coarser preview profile inflates further and the
+  // envelope stays a superset of the swept ring at either quality.
+  const tubeSegments = RES.linkRingTubeSegments;
+  const revolveSegments = RES.linkBladeSegments;
+  const fat = (tube + clearanceMm + sway) / Math.cos(Math.PI / tubeSegments);
+  const radialInflate = 1 / Math.cos(Math.PI / revolveSegments);
   const pts: [number, number][] = [];
-  for (let k = 0; k < LINK_RING_TUBE_SEGMENTS; k += 1) {
-    const phi = (2 * Math.PI * k) / LINK_RING_TUBE_SEGMENTS;
+  for (let k = 0; k < tubeSegments; k += 1) {
+    const phi = (2 * Math.PI * k) / tubeSegments;
     pts.push([
       Math.max(0.01, (centre + fat * Math.cos(phi)) * radialInflate),
       fat * Math.sin(phi),
@@ -3285,7 +3882,7 @@ function buildLinkRingEnvelope(
   let profile: InstanceType<typeof CrossSection> | null = null;
   try {
     profile = new CrossSection([pts]);
-    envelope = profile.revolve(LINK_BLADE_SEGMENTS);
+    envelope = profile.revolve(revolveSegments);
   } finally {
     if (profile) profile.delete();
   }
@@ -3325,7 +3922,8 @@ function buildLinkRingEnvelope(
 // a revolve facet carries the axial half-height of a NOMINAL radius ρ/cos θ ≥ ρ,
 // so the faceted cutter over-cuts and can only add clearance. The only
 // inscription risk is the outer radius, already covered by
-// `LINK_KERF_OUT_FACTOR = 1.15 ≥ 1/cos(π/64)`.
+// `LINK_KERF_OUT_FACTOR = 1.15 ≥ 1/cos(π/N)` at every profile's N (1.0012 at
+// the final 64, 1.0021 at the preview 48).
 function buildLinkCutter(
   wasm: ManifoldToplevel,
   seam: LinkSeamProfile,
@@ -3353,7 +3951,7 @@ function buildLinkCutter(
       floor,
       outer,
       outer,
-      LINK_KERF_SEGMENTS,
+      RES.linkKerfSegments,
       true,
     );
   } else {
@@ -3368,7 +3966,7 @@ function buildLinkCutter(
     let section: InstanceType<typeof CrossSection> | null = null;
     try {
       section = new CrossSection([pts]);
-      kerf = section.revolve(LINK_KERF_SEGMENTS);
+      kerf = section.revolve(RES.linkKerfSegments);
     } finally {
       if (section) section.delete();
     }
@@ -3389,7 +3987,7 @@ function buildLinkCutter(
   tailHalf.delete();
   const parts: Manifold[] = [kerf, hoopRelief, ringRelief];
   if (pocketRadiusMm > 0) {
-    parts.push(ManifoldClass.sphere(pocketRadiusMm, LINK_RING_TUBE_SEGMENTS));
+    parts.push(ManifoldClass.sphere(pocketRadiusMm, RES.linkRingTubeSegments));
   }
   const cutter = ManifoldClass.union(parts);
   for (const part of parts) part.delete();
@@ -3891,7 +4489,7 @@ function buildShellCutter(
   const { CrossSection } = wasm;
   const revolve = (poly: number[][]): Manifold => {
     const section = new CrossSection(poly as [number, number][]);
-    const solid = section.revolve(SHELL_REVOLVE_SEGMENTS);
+    const solid = section.revolve(RES.shellRevolveSegments);
     section.delete();
     return solid;
   };
@@ -4379,7 +4977,7 @@ function makeSphere(
   center: [number, number, number],
   radius: number,
 ): Manifold {
-  const sphere = keep(wasm.Manifold.sphere(radius, SPHERE_SEGMENTS));
+  const sphere = keep(wasm.Manifold.sphere(radius, RES.sphereSegments));
   return keep(sphere.translate(center as Vec3));
 }
 
@@ -4443,13 +5041,57 @@ function weldMesh(
 
 // --- Nearest-colour spatial grid ------------------------------------------
 
-type ColorGrid = { nearest: (x: number, y: number, z: number) => Vec3 };
+type ColorGrid = {
+  /** Colour of the nearest input vertex. */
+  nearest: (x: number, y: number, z: number) => Vec3;
+  /** The same lookup, written straight into `out` — no array per vertex. */
+  fillNearest: (
+    x: number,
+    y: number,
+    z: number,
+    out: Float32Array,
+    at: number,
+  ) => void;
+};
+
+// Cell coordinates are packed into ONE number instead of a `${cx},${cy},${cz}`
+// string: at 100k+ output vertices the string keys were the dominant cost of
+// the colour pass (a fresh string per bucket probe, and up to 27 probes per
+// vertex).
+//
+// Inserted vertices land in 0…64 on every axis by construction (`cell` is
+// diag/64, and no extent exceeds the diagonal), and `nearest` only ever probes
+// ±64 cells around its query, so a query further than CELL_KEY_LIMIT cells from
+// the origin cannot reach a populated bucket at any packing. Clamping to that
+// range is therefore invisible to the result, and it bounds the key at
+// 3 × 17 bits ≈ 2.3e15 — comfortably inside Number.MAX_SAFE_INTEGER, so two
+// distinct in-range cells can never collide.
+const CELL_KEY_LIMIT = 1 << 16;
+const CELL_KEY_BASE = 1 << 17;
+
+function packCellKey(cx: number, cy: number, cz: number): number {
+  const bx = Math.min(CELL_KEY_LIMIT - 1, Math.max(-CELL_KEY_LIMIT, cx));
+  const by = Math.min(CELL_KEY_LIMIT - 1, Math.max(-CELL_KEY_LIMIT, cy));
+  const bz = Math.min(CELL_KEY_LIMIT - 1, Math.max(-CELL_KEY_LIMIT, cz));
+  return (
+    ((bx + CELL_KEY_LIMIT) * CELL_KEY_BASE + (by + CELL_KEY_LIMIT)) *
+      CELL_KEY_BASE +
+    (bz + CELL_KEY_LIMIT)
+  );
+}
 
 function buildColorGrid(meshInput: FlexiMeshInput): ColorGrid {
   const { positions, colors } = meshInput;
   const vertexCount = Math.floor(positions.length / 3);
   if (vertexCount === 0) {
-    return { nearest: () => [1, 1, 1] };
+    return {
+      nearest: () => [1, 1, 1],
+      fillNearest: (_x, _y, _z, out, at) => {
+        out[at] = 1;
+        out[at + 1] = 1;
+        out[at + 2] = 1;
+      },
+    };
   }
 
   let minX = Infinity;
@@ -4475,30 +5117,23 @@ function buildColorGrid(meshInput: FlexiMeshInput): ColorGrid {
   const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
   const cell = Math.max(diag / 64, 1e-3);
 
-  const grid = new Map<string, number[]>();
-  const cellOf = (
-    x: number,
-    y: number,
-    z: number,
-  ): [number, number, number] => [
-    Math.floor((x - minX) / cell),
-    Math.floor((y - minY) / cell),
-    Math.floor((z - minZ) / cell),
-  ];
+  const grid = new Map<number, number[]>();
   for (let v = 0; v < vertexCount; v += 1) {
-    const [cx, cy, cz] = cellOf(
-      positions[v * 3],
-      positions[v * 3 + 1],
-      positions[v * 3 + 2],
+    const key = packCellKey(
+      Math.floor((positions[v * 3] - minX) / cell),
+      Math.floor((positions[v * 3 + 1] - minY) / cell),
+      Math.floor((positions[v * 3 + 2] - minZ) / cell),
     );
-    const key = `${cx},${cy},${cz}`;
     const bucket = grid.get(key);
     if (bucket) bucket.push(v);
     else grid.set(key, [v]);
   }
 
-  const nearest = (x: number, y: number, z: number): Vec3 => {
-    const [cx, cy, cz] = cellOf(x, y, z);
+  /** Index of the nearest input vertex, or -1 when the grid holds nothing near. */
+  const nearestIndex = (x: number, y: number, z: number): number => {
+    const cx = Math.floor((x - minX) / cell);
+    const cy = Math.floor((y - minY) / cell);
+    const cz = Math.floor((z - minZ) / cell);
     let best = -1;
     let bestDistance = Infinity;
     for (let radius = 0; radius <= 64; radius += 1) {
@@ -4514,7 +5149,7 @@ function buildColorGrid(meshInput: FlexiMeshInput): ColorGrid {
             ) {
               continue;
             }
-            const bucket = grid.get(`${cx + ox},${cy + oy},${cz + oz}`);
+            const bucket = grid.get(packCellKey(cx + ox, cy + oy, cz + oz));
             if (!bucket) continue;
             for (const v of bucket) {
               const ddx = positions[v * 3] - x;
@@ -4532,11 +5167,28 @@ function buildColorGrid(meshInput: FlexiMeshInput): ColorGrid {
       // Once a candidate is found, one more shell guarantees correctness.
       if (best >= 0 && radius >= 1) break;
     }
-    if (best < 0) return [1, 1, 1];
-    return [colors[best * 3], colors[best * 3 + 1], colors[best * 3 + 2]];
+    return best;
   };
 
-  return { nearest };
+  return {
+    nearest: (x, y, z) => {
+      const best = nearestIndex(x, y, z);
+      if (best < 0) return [1, 1, 1];
+      return [colors[best * 3], colors[best * 3 + 1], colors[best * 3 + 2]];
+    },
+    fillNearest: (x, y, z, out, at) => {
+      const best = nearestIndex(x, y, z);
+      if (best < 0) {
+        out[at] = 1;
+        out[at + 1] = 1;
+        out[at + 2] = 1;
+        return;
+      }
+      out[at] = colors[best * 3];
+      out[at + 1] = colors[best * 3 + 1];
+      out[at + 2] = colors[best * 3 + 2];
+    },
+  };
 }
 
 // --- ITK repair (dynamic import, node + browser) --------------------------

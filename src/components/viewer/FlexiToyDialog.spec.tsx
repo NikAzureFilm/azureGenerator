@@ -74,6 +74,19 @@ class PointerEventStub extends window.MouseEvent {
 globalThis.PointerEvent =
   globalThis.PointerEvent ??
   (PointerEventStub as unknown as typeof PointerEvent);
+// jsdom implements none of the pointer-capture methods. Our Slider calls two of
+// them (press captures, release frees) and Radix's own track handler asks
+// `hasPointerCapture`, so without these a scrub throws before it can report
+// itself.
+if (!Element.prototype.setPointerCapture) {
+  Element.prototype.setPointerCapture = () => {};
+}
+if (!Element.prototype.releasePointerCapture) {
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+}
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
     matches: false,
@@ -186,6 +199,40 @@ function stubTrackRect(handle: HTMLElement): void {
     }) as DOMRect;
 }
 
+/**
+ * The TRACK of a settings slider. `getByRole('slider')` finds Radix's hidden
+ * thumb, but our Slider hangs its pointer handlers on the Track, so that is the
+ * element a scrub has to be fired on. The slider is identified by its
+ * accessible name (a test id would have to be repeated across half a dozen
+ * structurally identical sliders), then: every Radix slider part carries
+ * `data-orientation`, and the thumb sits inside an unmarked positioning
+ * wrapper — so climbing from that wrapper lands on the Root, whose only direct
+ * `data-orientation` child is the Track.
+ */
+function settingsSliderTrack(name: string): HTMLElement {
+  const thumb = screen.getByRole('slider', { name });
+  const root = thumb.parentElement?.closest('[data-orientation]');
+  const track = root?.querySelector(':scope > [data-orientation]');
+  if (!(track instanceof HTMLElement)) {
+    throw new Error(`could not find the track of the "${name}" slider`);
+  }
+  // jsdom gives every element a zero-sized rect, so a press would map to the
+  // slider's minimum; a real width lets the press land where it was aimed.
+  track.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: TRACK_WIDTH,
+      bottom: 28,
+      width: TRACK_WIDTH,
+      height: 28,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return track;
+}
+
 /** Press, move past the drag threshold to `fraction`, release. */
 function dragHandleTo(index: number, fraction: number): void {
   const handle = jointHandle(index);
@@ -271,6 +318,9 @@ describe('FlexiToyDialog', () => {
         jointScale: 1,
         axisOverride: 'auto',
       }),
+      // What the dialog shows is the cheap build; only downloads ask for the
+      // exact one.
+      'preview',
     );
     // Even spacing on open: no pinned stations are sent.
     const settingsArg = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
@@ -408,6 +458,46 @@ describe('FlexiToyDialog', () => {
     expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).not.toHaveProperty(
       'linkThicknessScale',
     );
+  });
+
+  // Compute on release. A drag crosses dozens of values and each debounce pause
+  // inside it used to start a full build that the next pause threw away, so the
+  // dialog now waits for the pointer to lift — while still following the value
+  // live, which is what makes the wait invisible.
+  it('does not recompute while a slider is being scrubbed', async () => {
+    renderDialog();
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    // The Slider applies pointer values inside a rAF; running it synchronously
+    // keeps the test about the gate rather than about frame timing.
+    const raf = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback: FrameRequestCallback) => {
+        callback(0);
+        return 0;
+      });
+
+    try {
+      const track = settingsSliderTrack('Joint size');
+      fireEvent.pointerDown(track, { pointerId: 1, clientX: TRACK_WIDTH });
+      await settle();
+
+      // The read-out follows the pointer (0.6…1.4× range, pressed at the end)…
+      expect(screen.getByText('1.40×')).toBeInTheDocument();
+      // …but nothing is built while the pointer is still down.
+      expect(computeFlexiToy).not.toHaveBeenCalled();
+
+      fireEvent.pointerUp(track, { pointerId: 1, clientX: TRACK_WIDTH });
+      await settle();
+
+      expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+      expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
+        expect.objectContaining({ jointScale: 1.4 }),
+      );
+    } finally {
+      raf.mockRestore();
+    }
   });
 
   it('collapses rapid setting changes into a single compute after the debounce', async () => {
@@ -587,6 +677,44 @@ describe('FlexiToyDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: '.STL' }));
     await settle();
     expect(flexiResultToStlBlob).toHaveBeenCalledWith(fakeResult);
+  });
+
+  // The preview on screen is built at 'preview' quality (simplified body), so a
+  // download has to re-run the same settings at 'final' and export THAT — the
+  // file is the thing that gets printed.
+  it('downloads a full-quality build', async () => {
+    renderDialog();
+    await settle();
+
+    // A distinct object so "which result was exported" is unambiguous.
+    const finalResult: FlexiToyResult = { ...fakeResult, lengthMm: 149 };
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: finalResult,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '.STL' }));
+    await settle();
+
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[2]).toBe('final');
+    expect(flexiResultToStlBlob).toHaveBeenCalledWith(finalResult);
+    expect(flexiResultToStlBlob).not.toHaveBeenCalledWith(fakeResult);
+
+    // A final build the user supersedes by changing a setting mid-build must
+    // NOT fall back to exporting the on-screen preview — the file would not
+    // match what they are looking at. (The preset click also moves the settings
+    // key, so the cached final result above cannot answer the second click.)
+    (computeFlexiToy as Mock).mockResolvedValue({ status: 'superseded' });
+    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
+    await settle();
+    (flexiResultToThreeMfBlob as Mock).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '.3MF' }));
+    await settle();
+
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[2]).toBe('final');
+    expect(flexiResultToThreeMfBlob).not.toHaveBeenCalled();
   });
 
   it('disables downloads when a later compute errors over a previous result', async () => {

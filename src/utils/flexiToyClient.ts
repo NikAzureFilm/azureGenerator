@@ -4,8 +4,16 @@
  *   sceneToFlexiMeshInput(scene) — three.js scene → transferable typed arrays
  *     (world-space, welded, per-vertex colours baked from material / vertex
  *     colour / albedo texture).
- *   computeFlexiToy(input, settings) — latest-wins worker call. A newer call
- *     supersedes an in-flight one; the superseded promise resolves 'superseded'.
+ *   computeFlexiToy(input, settings, quality) — latest-wins worker call. A newer
+ *     call supersedes an in-flight one; the superseded promise resolves
+ *     'superseded'. `quality` is 'preview' (what the dialog shows while you
+ *     adjust) or 'final' (the exact build downloads are made from).
+ *
+ * A mesh is REGISTERED with the worker the first time it is computed and is
+ * referred to by id afterwards, so only the first call pays the megabyte
+ * structured clone and every slider tweak posts a few hundred bytes of
+ * settings. The registration is a plain clone, never a transfer: the main
+ * thread keeps its own copy for later computes and for the exporters.
  *
  * Multi-body inputs are NOT strut-fused here: welding by position already unifies
  * a single intended body split across meshes/materials, and genuinely disjoint
@@ -20,6 +28,7 @@
 
 import * as THREE from 'three';
 import type {
+  FlexiBuildQuality,
   FlexiMeshInput,
   FlexiToySettings,
   FlexiToyOutcome,
@@ -236,29 +245,43 @@ function createTextureSampler(
   };
 }
 
-// --- Worker lifecycle (latest-wins + back-pressure) -----------------------
+// --- Worker lifecycle (register-once, latest-wins + back-pressure) --------
 //
 // At most one compute message is ever outstanding in the worker. A call made
-// while one is running does NOT post another ~14MB structured clone; it stashes
-// the newest {input, settings} and is posted only once the running request's
-// response returns. Latest-wins is unchanged: every superseded call — the older
-// stash and the previous latest — resolves `{ status: 'superseded' }`, and only
-// the most recent call resolves with a real outcome.
+// while one is running stashes the newest {meshId, settings, quality} and is
+// posted only once the running request's response returns — and it asks the
+// worker to abandon that running build at its next checkpoint, so the machine
+// is not spent finishing a toy nobody will see. Latest-wins is unchanged: every
+// superseded call — the older stash and the previous latest — resolves
+// `{ status: 'superseded' }`, and only the most recent call resolves with a
+// real outcome.
+//
+// The mesh itself is never re-sent: `registeredMeshIds` remembers which inputs
+// the live worker already holds. It is tied to the worker instance (rebuilt
+// whenever the worker is), because ids only mean anything to the worker that
+// received the matching register.
 
 let worker: Worker | null = null;
 let nextRequestId = 1;
+let nextMeshId = 1;
+let registeredMeshIds = new WeakMap<FlexiMeshInput, number>();
 // Request id currently posted to (and running in) the worker.
 let inFlightRequestId: number | null = null;
+// The in-flight id we have already asked the worker to abandon, so a burst of
+// calls posts one cancel rather than one per call.
+let cancelledRequestId: number | null = null;
 // The most recent call's id + resolver; the only one that receives a real result.
 let latest: {
   requestId: number;
   resolve: (outcome: FlexiToyOutcome) => void;
 } | null = null;
-// A newer call waiting for the worker to free up (its data, not yet cloned).
+// A newer call waiting for the worker to free up. It holds no mesh — the worker
+// already has it — so stashing is free.
 let queued: {
   requestId: number;
-  input: FlexiMeshInput;
+  meshId: number;
   settings: FlexiToySettings;
+  quality: FlexiBuildQuality;
 } | null = null;
 
 function getWorker(): Worker | null {
@@ -270,6 +293,8 @@ function getWorker(): Worker | null {
         type: 'module',
       },
     );
+    // A fresh worker holds no registrations, so the id map starts empty too.
+    registeredMeshIds = new WeakMap<FlexiMeshInput, number>();
     worker.addEventListener(
       'message',
       (event: MessageEvent<FlexiWorkerResponse>) => {
@@ -277,6 +302,7 @@ function getWorker(): Worker | null {
         if (!data || data.type !== 'result') return;
         if (data.requestId === inFlightRequestId) {
           inFlightRequestId = null;
+          cancelledRequestId = null;
         }
         // Only the current latest request receives a real result; responses to
         // already-superseded requests are dropped.
@@ -287,7 +313,12 @@ function getWorker(): Worker | null {
         }
         // Worker is free now; post the newest queued request if there is one.
         if (queued && inFlightRequestId === null) {
-          postToWorker(queued.requestId, queued.input, queued.settings);
+          postToWorker(
+            queued.requestId,
+            queued.meshId,
+            queued.settings,
+            queued.quality,
+          );
           queued = null;
         }
       },
@@ -296,17 +327,41 @@ function getWorker(): Worker | null {
   return worker;
 }
 
+/**
+ * The worker's id for this mesh, registering it (one structured clone) the
+ * first time we see it. Posted immediately, so it is always ahead of the
+ * compute that names it — the worker processes registers and computes on one
+ * serial queue.
+ */
+function ensureRegisteredMesh(
+  activeWorker: Worker,
+  input: FlexiMeshInput,
+): number {
+  const known = registeredMeshIds.get(input);
+  if (known !== undefined) return known;
+
+  const meshId = nextMeshId++;
+  registeredMeshIds.set(input, meshId);
+  const request: FlexiWorkerRequest = { type: 'register', meshId, input };
+  // Deliberately NOT transferred: the main thread keeps its copy for later
+  // computes (and for the download path) — a transfer would detach it here.
+  activeWorker.postMessage(request);
+  return meshId;
+}
+
 function postToWorker(
   requestId: number,
-  input: FlexiMeshInput,
+  meshId: number,
   settings: FlexiToySettings,
+  quality: FlexiBuildQuality,
 ): void {
   inFlightRequestId = requestId;
   const request: FlexiWorkerRequest = {
     type: 'compute',
     requestId,
-    input,
+    meshId,
     settings,
+    quality,
   };
   worker?.postMessage(request);
 }
@@ -314,10 +369,12 @@ function postToWorker(
 /**
  * Compute a flexi toy for the given input + settings. Latest-wins: a newer call
  * supersedes any in-flight one, whose promise resolves `{ status: 'superseded' }`.
+ * `quality` defaults to 'preview'; downloads pass 'final'.
  */
 export function computeFlexiToy(
   input: FlexiMeshInput,
   settings: FlexiToySettings,
+  quality: FlexiBuildQuality = 'preview',
 ): Promise<FlexiToyOutcome> {
   const activeWorker = getWorker();
   if (!activeWorker) {
@@ -337,14 +394,24 @@ export function computeFlexiToy(
   // Drop any older queued request in favour of this newer one.
   queued = null;
 
+  const meshId = ensureRegisteredMesh(activeWorker, input);
   const requestId = nextRequestId++;
   return new Promise<FlexiToyOutcome>((resolve) => {
     latest = { requestId, resolve };
     if (inFlightRequestId === null) {
-      postToWorker(requestId, input, settings);
+      postToWorker(requestId, meshId, settings, quality);
     } else {
       // Worker busy: stash; posted when the running response returns.
-      queued = { requestId, input, settings };
+      queued = { requestId, meshId, settings, quality };
+      // ...and stop the running build, which nobody is waiting on any more.
+      if (cancelledRequestId !== inFlightRequestId) {
+        cancelledRequestId = inFlightRequestId;
+        const cancel: FlexiWorkerRequest = {
+          type: 'cancel',
+          requestId: inFlightRequestId,
+        };
+        activeWorker.postMessage(cancel);
+      }
     }
   });
 }
