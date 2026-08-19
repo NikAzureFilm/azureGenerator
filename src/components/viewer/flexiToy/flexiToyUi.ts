@@ -6,6 +6,7 @@
  */
 import {
   FLEXI_CLEARANCE_PRESETS,
+  FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
   FLEXI_MAX_LENGTH_MM,
   type FlexiAxisOverride,
   type FlexiClearancePreset,
@@ -84,6 +85,8 @@ export type FlexiStyleDefaults = {
   targetLengthMm: number;
   jointScale: number;
   bendAngleDeg: number;
+  /** Link only: multiplier on the loops' rod thickness. */
+  linkThicknessScale: number;
   axisOverride: FlexiAxisOverride;
   jointPositions: number[] | null;
   showOriginalColors: boolean;
@@ -115,6 +118,7 @@ export const LINK_DEFAULTS: FlexiStyleDefaults = {
   targetLengthMm: FLEXI_MAX_LENGTH_MM,
   jointScale: 1,
   bendAngleDeg: 8,
+  linkThicknessScale: FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
   axisOverride: 'auto',
   jointPositions: null,
   showOriginalColors: true,

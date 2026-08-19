@@ -374,6 +374,42 @@ describe('FlexiToyDialog', () => {
     );
   });
 
+  // The Link thickness slider is a Link-only control: it must ship in Link's
+  // settings (default 1×), leave the other styles' settings untouched (their
+  // cache keys and worker requests are unchanged), and drive a recompute.
+  it('offers a Link-only thickness slider that flows into the settings', async () => {
+    renderDialog();
+    await settle();
+
+    // Link is the default style, so the control is present from the start and
+    // the first compute already carries the default multiplier.
+    const thicknessSlider = screen.getByRole('slider', {
+      name: 'Link thickness',
+    });
+    expect(thicknessSlider).toHaveAttribute('aria-valuenow', '1');
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ jointStyle: 'link', linkThicknessScale: 1 }),
+    );
+
+    (computeFlexiToy as Mock).mockClear();
+    fireEvent.keyDown(thicknessSlider, { key: 'End' });
+    await settle();
+
+    expect(thicknessSlider).toHaveAttribute('aria-valuenow', '1.6');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ jointStyle: 'link', linkThicknessScale: 1.6 }),
+    );
+
+    // Other styles neither show the control nor send the field.
+    fireEvent.click(screen.getByRole('radio', { name: /Strong/ }));
+    await settle();
+    expect(screen.queryByRole('slider', { name: 'Link thickness' })).toBeNull();
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).not.toHaveProperty(
+      'linkThicknessScale',
+    );
+  });
+
   it('collapses rapid setting changes into a single compute after the debounce', async () => {
     renderDialog();
     await settle();

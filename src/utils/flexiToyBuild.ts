@@ -43,6 +43,7 @@ import {
   STRONG_SPHERE_INFLATION,
   strongCavityHalfWidthAt,
   solveLinkJointGeometry,
+  resolveLinkThicknessScale,
   solveLinkSeam,
   linkHoopPolyline,
   linkHoopOuterMm,
@@ -263,6 +264,7 @@ export async function buildFlexiToy(
             meshInput,
             clearance,
             settings.bendAngleDeg,
+            resolveLinkThicknessScale(settings),
             notes,
           );
           if (grouped === 'uncut') {
@@ -2524,6 +2526,7 @@ function buildLinkSegments(
   meshInput: FlexiMeshInput,
   clearance: number,
   bendAngleDeg: number,
+  linkThicknessScale: number,
   notes: FlexiLinkNotes,
 ): Manifold[][] | 'uncut' | null {
   let cut = body;
@@ -2550,6 +2553,7 @@ function buildLinkSegments(
       joint.ballRadiusMm,
       clearance,
       bendAngleDeg,
+      linkThicknessScale,
     );
 
     // TWO band passes, and they do different jobs.
@@ -2645,6 +2649,7 @@ function buildLinkSegments(
         other.ballRadiusMm,
         clearance,
         bendAngleDeg,
+        linkThicknessScale,
       );
       const rhoNb = measure(distance + 2).maxMm;
       if (side > 0) headNbRho = rhoNb;

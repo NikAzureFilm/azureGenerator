@@ -25,11 +25,13 @@ import {
   FLEXI_MAX_JOINT_SCALE,
   FLEXI_MAX_LENGTH_MM,
   FLEXI_MAX_LINK_BEND_DEG,
+  FLEXI_MAX_LINK_THICKNESS_SCALE,
   FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_BEND_DEG,
   FLEXI_MIN_CLEARANCE_MM,
   FLEXI_MIN_JOINT_SCALE,
   FLEXI_MIN_LENGTH_MM,
+  FLEXI_MIN_LINK_THICKNESS_SCALE,
   FLEXI_MIN_SEGMENTS,
   type FlexiAxisOverride,
   type FlexiClearancePreset,
@@ -111,6 +113,9 @@ export function FlexiToyDialog({
   );
   const [jointScale, setJointScale] = useState(LINK_DEFAULTS.jointScale);
   const [bendAngleDeg, setBendAngleDeg] = useState(LINK_DEFAULTS.bendAngleDeg);
+  const [linkThicknessScale, setLinkThicknessScale] = useState(
+    LINK_DEFAULTS.linkThicknessScale,
+  );
   const [jointStyle, setJointStyle] =
     useState<FlexiUiJointStyle>(DEFAULT_JOINT_STYLE);
   const [axisOverride, setAxisOverride] = useState<FlexiAxisOverride>(
@@ -188,6 +193,12 @@ export function FlexiToyDialog({
       jointStyle,
       bendAngleDeg,
     };
+    // Link is the only style that reads the loop thickness; leaving it off the
+    // other styles' settings keeps their result-cache keys and worker requests
+    // exactly as they were.
+    if (jointStyle === 'link') {
+      base.linkThicknessScale = linkThicknessScale;
+    }
     // Only send dragged stations once the count is pinned to a number, per the
     // contract (jointPositions length must equal segmentCount − 1).
     if (jointPositions && segmentMode === 'custom') {
@@ -203,10 +214,11 @@ export function FlexiToyDialog({
     axisOverride,
     jointStyle,
     bendAngleDeg,
+    linkThicknessScale,
     jointPositions,
   ]);
 
-  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}|${settings.jointStyle}|${settings.bendAngleDeg}|${
+  const settingsKey = `${settings.segmentCount}|${settings.clearanceMm}|${settings.targetLengthMm}|${settings.jointScale}|${settings.axisOverride}|${settings.jointStyle}|${settings.bendAngleDeg}|${settings.linkThicknessScale ?? ''}|${
     settings.jointPositions
       ? settings.jointPositions.map((f) => f.toFixed(3)).join(',')
       : ''
@@ -238,6 +250,7 @@ export function FlexiToyDialog({
     setTargetLengthMm(LINK_DEFAULTS.targetLengthMm);
     setJointScale(LINK_DEFAULTS.jointScale);
     setBendAngleDeg(LINK_DEFAULTS.bendAngleDeg);
+    setLinkThicknessScale(LINK_DEFAULTS.linkThicknessScale);
     setJointStyle(DEFAULT_JOINT_STYLE);
     setAxisOverride(LINK_DEFAULTS.axisOverride);
     setJointPositions(LINK_DEFAULTS.jointPositions);
@@ -814,6 +827,32 @@ export function FlexiToyDialog({
                 Chunkier or slimmer joints.
               </p>
             </div>
+
+            {jointStyle === 'link' && (
+              <div>
+                <ControlLabel
+                  label="Link thickness"
+                  value={`${linkThicknessScale.toFixed(2)}×`}
+                />
+                <Slider
+                  aria-label="Link thickness"
+                  className="h-11 sm:h-8"
+                  value={[linkThicknessScale]}
+                  min={FLEXI_MIN_LINK_THICKNESS_SCALE}
+                  max={FLEXI_MAX_LINK_THICKNESS_SCALE}
+                  step={0.05}
+                  defaultValue={[LINK_DEFAULTS.linkThicknessScale]}
+                  onValueChange={([value]) =>
+                    setLinkThicknessScale(Number(value.toFixed(2)))
+                  }
+                />
+                <p className="mt-1 text-xs text-adam-text-secondary/80">
+                  Thicker or thinner chain loops. Thicker loops are sturdier but
+                  need more room, so a joint that runs out of space falls back
+                  and tells you.
+                </p>
+              </div>
+            )}
 
             <div>
               <ControlLabel label="Flexibility" value={`${bendAngleDeg}°`} />
