@@ -431,6 +431,39 @@ describe('FlexiToyDialog', () => {
     expect(computeFlexiToy).toHaveBeenCalledTimes(1);
   });
 
+  // The slicer-style layer view. It is a preview-only control (no recompute,
+  // no settings change): scrubbing it must update the mm / layer read-out from
+  // the result's print height and switch the body to the double-sided,
+  // clipped draw; fully raised it must cost nothing (single-sided, no planes).
+  it('scrubs a layer view over the print height without recomputing', async () => {
+    renderDialog();
+    await settle();
+    (computeFlexiToy as Mock).mockClear();
+
+    // fakeResult's tallest vertex is at y = 10 → 10.0 mm, 50 nominal layers.
+    const slider = screen.getByRole('slider', { name: 'Layer view' });
+    expect(slider).toHaveAttribute('aria-valuenow', '1');
+    expect(screen.getByText('10.0')).toBeInTheDocument();
+    expect(screen.getByText('50/50')).toBeInTheDocument();
+    // Whole model shown → the plain single-sided draw, no clip planes.
+    expect(
+      document.querySelector('meshstandardmaterial[side="0"]'),
+    ).not.toBeNull();
+
+    fireEvent.keyDown(slider, { key: 'Home' });
+    await settle();
+    expect(slider).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByText('0.0')).toBeInTheDocument();
+    expect(screen.getByText('0/50')).toBeInTheDocument();
+    // Cut open → double-sided so the interior reads as solid through the slice.
+    expect(
+      document.querySelector('meshstandardmaterial[side="2"]'),
+    ).not.toBeNull();
+
+    // Preview-only: the layer view never triggers a compute.
+    expect(computeFlexiToy).not.toHaveBeenCalled();
+  });
+
   it('renders one cut ring and one strip handle per joint in the plan', async () => {
     renderDialog();
     await settle();

@@ -9,6 +9,11 @@
  *     survive every recompute.
  *  3. Nothing but a real visual change costs a frame — `frameloop="demand"`
  *     plus explicit `invalidate()` calls.
+ *  4. The slicer-style layer view is a GPU CLIPPING PLANE, not a geometry
+ *     operation: scrubbing it changes one plane constant and requests a frame,
+ *     so it costs nothing on the CPU however large the mesh is. While the model
+ *     is clipped the body renders double-sided so the joint internals (balls,
+ *     sockets, hoops, rings) read as solid surfaces through the cut.
  */
 import {
   memo,
@@ -90,7 +95,12 @@ const ORBIT_MOUSE_BUTTONS = {
   RIGHT: THREE.MOUSE.PAN,
 };
 
-function requestFirstFrame(state: { invalidate: () => void }) {
+function requestFirstFrame(state: {
+  invalidate: () => void;
+  gl: THREE.WebGLRenderer;
+}) {
+  // Per-material clipping planes are ignored unless the renderer opts in.
+  state.gl.localClippingEnabled = true;
   state.invalidate();
 }
 
@@ -261,11 +271,13 @@ function FlexiCutRings({
   positions,
   highlightIndex,
   dragState,
+  clippingPlanes,
 }: {
   plan: FlexiToyPlan;
   positions: Float32Array;
   highlightIndex: number | null;
   dragState: FlexiDragState;
+  clippingPlanes: THREE.Plane[];
 }) {
   const { fractionToPoint } = useSpineArc(plan.spine);
 
@@ -352,6 +364,7 @@ function FlexiCutRings({
               emissiveIntensity={highlighted ? 0.6 : 0.18}
               roughness={0.35}
               metalness={0.1}
+              clippingPlanes={clippingPlanes}
             />
           </mesh>
         );
@@ -365,11 +378,15 @@ function FlexiScene({
   showOriginalColors,
   highlightIndex,
   dragState,
+  layerFraction,
+  heightMm,
 }: {
   result: FlexiToyResult;
   showOriginalColors: boolean;
   highlightIndex: number | null;
   dragState: FlexiDragState;
+  layerFraction: number;
+  heightMm: number;
 }) {
   const invalidate = useThree((state) => state.invalidate);
 
@@ -417,16 +434,51 @@ function FlexiScene({
     invalidate();
   }, [invalidate, highlightIndex, dragState]);
 
+  // Layer view. ONE world-space plane, allocated once and mutated in place:
+  // `n·p + d ≥ 0` is kept, so with n = −Y and d = worldY(h) everything above
+  // the print height `h` is clipped. The result is floor-aligned (min Y = 0)
+  // and the fit only yaws about Y, so world Y = mm·scale + group.y exactly.
+  const clipPlane = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
+    [],
+  );
+  const clipActive = layerFraction < 1;
+  useLayoutEffect(() => {
+    if (!clipActive) return;
+    // Nudge a hair above the exact height so a fully raised slider position
+    // that still rounds below 1 never shaves the top skin.
+    const cutMm = Math.max(0, layerFraction) * heightMm + 1e-3;
+    clipPlane.constant = cutMm * fit.scale + fit.position[1];
+    invalidate();
+  }, [clipActive, layerFraction, heightMm, fit, clipPlane, invalidate]);
+  const clippingPlanes = useMemo(
+    () => (clipActive ? [clipPlane] : []),
+    [clipActive, clipPlane],
+  );
+  useEffect(() => {
+    invalidate();
+  }, [invalidate, clippingPlanes]);
+
   return (
     <group scale={fit.scale} rotation={fit.rotation} position={fit.position}>
       <mesh geometry={geometry}>
-        <meshStandardMaterial vertexColors roughness={0.62} metalness={0.04} />
+        <meshStandardMaterial
+          vertexColors
+          roughness={0.62}
+          metalness={0.04}
+          // Double-sided only while cut open, so the interior surfaces are
+          // lit and visible through the slice; the uncut model keeps the
+          // cheaper single-sided draw.
+          side={clipActive ? THREE.DoubleSide : THREE.FrontSide}
+          clippingPlanes={clippingPlanes}
+        />
       </mesh>
       <FlexiCutRings
         plan={result.plan}
         positions={result.positions}
         highlightIndex={highlightIndex}
         dragState={dragState}
+        clippingPlanes={clippingPlanes}
       />
     </group>
   );
@@ -437,6 +489,11 @@ export type FlexiPreviewCanvasProps = {
   showOriginalColors: boolean;
   highlightIndex: number | null;
   dragState: FlexiDragState;
+  /** Slicer-style layer view: fraction of the print height shown (1 = all). */
+  layerFraction: number;
+  /** Print height of `result` in mm (`flexiPrintHeightMm`), computed once by
+   *  the dialog so the slider read-out and the clip plane share one pass. */
+  heightMm: number;
 };
 
 /**
@@ -448,6 +505,8 @@ export const FlexiPreviewCanvas = memo(function FlexiPreviewCanvas({
   showOriginalColors,
   highlightIndex,
   dragState,
+  layerFraction,
+  heightMm,
 }: FlexiPreviewCanvasProps) {
   return (
     <Canvas
@@ -466,6 +525,8 @@ export const FlexiPreviewCanvas = memo(function FlexiPreviewCanvas({
           showOriginalColors={showOriginalColors}
           highlightIndex={highlightIndex}
           dragState={dragState}
+          layerFraction={layerFraction}
+          heightMm={heightMm}
         />
       ) : null}
       <OrbitControls

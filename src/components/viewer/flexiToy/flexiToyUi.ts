@@ -148,3 +148,33 @@ export const FLEXI_ERROR_COPY: Record<
     body: "We couldn't build the flexi toy this time. Adjust a setting or try again.",
   },
 };
+
+/** Nominal FDM layer height used ONLY for the layer view's "layer N of M". */
+export const FLEXI_NOMINAL_LAYER_MM = 0.2;
+
+/**
+ * Print height (max Y) of a floor-aligned flexi result, in mm. One pass; the
+ * dialog caches it per result and shares it with the layer slider and the
+ * preview's clip plane.
+ */
+export function flexiPrintHeightMm(positions: Float32Array): number {
+  let maxY = 0;
+  for (let i = 1; i < positions.length; i += 3) {
+    if (positions[i] > maxY) maxY = positions[i];
+  }
+  return maxY;
+}
+
+/** Layer-view read-out: shown height in mm and a nominal layer number. */
+export function layerReadout(
+  fraction: number,
+  heightMm: number,
+): { shownMm: number; layer: number; layers: number } {
+  const layers = Math.max(1, Math.round(heightMm / FLEXI_NOMINAL_LAYER_MM));
+  const shownMm = fraction * heightMm;
+  const layer = Math.min(
+    layers,
+    Math.max(fraction > 0 ? 1 : 0, Math.round(fraction * layers)),
+  );
+  return { shownMm, layer, layers };
+}

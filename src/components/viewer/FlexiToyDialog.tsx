@@ -49,6 +49,7 @@ import {
   FlexiPreviewCanvas,
   type FlexiDragState,
 } from './flexiToy/FlexiPreviewCanvas';
+import { FlexiLayerSlider } from './flexiToy/FlexiLayerSlider';
 import { FlexiJointStrip } from './flexiToy/FlexiJointStrip';
 import {
   ControlLabel,
@@ -60,6 +61,7 @@ import {
   CLEARANCE_PRESET_LABELS,
   CLEARANCE_PRESET_ORDER,
   DEFAULT_JOINT_STYLE,
+  flexiPrintHeightMm,
   FLEXI_ERROR_COPY,
   LINK_DEFAULTS,
   clamp,
@@ -132,6 +134,10 @@ export function FlexiToyDialog({
   const [showOriginalColors, setShowOriginalColors] = useState(
     LINK_DEFAULTS.showOriginalColors,
   );
+  // Slicer-style layer view: fraction of the print height shown. 1 = whole
+  // model (no clipping cost at all). Survives recomputes so the user can keep
+  // a cut open while tuning joints; reset when the dialog opens.
+  const [layerFraction, setLayerFraction] = useState(1);
   // Strip interaction state. `dragState` doubles as the live position of the
   // matching 3D ring while a handle is being moved.
   const [hoverJointIndex, setHoverJointIndex] = useState<number | null>(null);
@@ -256,6 +262,7 @@ export function FlexiToyDialog({
     setJointPositions(LINK_DEFAULTS.jointPositions);
     setStationEditToken((token) => token + 1);
     setShowOriginalColors(LINK_DEFAULTS.showOriginalColors);
+    setLayerFraction(1);
     setHoverJointIndex(null);
     setDragState(null);
     setErrorInfo(null);
@@ -505,6 +512,12 @@ export function FlexiToyDialog({
     !result || isComputing || isDownloading !== null || errorInfo !== null;
 
   const hasPreviewResult = Boolean(result) && !errorInfo;
+  // One pass per result, shared by the layer slider's read-out and the
+  // preview's clip plane.
+  const printHeightMm = useMemo(
+    () => (result ? flexiPrintHeightMm(result.positions) : 0),
+    [result],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -552,7 +565,18 @@ export function FlexiToyDialog({
                 showOriginalColors={showOriginalColors}
                 highlightIndex={highlightIndex}
                 dragState={dragState}
+                layerFraction={layerFraction}
+                heightMm={printHeightMm}
               />
+
+              {hasPreviewResult ? (
+                <FlexiLayerSlider
+                  className="absolute bottom-2 right-2 top-2 z-20"
+                  fraction={layerFraction}
+                  heightMm={printHeightMm}
+                  onFractionChange={setLayerFraction}
+                />
+              ) : null}
 
               {hasPreviewResult ? (
                 <label className="absolute left-2 top-2 z-20 flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md bg-adam-neutral-950/70 px-2 py-1 text-xs text-adam-text-secondary backdrop-blur">
