@@ -451,13 +451,27 @@ describe('FlexiToyDialog', () => {
       expect.objectContaining({ jointStyle: 'link', linkThicknessScale: 1.6 }),
     );
 
-    // Other styles neither show the control nor send the field.
+    // The Joint room slider follows the same contract (default 1x, Link-only,
+    // recompute on change).
+    const roomSlider = screen.getByRole('slider', { name: 'Joint room' });
+    expect(roomSlider).toHaveAttribute('aria-valuenow', '1');
+    (computeFlexiToy as Mock).mockClear();
+    fireEvent.keyDown(roomSlider, { key: 'End' });
+    await settle();
+    expect(roomSlider).toHaveAttribute('aria-valuenow', '2');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ jointStyle: 'link', linkRoomScale: 2 }),
+    );
+
+    // Other styles neither show the controls nor send the fields.
     fireEvent.click(screen.getByRole('radio', { name: /Strong/ }));
     await settle();
     expect(screen.queryByRole('slider', { name: 'Link thickness' })).toBeNull();
-    expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).not.toHaveProperty(
-      'linkThicknessScale',
-    );
+    expect(screen.queryByRole('slider', { name: 'Joint room' })).toBeNull();
+    const strongSettings = (computeFlexiToy as Mock).mock.calls.at(-1)?.[1];
+    expect(strongSettings).not.toHaveProperty('linkThicknessScale');
+    expect(strongSettings).not.toHaveProperty('linkRoomScale');
   });
 
   // Compute on release. A drag crosses dozens of values and each debounce pause

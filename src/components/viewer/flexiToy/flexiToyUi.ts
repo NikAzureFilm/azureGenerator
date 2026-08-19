@@ -6,6 +6,7 @@
  */
 import {
   FLEXI_CLEARANCE_PRESETS,
+  FLEXI_DEFAULT_LINK_ROOM_SCALE,
   FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
   FLEXI_MAX_LENGTH_MM,
   type FlexiAxisOverride,
@@ -87,6 +88,8 @@ export type FlexiStyleDefaults = {
   bendAngleDeg: number;
   /** Link only: multiplier on the loops' rod thickness. */
   linkThicknessScale: number;
+  /** Link only: multiplier on the joint's room to move (slack + pocket). */
+  linkRoomScale: number;
   axisOverride: FlexiAxisOverride;
   jointPositions: number[] | null;
   showOriginalColors: boolean;
@@ -119,6 +122,7 @@ export const LINK_DEFAULTS: FlexiStyleDefaults = {
   jointScale: 1,
   bendAngleDeg: 8,
   linkThicknessScale: FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkRoomScale: FLEXI_DEFAULT_LINK_ROOM_SCALE,
   axisOverride: 'auto',
   jointPositions: null,
   showOriginalColors: true,

@@ -24,6 +24,9 @@ import {
   FLEXI_MIN_LINK_THICKNESS_SCALE,
   FLEXI_MAX_LINK_THICKNESS_SCALE,
   FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  FLEXI_MIN_LINK_ROOM_SCALE,
+  FLEXI_MAX_LINK_ROOM_SCALE,
+  FLEXI_DEFAULT_LINK_ROOM_SCALE,
   assertNever,
 } from './flexiToyTypes.ts';
 import type {
@@ -278,6 +281,9 @@ const LINK_RING_SLACK_FRACTION = 0.2;
  * load-bearing for clearance (the swept envelopes are) and it degrades to the
  * plain envelope carve on bodies too thin to host it.
  */
+// Scaled by the user's "Joint room" (`LinkTuning.roomScale`) together with
+// the ring slack; the scaled margin reaches the build through
+// `LinkJointGeometry.pocketRoomMm`.
 const LINK_POCKET_BREATHE_MM = 1.0;
 const LINK_POCKET_EMBED_DEG = 30;
 const LINK_POCKET_TIP_KEEP_MM = 1.5;
@@ -475,24 +481,58 @@ export function scaleFlexiPositions(
 }
 
 /**
- * The Link thickness multiplier a request carries, sanitised ONCE and read the
- * same way by the plan and the build (a stale client without the field, or a
- * non-finite value, plans at the shipped proportion). Both stages must feed
- * `solveLinkJointGeometry` the same number or the plan's containment and
+ * The user-tunable Link knobs, bundled so they thread through the plan and
+ * the build as ONE value: the loops' rod thickness multiplier and the extra
+ * breathing room of the open pocket the loops swing in.
+ */
+export type LinkTuning = {
+  /** Multiplier on both loops' rod diameters (`FlexiToySettings.linkThicknessScale`). */
+  thicknessScale: number;
+  /**
+   * Multiplier on the joint's room to move: the ring-hole slack AND the open
+   * pocket's breathing margin (`FlexiToySettings.linkRoomScale`).
+   */
+  roomScale: number;
+};
+
+export const DEFAULT_LINK_TUNING: LinkTuning = {
+  thicknessScale: FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  roomScale: FLEXI_DEFAULT_LINK_ROOM_SCALE,
+};
+
+/**
+ * The Link tuning a request carries, sanitised ONCE and read the same way by
+ * the plan and the build (a stale client without the fields, or a non-finite
+ * value, plans at the shipped proportions). Both stages must feed
+ * `solveLinkJointGeometry` the same values or the plan's containment and
  * footprint would describe a different mechanism than the one carved.
  */
-export function resolveLinkThicknessScale(
-  settings: Pick<FlexiToySettings, 'linkThicknessScale'>,
-): number {
-  const raw = settings.linkThicknessScale;
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-    return FLEXI_DEFAULT_LINK_THICKNESS_SCALE;
-  }
-  return clamp(
-    raw,
-    FLEXI_MIN_LINK_THICKNESS_SCALE,
-    FLEXI_MAX_LINK_THICKNESS_SCALE,
-  );
+export function resolveLinkTuning(
+  settings: Pick<FlexiToySettings, 'linkThicknessScale' | 'linkRoomScale'>,
+): LinkTuning {
+  const finite = (
+    value: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+  ): number =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? clamp(value, min, max)
+      : fallback;
+  return {
+    thicknessScale: finite(
+      settings.linkThicknessScale,
+      FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+      FLEXI_MIN_LINK_THICKNESS_SCALE,
+      FLEXI_MAX_LINK_THICKNESS_SCALE,
+    ),
+    roomScale: finite(
+      settings.linkRoomScale,
+      FLEXI_DEFAULT_LINK_ROOM_SCALE,
+      FLEXI_MIN_LINK_ROOM_SCALE,
+      FLEXI_MAX_LINK_ROOM_SCALE,
+    ),
+  };
 }
 
 /**
@@ -509,7 +549,7 @@ export function planFlexiToy(
   const bendAngleDeg = settings.bendAngleDeg;
   // Defensive default so a stale client without jointStyle still plans.
   const jointStyle = settings.jointStyle ?? FLEXI_DEFAULT_JOINT_STYLE;
-  const linkThicknessScale = resolveLinkThicknessScale(settings);
+  const linkTuning = resolveLinkTuning(settings);
 
   const axis = computeAxis(input.positions, settings.axisOverride);
   const spine = buildSpine(input.positions, axis);
@@ -531,7 +571,7 @@ export function planFlexiToy(
     jointScale,
     bendAngleDeg,
     jointStyle,
-    linkThicknessScale,
+    linkTuning,
   );
 
   let placed: PlacedJoints;
@@ -548,7 +588,7 @@ export function planFlexiToy(
       jointScale,
       bendAngleDeg,
       jointStyle,
-      linkThicknessScale,
+      linkTuning,
     );
   } else {
     if (settings.jointPositions && settings.jointPositions.length > 0) {
@@ -571,7 +611,7 @@ export function planFlexiToy(
         jointScale,
         bendAngleDeg,
         jointStyle,
-        linkThicknessScale,
+        linkTuning,
       );
       const minSegmentLength = minSegmentLengthFor(
         maxLiveRadius(placed.joints),
@@ -579,7 +619,7 @@ export function planFlexiToy(
         jointStyle,
         bendAngleDeg,
         placed.maxStationExtentMm,
-        linkThicknessScale,
+        linkTuning,
       );
       const pitch = spine.lengthMm / segmentCount;
       if (pitch >= minSegmentLength || segmentCount <= minSegments) {
@@ -611,7 +651,7 @@ export function planFlexiToy(
     jointStyle,
     bendAngleDeg,
     placed.maxStationExtentMm,
-    linkThicknessScale,
+    linkTuning,
   );
   if (joints.length >= 2 && minAdjacentGap < minSegmentLength) {
     const cap = jointOverlapCap(
@@ -620,7 +660,7 @@ export function planFlexiToy(
       clearance,
       jointStyle,
       bendAngleDeg,
-      linkThicknessScale,
+      linkTuning,
     );
     let capped = false;
     joints = joints.map((joint) => {
@@ -741,7 +781,7 @@ export function minSegmentLengthFor(
   jointStyle: FlexiJointStyle,
   bendAngleDeg?: number,
   maxStationExtentMm?: number,
-  linkThicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkTuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): number {
   switch (jointStyle) {
     // The shell's flared seam-lip walls widen the band's reach at the skin;
@@ -806,7 +846,7 @@ export function minSegmentLengthFor(
         clearance,
         bendAngleDeg,
         maxStationExtentMm,
-        linkThicknessScale,
+        linkTuning,
       );
       return footprint === null ? rounded : Math.max(rounded, footprint);
     }
@@ -836,7 +876,7 @@ function resolvePinnedStations(
   jointScale: number,
   bendAngleDeg: number,
   jointStyle: FlexiJointStyle,
-  linkThicknessScale: number,
+  linkTuning: LinkTuning,
 ): { fractions: number[]; adjusted: boolean } | null {
   const requested = settings.jointPositions;
   if (!requested || requested.length === 0) {
@@ -858,7 +898,7 @@ function resolvePinnedStations(
     jointScale,
     bendAngleDeg,
     jointStyle,
-    linkThicknessScale,
+    linkTuning,
   );
 }
 
@@ -872,7 +912,7 @@ function sanitizeStations(
   jointScale: number,
   bendAngleDeg: number,
   jointStyle: FlexiJointStyle,
-  linkThicknessScale: number,
+  linkTuning: LinkTuning,
 ): { fractions: number[]; adjusted: boolean } {
   const sortedOriginal = requested.slice().sort((a, b) => a - b);
   const clamped = sortedOriginal.map((fraction) =>
@@ -888,7 +928,7 @@ function sanitizeStations(
     jointScale,
     bendAngleDeg,
     jointStyle,
-    linkThicknessScale,
+    linkTuning,
   );
   const minGapMm = minSegmentLengthFor(
     maxLiveRadius(probe.joints),
@@ -896,7 +936,7 @@ function sanitizeStations(
     jointStyle,
     bendAngleDeg,
     probe.maxStationExtentMm,
-    linkThicknessScale,
+    linkTuning,
   );
   const minGapFraction = spine.lengthMm > 0 ? minGapMm / spine.lengthMm : 0.02;
   const fractions = spreadFractions(clamped, minGapFraction);
@@ -1247,7 +1287,7 @@ function placeAndSizeJoints(
   jointScale: number,
   bendAngleDeg: number,
   jointStyle: FlexiJointStyle,
-  linkThicknessScale: number,
+  linkTuning: LinkTuning,
 ): PlacedJoints {
   const joints: FlexiJointPlan[] = [];
   let anyLiveTooVertical = false;
@@ -1268,7 +1308,7 @@ function placeAndSizeJoints(
       fraction,
       jointStyle,
       stationOut,
-      linkThicknessScale,
+      linkTuning,
     );
     if (!joint.fused) {
       if (sample.tooVertical) {
@@ -1373,7 +1413,7 @@ function sizeJoint(
   spineFraction: number,
   jointStyle: FlexiJointStyle,
   stationOut?: { maxExtentMm?: number; linkSizeCapped?: boolean },
-  linkThicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkTuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): FlexiJointPlan {
   const fused = (ballRadiusMm = 0): FlexiJointPlan => ({
     center,
@@ -1418,13 +1458,13 @@ function sizeJoint(
         startRadiusMm,
         clearance,
         bendAngleDeg,
-        linkThicknessScale,
+        linkTuning,
       ) === null &&
       solveLinkJointGeometry(
         ballRadiusMm,
         clearance,
         bendAngleDeg,
-        linkThicknessScale,
+        linkTuning,
       ) !== null
     ) {
       stationOut.linkSizeCapped = true;
@@ -1499,12 +1539,7 @@ function sizeJoint(
   // A REAL link joint at this radius: the solver must realise the hoop AND the
   // carved cavity must stay inside the skin at every station it reaches.
   const linkJointContained = (ballRadiusMm: number): boolean =>
-    solveLinkJointGeometry(
-      ballRadiusMm,
-      clearance,
-      bendAngleDeg,
-      linkThicknessScale,
-    )
+    solveLinkJointGeometry(ballRadiusMm, clearance, bendAngleDeg, linkTuning)
       ? linkCavityFits(
           profile,
           ballRadiusMm,
@@ -1512,7 +1547,7 @@ function sizeJoint(
           bendAngleDeg,
           rho0,
           FLEXI_MIN_SOCKET_WALL_MM,
-          linkThicknessScale,
+          linkTuning,
         )
       : false;
   // Link's containment predicate has to be an INTERVAL in `r`, and picking the
@@ -1828,7 +1863,7 @@ function jointOverlapCap(
   clearance: number,
   jointStyle: FlexiJointStyle,
   bendAngleDeg: number,
-  linkThicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkTuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): number {
   let minStationGap = Infinity;
   for (let i = 1; i < joints.length; i += 1) {
@@ -1906,7 +1941,7 @@ function jointOverlapCap(
           clearance,
           bendAngleDeg,
           undefined,
-          linkThicknessScale,
+          linkTuning,
         );
         return footprint === null || footprint <= minStationGap;
       };
@@ -2425,6 +2460,12 @@ export type LinkJointGeometry = {
   secondaryTravelDeg: number;
   /** Chord sag paid back into every envelope radius (see LINK_ARC_SEGMENTS). */
   chordSagMm: number;
+  /**
+   * The open pocket's breathing margin (mm) this geometry was solved with —
+   * the user's "Joint room". Read by `linkPocketBoundsMm` so the bowl the
+   * build carves and the anchor the solver deepened for it agree.
+   */
+  pocketRoomMm: number;
 };
 
 /**
@@ -2523,10 +2564,13 @@ function linkHardwareSagFactor(travelDeg: number): number {
 
 /**
  * Solve the link hoop/blade for a mechanism scale, clearance and bend angle,
- * plus the user's Link thickness multiplier on the loops' rod diameters
- * (`FlexiToySettings.linkThicknessScale`; swept 0.5–2.0 × r 3.2–40 × c
- * 0.2–0.8 × bend 5–90 with zero holes, so the feasibility notes below hold
- * across the whole slider range).
+ * plus the user's Link tuning: the thickness multiplier on the loops' rod
+ * diameters (`FlexiToySettings.linkThicknessScale`; swept 0.5–2.0 × r 3.2–40 ×
+ * c 0.2–0.8 × bend 5–90 with zero holes, so the feasibility notes below hold
+ * across the whole slider range) and the room multiplier (`linkRoomScale`),
+ * which scales the ring-hole slack (the loops' free play, so it grows the ring
+ * and everything sized from it) and the pocket's breathing margin (echoed in
+ * the geometry for `linkPocketBoundsMm`; it only deepens the leg anchor).
  * Pure — the plan and the build both call it. Returns null when infeasible (the
  * plan then judges containment by the rounded cup and the build carves the
  * rounded groove); it never clamps a floor away silently.
@@ -2544,7 +2588,7 @@ export function solveLinkJointGeometry(
   ballRadiusMm: number,
   clearanceMm: number,
   bendAngleDeg: number,
-  thicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  tuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): LinkJointGeometry | null {
   const r = ballRadiusMm;
   const c = clearanceMm;
@@ -2557,13 +2601,27 @@ export function solveLinkJointGeometry(
   // key gap, anchor) is derived from `a` and `t` below, so the whole mechanism
   // re-solves around the fatter or slimmer rods and the plan/build invariants
   // are untouched. The printable floors still bind on the slim side.
-  const rodScale = Number.isFinite(thicknessScale)
+  const rodScale = Number.isFinite(tuning.thicknessScale)
     ? clamp(
-        thicknessScale,
+        tuning.thicknessScale,
         FLEXI_MIN_LINK_THICKNESS_SCALE,
         FLEXI_MAX_LINK_THICKNESS_SCALE,
       )
     : FLEXI_DEFAULT_LINK_THICKNESS_SCALE;
+  // The user's "Joint room": how much free play and open air the interlocked
+  // loops get. It scales the ring-hole slack (the dangle — the hole edge moves
+  // further past the hoop's swept envelope, so the running clearance is still
+  // guaranteed by containment and the extra is pure play) and the pocket's
+  // breathing margin (never load-bearing; it sizes the bowl and, through the
+  // pocket-serving anchor below, how deep the legs bury to host it).
+  const roomScale = Number.isFinite(tuning.roomScale)
+    ? clamp(
+        tuning.roomScale,
+        FLEXI_MIN_LINK_ROOM_SCALE,
+        FLEXI_MAX_LINK_ROOM_SCALE,
+      )
+    : FLEXI_DEFAULT_LINK_ROOM_SCALE;
+  const pocketRoomMm = LINK_POCKET_BREATHE_MM * roomScale;
   const a = Math.max(LINK_TUBE_MIN_MM, LINK_TUBE_FRACTION * r * rodScale);
   const t = Math.max(LINK_BLADE_MIN_MM, LINK_BLADE_FRACTION * r * rodScale);
   const secDeg = Math.min(bendAngleDeg, LINK_SECONDARY_MAX_DEG);
@@ -2624,7 +2682,9 @@ export function solveLinkJointGeometry(
     // exactly as the carved eye did. The slack scales with `r` so the loops
     // read as loosely threaded chain links at every size.
     bladeReach =
-      eyeOuter + Math.max(LINK_RING_SLACK_MM, LINK_RING_SLACK_FRACTION * r) + t;
+      eyeOuter +
+      Math.max(LINK_RING_SLACK_MM, LINK_RING_SLACK_FRACTION * r * roomScale) +
+      t;
     // How far the legs reach from the PIN AXIS in the worst case this joint can
     // ever be built at — evaluated at the kerf CEILING, which is the widest gap
     // any station can ask for, so this estimate is non-circular (it never reads
@@ -2688,9 +2748,7 @@ export function solveLinkJointGeometry(
   const tubeFinal = t / 2;
   const baseAnchor = Math.max(LINK_ANCHOR_MIN_MM, LINK_ANCHOR_FRACTION * r);
   const desiredPocket =
-    Math.hypot(qFinal, bladeReach - tubeFinal) +
-    tubeFinal +
-    LINK_POCKET_BREATHE_MM;
+    Math.hypot(qFinal, bladeReach - tubeFinal) + tubeFinal + pocketRoomMm;
   const kneeFloor = LINK_KERF_MIN_MM / 2 + LINK_BURY_MM;
   const arcEndAxialFinal = hoopRadius * (1 - Math.cos(arcHalf));
   const endUFinal = -arcEndAxialFinal * Math.sin(tiltRad);
@@ -2739,6 +2797,7 @@ export function solveLinkJointGeometry(
     anchorMm,
     secondaryTravelDeg: secDeg,
     chordSagMm: chordSagOf(arcHalf),
+    pocketRoomMm,
   };
 }
 
@@ -3041,14 +3100,13 @@ export function linkPocketBoundsMm(
   const q = geometry.pivotOffsetMm;
   const tube = geometry.bladeThicknessMm / 2;
   const ringCentre = geometry.bladeReachMm - tube;
-  let desired = Math.hypot(q, ringCentre) + tube + LINK_POCKET_BREATHE_MM;
+  const breathe = geometry.pocketRoomMm;
+  let desired = Math.hypot(q, ringCentre) + tube + breathe;
   for (let i = 2; i + 2 < poly.points.length; i += 1) {
     const p = poly.points[i];
     desired = Math.max(
       desired,
-      Math.hypot(p[0], p[1], p[2]) +
-        poly.envRadiusMm[i] +
-        LINK_POCKET_BREATHE_MM,
+      Math.hypot(p[0], p[1], p[2]) + poly.envRadiusMm[i] + breathe,
     );
   }
   const embedRad = (LINK_POCKET_EMBED_DEG * Math.PI) / 180;
@@ -3167,13 +3225,13 @@ function linkCavityFits(
   bendAngleDeg: number,
   rhoMm: number,
   wallMm: number = FLEXI_MIN_SOCKET_WALL_MM,
-  linkThicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkTuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): boolean {
   const geometry = solveLinkJointGeometry(
     ballRadiusMm,
     clearanceMm,
     bendAngleDeg,
-    linkThicknessScale,
+    linkTuning,
   );
   if (!geometry) return false;
   // Judged at the FULL requested travel. The build only ever ships a travel ≤
@@ -3228,11 +3286,11 @@ function linkFootprintMm(
   clearance: number,
   bendAngleDeg: number | undefined,
   maxStationExtentMm: number | undefined,
-  linkThicknessScale: number = FLEXI_DEFAULT_LINK_THICKNESS_SCALE,
+  linkTuning: LinkTuning = DEFAULT_LINK_TUNING,
 ): number | null {
   if (bendAngleDeg === undefined) return null;
   const solve = (radius: number): LinkJointGeometry | null =>
-    solveLinkJointGeometry(radius, clearance, bendAngleDeg, linkThicknessScale);
+    solveLinkJointGeometry(radius, clearance, bendAngleDeg, linkTuning);
   let geometry = solve(maxBallRadius);
   // Above the link solver's feasible radius interval, the planner shrinks the
   // joint back to the interval edge. Measure that real, capped link here too;

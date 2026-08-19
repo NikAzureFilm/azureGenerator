@@ -47,6 +47,19 @@ export const FLEXI_MAX_FACE_GAP_MM = 4;
 export const FLEXI_MIN_LINK_THICKNESS_SCALE = 0.6;
 export const FLEXI_MAX_LINK_THICKNESS_SCALE = 1.6;
 export const FLEXI_DEFAULT_LINK_THICKNESS_SCALE = 1;
+/**
+ * Link only: multiplier on the joint's ROOM TO MOVE — the free play between
+ * the two interlocked loops (the ring-hole slack that lets them dangle) and
+ * the breathing margin of the open pocket they swing in, scaled together.
+ * 1 is the shipped chain-link look; below it the loops thread snugly in a
+ * tighter bowl, above it they hang loose in a bigger one. The slack never
+ * drops under its printable floor, and the bowl is still capped by the body's
+ * walls, the leg anchoring and the neighbouring joints. Never load-bearing
+ * for clearance — the swept envelopes guarantee that on their own.
+ */
+export const FLEXI_MIN_LINK_ROOM_SCALE = 0.5;
+export const FLEXI_MAX_LINK_ROOM_SCALE = 2;
+export const FLEXI_DEFAULT_LINK_ROOM_SCALE = 1;
 
 /** Hard geometric floors (mm) — planning fuses a joint rather than violate these. */
 export const FLEXI_MIN_BALL_RADIUS_MM = 2.5;
@@ -182,6 +195,12 @@ export type FlexiToySettings = {
    * other style. See FLEXI_MIN/MAX_LINK_THICKNESS_SCALE.
    */
   linkThicknessScale?: number;
+  /**
+   * Link only: multiplier on the joint's room to move (loop slack + pocket
+   * breathing margin). Optional so a stale client still plans; absent → 1.
+   * Ignored by every other style. See FLEXI_MIN/MAX_LINK_ROOM_SCALE.
+   */
+  linkRoomScale?: number;
   /**
    * Optional user-dragged cut stations as strictly increasing arc-length
    * fractions (0..1 exclusive), length segmentCount − 1. When present they
