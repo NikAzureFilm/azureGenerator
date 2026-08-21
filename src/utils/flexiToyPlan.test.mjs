@@ -37,6 +37,8 @@ import {
   FLEXI_MIN_BALL_RADIUS_MM,
   FLEXI_MIN_SOCKET_WALL_MM,
   FLEXI_CAPTURE_MARGIN_MM,
+  FLEXI_MAX_SEGMENTS,
+  FLEXI_MIN_SEGMENTS,
   FLEXI_DEFAULT_JOINT_STYLE,
   FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_MAX_FACE_GAP_MM,
@@ -319,8 +321,7 @@ assert.ok(
 
 const capsuleSegments = capsulePlan.joints.length + 1;
 assert.ok(
-  capsuleSegments >= 4 &&
-    capsulePlan.joints.length <= capsulePlan.maxJointCount,
+  capsuleSegments >= 4 && capsuleSegments <= FLEXI_MAX_SEGMENTS,
   `auto segment count in range (got ${capsuleSegments})`,
 );
 
@@ -403,42 +404,17 @@ const tooMany = planFlexiToy(capsule, {
   segmentCount: 50,
 });
 assert.ok(
-  tooMany.joints.length <= tooMany.maxJointCount,
-  'segmentCount clamps to the model-fitted maximum',
+  tooMany.joints.length + 1 <= FLEXI_MAX_SEGMENTS,
+  'segmentCount clamps to FLEXI_MAX_SEGMENTS',
 );
 
 const tooFew = planFlexiToy(capsule, {
   ...DEFAULT_SETTINGS,
   segmentCount: 1,
 });
-assert.equal(
-  tooFew.joints.length,
-  1,
-  'the minimum is one joint (two segments)',
-);
-
-const shortCapacity = planFlexiToy(makeSpindle({ length: 80, maxRadius: 12 }), {
-  ...DEFAULT_SETTINGS,
-  segmentCount: 50,
-  axisOverride: 'x',
-});
-const longCapacity = planFlexiToy(makeSpindle({ length: 300, maxRadius: 12 }), {
-  ...DEFAULT_SETTINGS,
-  segmentCount: 50,
-  axisOverride: 'x',
-});
 assert.ok(
-  Number.isInteger(shortCapacity.maxJointCount) &&
-    shortCapacity.maxJointCount >= 1,
-  'the plan reports a usable maximum joint count',
-);
-assert.ok(
-  longCapacity.maxJointCount > shortCapacity.maxJointCount,
-  `a longer model fits more joints (${longCapacity.maxJointCount} > ${shortCapacity.maxJointCount})`,
-);
-assert.ok(
-  longCapacity.joints.length <= longCapacity.maxJointCount,
-  'a request above the fitted maximum is reduced to the model capacity',
+  tooFew.joints.length + 1 >= FLEXI_MIN_SEGMENTS,
+  'segmentCount clamps to FLEXI_MIN_SEGMENTS',
 );
 
 // --- computeFlexiScale + scaleFlexiPositions -------------------------------
@@ -595,14 +571,11 @@ const shortFatPlan = planFlexiToy(shortFat, {
   jointStyle: 'classic',
 });
 assert.ok(
-  shortFatPlan.maxJointCount >= 1,
-  'short fat body still reports at least one usable joint',
+  shortFatPlan.warnings.some((w) => w.code === 'joint-size-capped'),
+  'short fat body warns that joints were size-capped',
 );
 const shortFatLive = shortFatPlan.joints.filter((joint) => !joint.fused);
-assert.ok(
-  shortFatLive.length >= 1,
-  'short fat body keeps an articulating joint',
-);
+assert.ok(shortFatLive.length >= 2, 'short fat body keeps articulating joints');
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 for (let i = 1; i < shortFatLive.length; i += 1) {
   const previous = shortFatLive[i - 1];

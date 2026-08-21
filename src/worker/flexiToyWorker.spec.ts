@@ -66,13 +66,7 @@ function okResult() {
       jointCount: 0,
       fusedJointCount: 0,
       lengthMm: 1,
-      plan: {
-        joints: [],
-        maxJointCount: 1,
-        spine: [],
-        spineLengthMm: 1,
-        warnings: [],
-      },
+      plan: { joints: [], spine: [], spineLengthMm: 1, warnings: [] },
       warnings: [],
     },
   };
