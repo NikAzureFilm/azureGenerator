@@ -1096,28 +1096,43 @@ for (const style of ['classic', 'rounded', 'shell', 'strong', 'link']) {
   const settings = baseSettings(style);
   const capsule = scaleForSettings(capsuleRaw, settings);
   const capsulePlan = planFlexiToy(capsule, settings);
+  const certifiedJoints = capsulePlan.joints.filter((joint) => !joint.fused);
+  const certifiedSegments = certifiedJoints.length + 1;
   assert.equal(
-    capsulePlan.joints.filter((j) => !j.fused).length,
-    4,
-    `${style}: capsule N=5 plans 4 articulating joints`,
+    certifiedJoints.length,
+    capsulePlan.joints.length,
+    `${style}: every planned station articulates`,
+  );
+  assert.ok(
+    certifiedJoints.every((joint) => joint.supportsRequestedStyle === true),
+    `${style}: every station supports the requested style`,
   );
 
   const outcome = await buildFlexiToy(wasm, capsule, capsulePlan, settings);
   assert.equal(outcome.status, 'ok', `${style}: capsule build succeeds`);
   const result = outcome.result;
 
-  assert.equal(result.segmentCount, 5, `${style}: reports 5 segments`);
+  assert.equal(
+    result.segmentCount,
+    certifiedSegments,
+    `${style}: reports the certified segment count`,
+  );
+  assert.equal(
+    result.plan.fit.resolvedBendAngleDeg,
+    settings.bendAngleDeg,
+    `${style}: reports the whole bend every ordinary joint actually delivers`,
+  );
   assert.equal(
     result.segmentTriangleRanges.length,
-    5,
-    `${style}: 5 per-segment triangle ranges`,
+    certifiedSegments,
+    `${style}: one triangle range per certified segment`,
   );
   // Body count == live + 1 (rounded groups its decompose() components per
   // interval, so a brim sliver still counts within its segment).
   assert.equal(
     countBodies(result.positions, result.indices),
-    5,
-    `${style}: exactly 5 disconnected bodies via union-find`,
+    certifiedSegments,
+    `${style}: exactly the certified number of disconnected bodies via union-find`,
   );
 
   // Every segment watertight per Manifold; collect the total volume.
@@ -2644,14 +2659,10 @@ for (const bendAngleDeg of [12, 25]) {
 
 // --- STRONG style: round-2 verifier regressions ----------------------------
 
-// (V2-1) A SLENDER body keeps all of its articulation. The gem/bar solver has a
-// hard blade-width floor (r ≳ 3.194mm at clearance 0.55 / bend 25°), and
-// `sizeJoint` used to FUSE every joint under it: a 170mm slim tube exported as
-// ONE rigid body while shell, rounded and classic each delivered six articulated
-// bodies from the identical mesh and settings. Strong must never articulate less
-// than rounded on the same input — it falls back to the rounded groove per joint
-// instead. This is also the only fixture that exercises the build's per-joint
-// rounded fallback end to end.
+// (V2-1) A SLENDER body still articulates, but every delivered joint must remain
+// Strong. The gem/bar solver has a hard blade-width floor (r ≳ 3.194mm at
+// clearance 0.55 / bend 25°); auto-fit now reduces the count instead of
+// fusing every station or substituting rounded grooves.
 {
   const slimSettings = {
     segmentCount: 6,
@@ -2667,33 +2678,26 @@ for (const bendAngleDeg of [12, 25]) {
   );
   const slimInput = scaleForSettings(slimRaw, slimSettings);
   const strongPlan = planFlexiToy(slimInput, slimSettings);
-  const roundedPlan = planFlexiToy(slimInput, {
-    ...slimSettings,
-    jointStyle: 'rounded',
-  });
   const liveStrong = strongPlan.joints.filter((j) => !j.fused);
-  const liveRounded = roundedPlan.joints.filter((j) => !j.fused);
   assert.ok(
-    liveRounded.length > 0,
-    'slim strong: the rounded baseline articulates (else the case proves nothing)',
+    liveStrong.length > 0,
+    'slim strong: auto-fit preserves at least one articulating joint',
   );
-  assert.equal(
-    liveStrong.length,
-    liveRounded.length,
-    `slim strong: articulates as much as rounded (${liveStrong.length} vs ${liveRounded.length})`,
-  );
-  const belowFloor = liveStrong.filter(
-    (j) =>
-      solveStrongJointGeometry(
-        j.ballRadiusMm,
-        slimSettings.clearanceMm,
-        slimSettings.bendAngleDeg,
-      ) === null,
-  ).length;
   assert.ok(
-    belowFloor > 0,
-    'slim strong: at least one live joint is below the strong solver floor ' +
-      '(so the rounded fallback is genuinely exercised)',
+    strongPlan.fit.resolvedSegmentCount < slimSettings.segmentCount,
+    'slim strong: the unsafe requested count is reduced',
+  );
+  assert.ok(
+    liveStrong.every(
+      (joint) =>
+        joint.supportsRequestedStyle === true &&
+        solveStrongJointGeometry(
+          joint.ballRadiusMm,
+          slimSettings.clearanceMm,
+          slimSettings.bendAngleDeg,
+        ) !== null,
+    ),
+    'slim strong: every delivered station is a genuine Strong joint',
   );
   const slimOutcome = await buildFlexiToy(
     wasm,
@@ -2715,13 +2719,12 @@ for (const bendAngleDeg of [12, 25]) {
     slimOutcome.result.segmentCount > 1,
     'slim strong: the export is NOT one rigid body',
   );
-  const slimFallback = slimOutcome.result.warnings.filter(
-    (w) => w.code === 'strong-joint-fallback',
-  );
   assert.equal(
-    slimFallback.length,
-    1,
-    'slim strong: the per-joint rounded fallback is reported, once',
+    slimOutcome.result.warnings.filter(
+      (warning) => warning.code === 'strong-joint-fallback',
+    ).length,
+    0,
+    'slim strong: no rounded fallback is delivered',
   );
 }
 
@@ -2795,6 +2798,17 @@ for (const [name, raw, clampSettings] of [
       ),
       `strong clamp ${name}: the warning names the requested angle (got "${reduced[0].message}")`,
     );
+    const applied = outcome.result.plan.fit.resolvedBendAngleDeg;
+    if (applied !== undefined) {
+      assert.ok(
+        Number.isInteger(applied) && applied >= 5,
+        `strong clamp ${name}: the applied bend is representable on the whole-degree slider`,
+      );
+      assert.ok(
+        applied < settings.bendAngleDeg,
+        `strong clamp ${name}: the applied bend is honestly below the request`,
+      );
+    }
     continue;
   }
   // No warning ⇒ the requested bend must actually be there. Measured, not
@@ -2894,8 +2908,9 @@ for (const [name, raw, clampSettings] of [
   );
 }
 
-// (Tapering tail) Joint radii shrink toward the tip; the thin end fuses rather
-// than falling back, every remaining cut severs, and bodies == segments.
+// (Tapering tail) Joint radii shrink toward the tip; auto-fit moves or removes
+// the unsafe end station so every delivered joint stays Strong, every cut
+// severs, and bodies == segments.
 {
   const settings = { ...baseSettings('strong'), segmentCount: 8 };
   const raw = toInput(makeSpindle({ length: 200, maxRadius: 16, taper: 0.75 }));
@@ -2916,8 +2931,7 @@ for (const [name, raw, clampSettings] of [
       'tapered tail: every live joint is solvable',
     );
   }
-  // The fixture is a tapered spindle: radii rise to the crest then fall away,
-  // and the thin tail FUSES (it never falls back to a rounded groove).
+  // The fixture is a tapered spindle: radii rise to the crest then fall away.
   const radii = live.map((joint) => joint.ballRadiusMm);
   const crest = radii.indexOf(Math.max(...radii));
   for (let i = crest + 1; i < radii.length; i += 1) {
@@ -2927,12 +2941,18 @@ for (const [name, raw, clampSettings] of [
     );
   }
   assert.ok(
-    plan.joints[plan.joints.length - 1].fused,
-    'tapered tail: the last station is too thin and fuses',
+    plan.joints.every(
+      (joint) => !joint.fused && joint.supportsRequestedStyle === true,
+    ),
+    'tapered tail: every delivered station is a genuine Strong joint',
   );
   assert.ok(
-    plan.warnings.some((w) => w.code === 'joint-fused-too-thin'),
-    'tapered tail: the fused station is reported',
+    plan.fit.jointPositions.at(-1) < 7 / 8 - 1e-3,
+    'tapered tail: the unsafe end station moves inward or the count reduces',
+  );
+  assert.ok(
+    !plan.warnings.some((warning) => warning.code === 'joint-fused-too-thin'),
+    'tapered tail: no fused station remains',
   );
   const outcome = await buildFlexiToy(wasm, input, plan, settings);
   assert.equal(
@@ -4335,9 +4355,9 @@ for (const [fixture, overrides] of [
 }
 
 // (L-SLIM) A SLENDER body keeps all of its articulation — the V2-1 regression,
-// re-run for link. Its solver has a hard mechanism-scale floor, and a
-// containment arm that FUSED under that floor would export a 170mm tube as one
-// rigid body.
+// re-run for Link. Its solver has a hard mechanism-scale floor; auto-fit must
+// keep the toy articulated with genuine Link joints rather than fusing or using
+// rounded grooves below that floor.
 {
   const slimSettings = {
     segmentCount: 6,
@@ -4353,33 +4373,26 @@ for (const [fixture, overrides] of [
   );
   const slimInput = scaleForSettings(slimRaw, slimSettings);
   const linkPlan = planFlexiToy(slimInput, slimSettings);
-  const roundedPlan = planFlexiToy(slimInput, {
-    ...slimSettings,
-    jointStyle: 'rounded',
-  });
   const liveLink = linkPlan.joints.filter((j) => !j.fused);
-  const liveRounded = roundedPlan.joints.filter((j) => !j.fused);
   assert.ok(
-    liveRounded.length > 0,
-    'slim link: the rounded baseline articulates (else the case proves nothing)',
+    liveLink.length > 0,
+    'slim link: auto-fit preserves at least one articulating joint',
   );
-  assert.equal(
-    liveLink.length,
-    liveRounded.length,
-    `slim link: articulates as much as rounded (${liveLink.length} vs ${liveRounded.length})`,
-  );
-  const belowFloor = liveLink.filter(
-    (j) =>
-      solveLinkJointGeometry(
-        j.ballRadiusMm,
-        slimSettings.clearanceMm,
-        slimSettings.bendAngleDeg,
-      ) === null,
-  ).length;
   assert.ok(
-    belowFloor > 0,
-    'slim link: at least one live joint is below the link solver floor ' +
-      '(so the rounded fallback is genuinely exercised)',
+    linkPlan.fit.resolvedSegmentCount <= slimSettings.segmentCount,
+    'slim link: fit never exceeds the requested count',
+  );
+  assert.ok(
+    liveLink.every(
+      (joint) =>
+        joint.supportsRequestedStyle === true &&
+        solveLinkJointGeometry(
+          joint.ballRadiusMm,
+          slimSettings.clearanceMm,
+          slimSettings.bendAngleDeg,
+        ) !== null,
+    ),
+    'slim link: every delivered station is a genuine Link joint',
   );
   const slimOutcome = await buildFlexiToy(
     wasm,
@@ -4404,8 +4417,8 @@ for (const [fixture, overrides] of [
   assert.equal(
     slimOutcome.result.warnings.filter((w) => w.code === 'link-joint-fallback')
       .length,
-    1,
-    'slim link: the per-joint rounded fallback is reported, once',
+    0,
+    'slim link: no rounded fallback is delivered',
   );
 }
 

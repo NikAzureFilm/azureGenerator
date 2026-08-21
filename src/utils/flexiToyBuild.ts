@@ -17,6 +17,7 @@ import Module from 'manifold-3d';
 import type { ManifoldToplevel, Manifold, Vec3 } from 'manifold-3d';
 import {
   FLEXI_DEFAULT_JOINT_STYLE,
+  FLEXI_MIN_BEND_DEG,
   FLEXI_MIN_SOCKET_WALL_MM,
   assertNever,
 } from './flexiToyTypes.ts';
@@ -483,6 +484,7 @@ export async function buildFlexiToy(
     // rounded brim can split a fin sliver off into its interval's segment).
     let segments: Manifold[][];
     let shellFallbackJoints = 0;
+    let roundedMinTravelDeg = settings.bendAngleDeg;
     let strongFallbackJoints = 0;
     let strongTravelClampedJoints = 0;
     let strongMinTravelDeg = settings.bendAngleDeg;
@@ -633,7 +635,10 @@ export async function buildFlexiToy(
         }
         case 'shell':
         case 'rounded': {
-          const notes = { shellFallbackJoints: 0 };
+          const notes = {
+            shellFallbackJoints: 0,
+            minTravelDeg: settings.bendAngleDeg,
+          };
           const grouped = await buildRoundedSegments(
             wasm,
             keep,
@@ -666,6 +671,7 @@ export async function buildFlexiToy(
           }
           segments = grouped;
           shellFallbackJoints = notes.shellFallbackJoints;
+          roundedMinTravelDeg = notes.minTravelDeg;
           break;
         }
         default:
@@ -805,6 +811,42 @@ export async function buildFlexiToy(
     const jointCount = cutJoints.length;
     const fusedJointCount = plan.joints.length - cutJoints.length;
 
+    const deliveredBendAngleDeg =
+      jointStyle === 'strong'
+        ? strongMinTravelDeg
+        : jointStyle === 'link'
+          ? linkMinTravelDeg
+          : jointStyle === 'rounded' || jointStyle === 'shell'
+            ? roundedMinTravelDeg
+            : settings.bendAngleDeg;
+    // The slider moves in whole degrees. Flooring makes this an honest lower
+    // bound: displaying 8° can never describe geometry whose weakest joint
+    // only reaches 7.6°. Values below the slider minimum remain deliberately
+    // absent so the worker retries the build instead of publishing a setting
+    // the product cannot represent.
+    const resolvedBendAngleDeg = Math.floor(deliveredBendAngleDeg + 1e-7);
+    const existingFit = plan.fit;
+    const fitBase = existingFit
+      ? {
+          requestedSegmentCount: existingFit.requestedSegmentCount,
+          resolvedSegmentCount: segments.length,
+          maxSafeSegmentCount: existingFit.maxSafeSegmentCount,
+          jointPositions: existingFit.jointPositions,
+        }
+      : {
+          requestedSegmentCount: plan.joints.length + 1,
+          resolvedSegmentCount: segments.length,
+          maxSafeSegmentCount: segments.length,
+          jointPositions: plan.joints.map((joint) => joint.spineFraction),
+        };
+    const resolvedPlan: FlexiToyPlan = {
+      ...plan,
+      fit:
+        resolvedBendAngleDeg >= FLEXI_MIN_BEND_DEG
+          ? { ...fitBase, resolvedBendAngleDeg }
+          : fitBase,
+    };
+
     const result: FlexiToyResult = {
       positions: assembled.positions,
       indices: assembled.indices,
@@ -814,7 +856,7 @@ export async function buildFlexiToy(
       jointCount,
       fusedJointCount,
       lengthMm: plan.spineLengthMm,
-      plan,
+      plan: resolvedPlan,
       warnings,
     };
     return { status: 'ok', result };
@@ -1286,7 +1328,10 @@ async function buildRoundedSegments(
   clearance: number,
   bendAngleDeg: number,
   jointStyle: FlexiJointStyle = 'rounded',
-  notes: { shellFallbackJoints: number } = { shellFallbackJoints: 0 },
+  notes: { shellFallbackJoints: number; minTravelDeg: number } = {
+    shellFallbackJoints: 0,
+    minTravelDeg: bendAngleDeg,
+  },
 ): Promise<Manifold[][] | 'uncut' | 'aborted' | null> {
   // Sequential subtract, freeing each intermediate immediately so a 19-joint
   // body doesn't pile up full-body copies (only the running cut is retained).
@@ -1364,6 +1409,10 @@ async function buildRoundedSegments(
         if (capped) angles = capped;
       }
     }
+    notes.minTravelDeg = Math.min(
+      notes.minTravelDeg,
+      ((angles.thetaMouth - angles.alpha) * 180) / Math.PI,
+    );
     // The overlapping-shell style needs a lap shelf just under the thinnest
     // skin; where the body cannot host one, that joint falls back to the
     // rounded wedge.

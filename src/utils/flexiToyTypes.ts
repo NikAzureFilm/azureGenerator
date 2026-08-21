@@ -333,6 +333,32 @@ export type FlexiJointPlan = {
   spineFraction: number;
   /** True → no cut at this station; the body stays rigid here. */
   fused: boolean;
+  /**
+   * Whether the planner proved that this station can realise the requested
+   * joint style, rather than merely carrying that style's rounded fallback.
+   * Optional for backwards compatibility with cached/stale worker payloads;
+   * newly planned joints always set it.
+   */
+  supportsRequestedStyle?: boolean;
+};
+
+export type FlexiToyFitSummary = {
+  /** Normalised numeric count the fit search started from (`auto` is resolved). */
+  requestedSegmentCount: number;
+  /** Segment count used by the returned plan. */
+  resolvedSegmentCount: number;
+  /**
+   * Certified count ceiling after an automatic reduction. Zero means the
+   * request fit unchanged, so the product range remains open.
+   */
+  maxSafeSegmentCount: number;
+  /** Final ordered cut stations, as arc-length fractions along the spine. */
+  jointPositions: number[];
+  /**
+   * Whole-degree bend that every built joint can actually deliver. Omitted
+   * when the geometry falls below the product slider's representable range.
+   */
+  resolvedBendAngleDeg?: number;
 };
 
 export type FlexiToyPlan = {
@@ -341,6 +367,8 @@ export type FlexiToyPlan = {
   spine: Array<[number, number, number]>;
   spineLengthMm: number;
   warnings: FlexiToyWarning[];
+  /** Auto-fit details used by the UI to reflect and constrain the controls. */
+  fit?: FlexiToyFitSummary;
 };
 
 export type FlexiToyResult = {

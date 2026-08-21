@@ -709,9 +709,13 @@ const sanitizedPlan = planFlexiToy(positionCapsule, {
   jointPositions: messyPositions,
 });
 assert.equal(
-  sanitizedPlan.joints.length,
-  5,
-  'pinned positions keep the segment count (6 → 5 joints), no reduction',
+  sanitizedPlan.fit.requestedSegmentCount,
+  6,
+  'fit records the requested pinned segment count',
+);
+assert.ok(
+  sanitizedPlan.joints.length <= 5,
+  'unsafe end-biased pinned positions may soften to fewer segments',
 );
 const sanitizedFractions = sanitizedPlan.joints.map((j) => j.spineFraction);
 for (let i = 1; i < sanitizedFractions.length; i += 1) {
@@ -730,6 +734,21 @@ assert.ok(
   sanitizedPlan.warnings.some((w) => w.code === 'joint-positions-adjusted'),
   'sanitized positions emit joint-positions-adjusted',
 );
+assert.equal(
+  sanitizedPlan.fit.resolvedSegmentCount,
+  sanitizedPlan.joints.length + 1,
+  'fit records the resolved segment count',
+);
+assert.equal(
+  sanitizedPlan.fit.maxSafeSegmentCount,
+  sanitizedPlan.fit.resolvedSegmentCount,
+  'the resolved safe count is the fit search ceiling at or below the request',
+);
+assert.deepEqual(
+  sanitizedPlan.fit.jointPositions,
+  sanitizedFractions,
+  'fit echoes the final station positions',
+);
 
 // No jointPositions → even spacing, and spineFraction is echoed as i/N.
 const evenPlan = planFlexiToy(positionCapsule, {
@@ -737,6 +756,11 @@ const evenPlan = planFlexiToy(positionCapsule, {
   segmentCount: 6,
   axisOverride: 'x',
 });
+assert.equal(
+  evenPlan.fit.maxSafeSegmentCount,
+  0,
+  'a safe unreduced request leaves the full segment range open',
+);
 const evenN = evenPlan.joints.length + 1;
 evenPlan.joints.forEach((joint, i) => {
   assert.ok(
@@ -764,27 +788,36 @@ malformedPlan.joints.forEach((joint, i) => {
   );
 });
 
-// A station dragged onto a thin part fuses; the same count with the station on a
-// thick part is live.
+// A station dragged onto a thin part moves to the nearest feasible point inside
+// its ordered cell; a thick station stays put.
 const taperForDrag = makeCone({ length: 150, baseRadius: 32 });
 const draggedThin = planFlexiToy(taperForDrag, {
   ...DEFAULT_SETTINGS,
-  segmentCount: 2,
+  segmentCount: 3,
   axisOverride: 'x',
-  jointPositions: [0.9], // near the apex → thin
+  jointPositions: [0.3, 0.9], // second station is near the thin apex
 });
 const draggedThick = planFlexiToy(taperForDrag, {
   ...DEFAULT_SETTINGS,
-  segmentCount: 2,
+  segmentCount: 3,
   axisOverride: 'x',
-  jointPositions: [0.3], // near the base → thick
+  jointPositions: [0.25, 0.45],
 });
-assert.equal(draggedThin.joints.length, 1, 'one pinned station → one joint');
-assert.equal(draggedThick.joints.length, 1, 'one pinned station → one joint');
-assert.ok(draggedThin.joints[0].fused, 'a station on a thin part fuses');
+assert.equal(draggedThin.joints.length, 2, 'three segments keep two joints');
+assert.equal(draggedThick.joints.length, 2, 'three segments keep two joints');
 assert.ok(
-  !draggedThick.joints[0].fused,
-  'the same station moved to a thick part becomes live',
+  !draggedThin.joints[1].fused &&
+    draggedThin.joints[1].supportsRequestedStyle === true,
+  'the thin-zone station becomes a genuine live joint',
+);
+assert.ok(
+  draggedThin.joints[1].spineFraction < 0.9 - 1e-3,
+  'the thin-zone station moves toward thicker material',
+);
+assert.equal(
+  draggedThick.joints[0].spineFraction,
+  0.25,
+  'an already-feasible station stays at its requested position',
 );
 
 // --- ROUNDED style: capture, travel, constant bowl gap --------------------
@@ -1115,22 +1148,12 @@ for (const r of STRONG_RADII) {
   }
 }
 
-// (6) Every live strong joint is BUILDABLE — by whichever cutter the build will
-// actually reach for.
-//
-// This is deliberately NOT "the solver can always realise the strong solid".
-// The gem/bar solver returns null below roughly r = 3.2mm at loose clearance and
-// max bend (the blade's hard width floor), and `sizeJoint` used to FUSE there.
-// Measured cost of that rule: a 170mm slim tube at clearance 0.55 / bend 25°
-// lost EVERY joint and exported one rigid body, while shell, rounded and classic
-// all delivered six articulated bodies from the identical mesh. Such a joint is
-// now planned as a live ROUNDED joint and the build falls back per joint,
-// reporting 'strong-joint-fallback'. The invariant that keeps that safe is that
-// the plan entry supports the rounded cutter, which is what is asserted here.
+// (6) Every live strong joint genuinely supports the requested Strong style.
+// Stations below the mechanism floor are moved or removed by auto-fit instead
+// of being handed to the build as rounded fallbacks.
 {
   const strongCapsule = makeSpindle({ length: 150, maxRadius: 14 });
   let solvable = 0;
-  let fallback = 0;
   for (const bendAngleDeg of [5, 12, 25]) {
     for (const clearanceMm of [0.3, 0.4, 0.55]) {
       for (const jointScale of [0.6, 1.0, 1.4]) {
@@ -1144,17 +1167,20 @@ for (const r of STRONG_RADII) {
         });
         for (const joint of plan.joints) {
           if (joint.fused) continue;
-          if (
+          assert.ok(
             solveStrongJointGeometry(
               joint.ballRadiusMm,
               clearanceMm,
               bendAngleDeg,
-            ) === null
-          ) {
-            fallback += 1;
-          } else {
-            solvable += 1;
-          }
+            ) !== null,
+            'a live Strong station has solved Strong geometry',
+          );
+          assert.equal(
+            joint.supportsRequestedStyle,
+            true,
+            'the plan records genuine Strong support',
+          );
+          solvable += 1;
           assert.ok(
             Math.abs(joint.faceGapMm - Math.max(clearanceMm, 0.55)) < 1e-9,
             'strong carries the constant bowl gap in faceGapMm',
@@ -1190,23 +1216,13 @@ for (const r of STRONG_RADII) {
     'strong is still a strong joint on ordinary bodies (guard against the ' +
       'fallback quietly swallowing every case)',
   );
-  assert.ok(
-    solvable + fallback > 0,
-    'the strong sweep planned at least one live joint',
-  );
+  assert.ok(solvable > 0, 'the strong sweep planned at least one live joint');
 }
 
-// (6b) Fix for the round-2 blocker: a body too slim for the strong SOLID keeps
-// its articulation instead of going rigid. At clearance 0.55 / bend 25° the
-// solver's floor is r ≈ 3.194mm, so a station whose ball lands just under that
-// used to fuse; every joint fusing meant a single rigid export where the other
-// three styles all articulated.
+// (6b) A slim body never leaks a rounded Strong fallback into a live plan. The
+// fitter may move stations or reduce the count to preserve the selected style.
 {
-  // Sweep body width rather than pinning one magic radius: the assertion is
-  // "wherever a live joint falls below the strong solver's floor, strong still
-  // articulates exactly as much as rounded", and the sweep locates such joints
-  // itself so the fixture cannot silently stop exercising the path.
-  let belowFloorCases = 0;
+  let autoFitCases = 0;
   for (const maxRadius of [7, 8, 9, 10, 11, 12, 13, 14]) {
     const body = makeSpindle({ length: 170, maxRadius, axis: 'x' });
     const base = {
@@ -1218,25 +1234,26 @@ for (const r of STRONG_RADII) {
       bendAngleDeg: 25,
     };
     const strongPlan = planFlexiToy(body, { ...base, jointStyle: 'strong' });
-    const roundedPlan = planFlexiToy(body, { ...base, jointStyle: 'rounded' });
     const liveStrong = strongPlan.joints.filter((j) => !j.fused);
-    const liveRounded = roundedPlan.joints.filter((j) => !j.fused);
-    const belowFloor = liveStrong.filter(
-      (j) => solveStrongJointGeometry(j.ballRadiusMm, 0.55, 25) === null,
-    );
-    if (belowFloor.length === 0) continue;
-    belowFloorCases += 1;
-    assert.equal(
-      liveStrong.length,
-      liveRounded.length,
-      `maxRadius ${maxRadius}: strong articulates exactly as much as rounded ` +
-        `(${belowFloor.length} of its live joints are below the strong solver floor)`,
-    );
+    if (
+      strongPlan.fit.resolvedSegmentCount < 6 ||
+      strongPlan.fit.jointPositions.some(
+        (fraction, index) => Math.abs(fraction - (index + 1) / 6) > 1e-3,
+      )
+    ) {
+      autoFitCases += 1;
+    }
+    for (const joint of liveStrong) {
+      assert.ok(
+        solveStrongJointGeometry(joint.ballRadiusMm, 0.55, 25) !== null,
+        `maxRadius ${maxRadius}: every live station solves as Strong`,
+      );
+      assert.equal(joint.supportsRequestedStyle, true);
+    }
   }
   assert.ok(
-    belowFloorCases > 0,
-    'the slim sweep found at least one body below the strong solver floor ' +
-      '(otherwise this block asserts nothing)',
+    autoFitCases > 0,
+    'the slim sweep exercises station movement or count reduction',
   );
 }
 
@@ -1250,10 +1267,25 @@ for (const r of STRONG_RADII) {
     axisOverride: 'x',
     jointPositions: [0.2, 0.22, 0.6, 0.9],
   });
+  assert.ok(
+    dragged.joints.length <= 4,
+    'Strong keeps the pinned count when safe or reduces it to preserve style',
+  );
   assert.equal(
-    dragged.joints.length,
+    dragged.fit.requestedSegmentCount,
+    5,
+    'the Strong fit records the requested count',
+  );
+  assert.equal(
+    dragged.fit.resolvedSegmentCount,
     4,
-    'strong keeps the pinned station count (5 segments → 4 joints)',
+    'an infeasible five-segment Strong layout reduces to four segments',
+  );
+  assert.ok(
+    dragged.warnings.some(
+      (warning) => warning.code === 'segment-count-reduced',
+    ),
+    'count reduction remains available as an internal diagnostic',
   );
   const fractions = dragged.joints.map((joint) => joint.spineFraction);
   for (let i = 1; i < fractions.length; i += 1) {
@@ -2642,10 +2674,9 @@ assert.equal(
   );
 }
 
-// (P11) Every live link joint the planner emits is buildable by whichever cutter
-// the build will actually reach for — the solved hoop/blade, or (when the solver
-// is infeasible at that radius) the rounded groove. A live joint the build can
-// realise NEITHER way is the plan handing the build an impossible station.
+// (P11) Every live Link joint genuinely solves as Link. Rounded fallback
+// carriers remain in the plan shape for backwards compatibility, but auto-fit
+// must not emit one as a successful live station.
 {
   const bodies = [
     makeSpindle({ length: 150, maxRadius: 12 }),
@@ -2669,11 +2700,14 @@ assert.equal(
             c,
             bendAngleDeg,
           );
-          const roundedFallback =
-            joint.socketDepthMm > 0 && joint.faceGapMm > 0;
           assert.ok(
-            solved !== null || roundedFallback,
-            `every live link joint is buildable one way or the other (r=${joint.ballRadiusMm})`,
+            solved !== null,
+            `every live Link joint solves as Link (r=${joint.ballRadiusMm})`,
+          );
+          assert.equal(
+            joint.supportsRequestedStyle,
+            true,
+            'the plan records genuine Link support',
           );
         }
       }
@@ -2737,6 +2771,44 @@ assert.equal(
         }
       }
     }
+  }
+}
+
+// (P13) A contained radius is only a fallback candidate: sizing continues down
+// the 0.2mm ladder until it finds the largest radius that can build the selected
+// style. This shell needs two shrink steps for its lap shelf; returning the first
+// merely-contained radius would silently turn both joints into rounded grooves.
+{
+  const body = makeSpindle({
+    length: 150,
+    maxRadius: 12,
+    taper: 0,
+    radialSegments: 24,
+    rings: 32,
+  });
+  const common = {
+    ...DEFAULT_SETTINGS,
+    axisOverride: 'x',
+    segmentCount: 3,
+    clearanceMm: 0.2,
+    bendAngleDeg: 5,
+    jointScale: 0.8,
+  };
+  const rounded = planFlexiToy(body, { ...common, jointStyle: 'rounded' });
+  const shell = planFlexiToy(body, { ...common, jointStyle: 'shell' });
+  assert.equal(shell.fit.resolvedSegmentCount, 3);
+  for (let i = 0; i < shell.joints.length; i += 1) {
+    assert.equal(
+      shell.joints[i].supportsRequestedStyle,
+      true,
+      `shell joint ${i} keeps the requested style after shrinking`,
+    );
+    assert.ok(
+      Math.abs(
+        rounded.joints[i].ballRadiusMm - shell.joints[i].ballRadiusMm - 0.4,
+      ) < 1e-9,
+      `shell joint ${i} selects the first style-valid 0.2mm ladder radius`,
+    );
   }
 }
 

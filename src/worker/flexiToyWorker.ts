@@ -40,11 +40,18 @@ import {
   type FlexiBuildControl,
   type FlexiPreparedBody,
 } from '@/utils/flexiToyBuild';
-import { FLEXI_DEFAULT_JOINT_STYLE } from '@/utils/flexiToyTypes';
+import {
+  FLEXI_DEFAULT_JOINT_STYLE,
+  FLEXI_MIN_BEND_DEG,
+  FLEXI_MIN_SEGMENTS,
+} from '@/utils/flexiToyTypes';
 import type {
+  FlexiJointStyle,
   FlexiMeshInput,
   FlexiToyErrorCode,
+  FlexiToyPlan,
   FlexiToySettings,
+  FlexiWarningCode,
   FlexiWorkerRequest,
   FlexiWorkerResponse,
 } from '@/utils/flexiToyTypes';
@@ -58,6 +65,105 @@ const SCALE_CACHE_LIMIT = 3;
 const PREVIEW_SIMPLIFY_MIN_TRIANGLES = 20000;
 /** Preview simplification tolerance (mm) — invisible at preview zoom. */
 const PREVIEW_TOLERANCE_MM = 0.05;
+
+/**
+ * One initial build plus at most five recovery builds. The midpoint schedule in
+ * `nextCertificationSegmentCount` reaches the product minimum from the product
+ * maximum within those six builds: 20 -> 11 -> 7 -> 5 -> 4 -> 3.
+ */
+const MAX_STYLE_CERTIFICATION_BUILDS = 6;
+
+type SuccessfulBuild = Extract<
+  Awaited<ReturnType<typeof buildFlexiToy>>,
+  { status: 'ok' }
+>;
+
+/**
+ * A result needs recovery when any station stayed fused, when a fallback
+ * belongs to the style the user selected, or when the build cannot publish a
+ * whole-degree bend inside the product slider's range. A travel reduction is
+ * certifiable only when the returned fit names the lower applied bend.
+ */
+export function styleFallbackWarningCode(
+  style: FlexiJointStyle,
+): FlexiWarningCode | null {
+  switch (style) {
+    case 'link':
+      return 'link-joint-fallback';
+    case 'strong':
+      return 'strong-joint-fallback';
+    case 'shell':
+      return 'shell-joint-fallback';
+    case 'rounded':
+    case 'classic':
+      return null;
+  }
+}
+
+export function needsStyleCertificationRecovery(
+  outcome: SuccessfulBuild,
+  style: FlexiJointStyle,
+  requestedBendAngleDeg: number,
+): boolean {
+  const code = styleFallbackWarningCode(style);
+  const resolvedBendAngleDeg = outcome.result.plan.fit?.resolvedBendAngleDeg;
+  const hasRepresentableBend =
+    resolvedBendAngleDeg !== undefined &&
+    Number.isInteger(resolvedBendAngleDeg) &&
+    resolvedBendAngleDeg >= FLEXI_MIN_BEND_DEG &&
+    resolvedBendAngleDeg <= requestedBendAngleDeg;
+  const travelWarningCode =
+    style === 'strong'
+      ? 'strong-travel-reduced'
+      : style === 'link'
+        ? 'link-travel-reduced'
+        : null;
+  const hasTravelReduction =
+    travelWarningCode !== null &&
+    outcome.result.warnings.some(
+      (warning) => warning.code === travelWarningCode,
+    );
+  const lacksRepresentableLowerBend =
+    hasTravelReduction &&
+    (!hasRepresentableBend ||
+      resolvedBendAngleDeg === undefined ||
+      resolvedBendAngleDeg >= requestedBendAngleDeg);
+  return (
+    outcome.result.fusedJointCount > 0 ||
+    !hasRepresentableBend ||
+    lacksRepresentableLowerBend ||
+    (code !== null &&
+      outcome.result.warnings.some((warning) => warning.code === code))
+  );
+}
+
+/**
+ * The planner is authoritative about how many stations it actually laid out.
+ * Halving the distance to the minimum makes recovery bounded while still trying
+ * a useful intermediate count before falling all the way to three segments.
+ */
+export function nextCertificationSegmentCount(
+  plan: FlexiToyPlan,
+): number | null {
+  const resolved = plan.joints.length + 1;
+  if (resolved <= FLEXI_MIN_SEGMENTS) return null;
+  return Math.min(
+    resolved - 1,
+    Math.max(
+      FLEXI_MIN_SEGMENTS,
+      Math.floor((resolved + FLEXI_MIN_SEGMENTS) / 2),
+    ),
+  );
+}
+
+function styleCertificationError(style: FlexiJointStyle) {
+  const label = `${style[0].toUpperCase()}${style.slice(1)}`;
+  return {
+    status: 'error' as const,
+    code: 'too-small' as const,
+    message: `This model does not have enough room to fit every ${label} joint without changing joint styles. Try a longer toy or a different joint style.`,
+  };
+}
 
 type ScaleEntry = {
   /**
@@ -291,12 +397,111 @@ async function runCompute(
           },
         };
 
-        const plan = planFlexiToy(meshInput, settings);
-        const outcome = await buildFlexiToy(wasm, meshInput, plan, settings, {
-          prepared: body,
-          control,
-          quality,
-        });
+        // The planner catches most fit problems arithmetically, but the style
+        // builders have a final set of skin, neighbour and boolean gates that
+        // can still choose their rounded fallback. Treat that as a failed style
+        // certificate, not as the result to prefer: remove user-pinned stations
+        // and retry with fewer, evenly placed joints. The selected style and all
+        // other settings remain unchanged.
+        //
+        // A selected-style fallback or fused station must never cross this seam
+        // as `ok`: the UI intentionally does not render raw warnings, so that
+        // would silently substitute a different mechanism or a rigid section.
+        // Exhaustion uses the existing public `too-small` error state instead.
+        let attemptSettings = settings;
+        let outcome: Awaited<ReturnType<typeof buildFlexiToy>> | null = null;
+        let originalRequestedSegmentCount: number | null = null;
+
+        for (
+          let attempt = 0;
+          attempt < MAX_STYLE_CERTIFICATION_BUILDS;
+          attempt += 1
+        ) {
+          const plan = planFlexiToy(meshInput, attemptSettings);
+          originalRequestedSegmentCount ??=
+            plan.fit?.requestedSegmentCount ?? plan.joints.length + 1;
+          const built = await buildFlexiToy(
+            wasm,
+            meshInput,
+            plan,
+            attemptSettings,
+            {
+              prepared: body,
+              control,
+              quality,
+            },
+          );
+
+          if (built.status === 'aborted') {
+            outcome = built;
+            break;
+          }
+          if (built.status !== 'ok') {
+            outcome = built;
+            break;
+          }
+          if (
+            !needsStyleCertificationRecovery(
+              built,
+              attemptSettings.jointStyle,
+              attemptSettings.bendAngleDeg,
+            )
+          ) {
+            const fit = built.result.plan.fit;
+            if (fit) {
+              // Retry plans are intentionally asked for fewer segments, but
+              // the fit summary still belongs to the user's original request.
+              // The exact boolean build is authoritative about the count it
+              // actually emitted, so never leave the UI cap above that result.
+              built.result.plan = {
+                ...built.result.plan,
+                fit: {
+                  ...fit,
+                  requestedSegmentCount: originalRequestedSegmentCount,
+                  resolvedSegmentCount: built.result.segmentCount,
+                  maxSafeSegmentCount:
+                    attempt > 0
+                      ? built.result.segmentCount
+                      : fit.maxSafeSegmentCount,
+                },
+              };
+            }
+            outcome = built;
+            break;
+          }
+
+          const nextSegmentCount = nextCertificationSegmentCount(plan);
+          if (
+            nextSegmentCount === null ||
+            attempt + 1 >= MAX_STYLE_CERTIFICATION_BUILDS
+          ) {
+            outcome = styleCertificationError(attemptSettings.jointStyle);
+            break;
+          }
+
+          // `checkpoint` also yields to the worker message loop. Without this
+          // between-attempt check, a cancel arriving after one complete failed
+          // build would not be observed until the next build reached a joint.
+          if (await control.checkpoint()) {
+            outcome = { status: 'aborted' };
+            break;
+          }
+
+          const { jointPositions: _discarded, ...unpinned } = attemptSettings;
+          attemptSettings = {
+            ...unpinned,
+            segmentCount: nextSegmentCount,
+          };
+        }
+
+        // The loop always assigns an outcome: a certified build, a retained
+        // honest fallback, an error, or an abort. Keep a defensive public error
+        // here so a future control-flow edit cannot result in no worker answer.
+        outcome ??= {
+          status: 'error',
+          code: 'compute-failed',
+          message: 'The flexi toy could not be computed.',
+        };
 
         response =
           outcome.status === 'aborted'

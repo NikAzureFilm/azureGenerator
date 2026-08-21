@@ -54,7 +54,7 @@ async function flush(): Promise<void> {
   }
 }
 
-function okResult() {
+function okResult(attemptSettings = settings) {
   return {
     status: 'ok' as const,
     result: {
@@ -66,7 +66,19 @@ function okResult() {
       jointCount: 0,
       fusedJointCount: 0,
       lengthMm: 1,
-      plan: { joints: [], spine: [], spineLengthMm: 1, warnings: [] },
+      plan: {
+        joints: [],
+        spine: [],
+        spineLengthMm: 1,
+        warnings: [],
+        fit: {
+          requestedSegmentCount: 1,
+          resolvedSegmentCount: 1,
+          maxSafeSegmentCount: 0,
+          jointPositions: [],
+          resolvedBendAngleDeg: attemptSettings.bendAngleDeg,
+        },
+      },
       warnings: [],
     },
   };
@@ -90,7 +102,9 @@ beforeEach(async () => {
     colorGrid: {},
   }));
   build.deriveFlexiPreviewBody.mockReturnValue(null);
-  build.buildFlexiToy.mockImplementation(async () => okResult());
+  build.buildFlexiToy.mockImplementation(
+    async (_wasm, _mesh, _plan, attemptSettings) => okResult(attemptSettings),
+  );
   plan.computeFlexiScale.mockReturnValue(2);
   plan.scaleFlexiPositions.mockImplementation((p: Float32Array) => p);
   plan.planFlexiToy.mockReturnValue({

@@ -666,15 +666,198 @@ describe('FlexiToyDialog', () => {
     expect(settingsArg.jointPositions[1]).toBeCloseTo(0.49, 5);
   });
 
-  it('renders warnings returned by the core as amber helper text', async () => {
+  it('keeps automatic core warnings and fused counts out of the UI', async () => {
     renderDialog();
     await settle();
 
     expect(
-      screen.getByText('1 joint is too thin to move — it stays rigid.'),
-    ).toBeInTheDocument();
-    // The stats line (segments · joints · mm) sits with the joints strip.
-    expect(screen.getByText(/\(1 fused\)/)).toBeInTheDocument();
+      screen.queryByText('1 joint is too thin to move — it stays rigid.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(1 fused\)/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the full segment range open after a safe unreduced fit', async () => {
+    renderDialog();
+    await settle();
+
+    const safeResult: FlexiToyResult = {
+      ...fakeResult,
+      segmentCount: 4,
+      jointCount: 3,
+      fusedJointCount: 0,
+      plan: {
+        ...fakeResult.plan,
+        joints: [joint(0.25, false), joint(0.5, false), joint(0.75, false)],
+        fit: {
+          requestedSegmentCount: 4,
+          resolvedSegmentCount: 4,
+          maxSafeSegmentCount: 0,
+          jointPositions: [0.25, 0.5, 0.75],
+        },
+      },
+    };
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: safeResult,
+    });
+
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Segments' }), {
+      key: 'ArrowLeft',
+    });
+    await settle();
+
+    const segments = screen.getByRole('slider', { name: 'Segments' });
+    expect(segments).toHaveValue(4);
+    expect(segments).toHaveAttribute('aria-valuemax', '20');
+  });
+
+  it('snaps an unsafe custom segment choice to the certified count without looping', async () => {
+    renderDialog();
+    await settle();
+
+    const fittedResult: FlexiToyResult = {
+      ...fakeResult,
+      segmentCount: 3,
+      jointCount: 2,
+      fusedJointCount: 0,
+      plan: {
+        ...fakeResult.plan,
+        joints: [joint(1 / 3, false), joint(2 / 3, false)],
+        fit: {
+          requestedSegmentCount: 20,
+          resolvedSegmentCount: 3,
+          maxSafeSegmentCount: 3,
+          jointPositions: [1 / 3, 2 / 3],
+        },
+      },
+    };
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: fittedResult,
+    });
+
+    const segments = screen.getByRole('slider', { name: 'Segments' });
+    fireEvent.keyDown(segments, { key: 'End' });
+    await settle();
+
+    let fittedSegments = screen.getByRole('slider', { name: 'Segments' });
+    expect(fittedSegments).toHaveValue('3');
+    expect(fittedSegments).toHaveAttribute('max', '3');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+    expect((computeFlexiToy as Mock).mock.calls[0][1].segmentCount).toBe(20);
+    expect((computeFlexiToy as Mock).mock.calls[1][1].segmentCount).toBe(3);
+
+    // More time cannot trigger another corrective compute from the same fit.
+    await settle();
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+
+    // A different fit-affecting setting retries the user's original request and
+    // reopens the product-wide cap until the next certified result lands.
+    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
+    fittedSegments = screen.getByRole('slider', { name: 'Segments' });
+    expect(fittedSegments).toHaveAttribute('aria-valuenow', '20');
+    expect(fittedSegments).toHaveAttribute('aria-valuemax', '20');
+
+    // Even when the new setting resolves to the exact same fit values (and the
+    // mock returns the same result object), the newly landed certificate must
+    // reapply its cap and settle after one corrective compute.
+    await settle();
+    fittedSegments = screen.getByRole('slider', { name: 'Segments' });
+    expect(fittedSegments).toHaveValue('3');
+    expect(fittedSegments).toHaveAttribute('max', '3');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(4);
+    expect((computeFlexiToy as Mock).mock.calls[2][1].segmentCount).toBe(20);
+    expect((computeFlexiToy as Mock).mock.calls[3][1].segmentCount).toBe(3);
+  });
+
+  it('shows the certified bend and retries the requested bend on a different fit', async () => {
+    renderDialog();
+    await settle();
+
+    const fittedResult: FlexiToyResult = {
+      ...fakeResult,
+      plan: {
+        ...fakeResult.plan,
+        fit: {
+          requestedSegmentCount: 5,
+          resolvedSegmentCount: 5,
+          maxSafeSegmentCount: 5,
+          jointPositions: [0.2, 0.4, 0.6, 0.8],
+          resolvedBendAngleDeg: 12,
+        },
+      },
+    };
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: fittedResult,
+    });
+
+    const flexibility = screen.getByRole('slider', { name: 'Flexibility' });
+    fireEvent.keyDown(flexibility, { key: 'End' });
+    await settle();
+
+    expect(flexibility).toHaveAttribute('aria-valuenow', '12');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+    expect((computeFlexiToy as Mock).mock.calls[0][1].bendAngleDeg).toBe(90);
+    expect((computeFlexiToy as Mock).mock.calls[1][1].bendAngleDeg).toBe(12);
+
+    await settle();
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
+    expect(flexibility).toHaveAttribute('aria-valuenow', '90');
+    await settle();
+
+    expect(flexibility).toHaveAttribute('aria-valuenow', '12');
+    expect(computeFlexiToy).toHaveBeenCalledTimes(4);
+    expect((computeFlexiToy as Mock).mock.calls[2][1].bendAngleDeg).toBe(90);
+    expect((computeFlexiToy as Mock).mock.calls[3][1].bendAngleDeg).toBe(12);
+  });
+
+  it('keeps dragged positions coherent when auto-fit reduces their count', async () => {
+    renderDialog();
+    await settle();
+
+    dragHandleTo(0, 0.4);
+    await settle();
+
+    const fittedResult: FlexiToyResult = {
+      ...fakeResult,
+      segmentCount: 3,
+      jointCount: 2,
+      fusedJointCount: 0,
+      plan: {
+        ...fakeResult.plan,
+        joints: [joint(0.33, false), joint(0.67, false)],
+        fit: {
+          requestedSegmentCount: 4,
+          resolvedSegmentCount: 3,
+          maxSafeSegmentCount: 3,
+          jointPositions: [0.33, 0.67],
+        },
+      },
+    };
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: fittedResult,
+    });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Loose' }));
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+    const firstSettings = (computeFlexiToy as Mock).mock.calls[0][1];
+    const resolvedSettings = (computeFlexiToy as Mock).mock.calls[1][1];
+    expect(firstSettings.segmentCount).toBe(4);
+    expect(firstSettings.jointPositions).toHaveLength(3);
+    expect(resolvedSettings.segmentCount).toBe(3);
+    expect(resolvedSettings.jointPositions).toEqual([0.33, 0.67]);
+    expect(resolvedSettings.jointPositions).toHaveLength(
+      resolvedSettings.segmentCount - 1,
+    );
   });
 
   it('invokes the export helpers when the download buttons are clicked', async () => {
@@ -691,6 +874,50 @@ describe('FlexiToyDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: '.STL' }));
     await settle();
     expect(flexiResultToStlBlob).toHaveBeenCalledWith(fakeResult);
+  });
+
+  it('lands a stricter final fit on screen before exporting it', async () => {
+    renderDialog();
+    await settle();
+
+    const finalResult: FlexiToyResult = {
+      ...fakeResult,
+      segmentCount: 3,
+      jointCount: 2,
+      fusedJointCount: 0,
+      lengthMm: 149,
+      plan: {
+        ...fakeResult.plan,
+        joints: [joint(0.33, false), joint(0.67, false)],
+        fit: {
+          requestedSegmentCount: 5,
+          resolvedSegmentCount: 3,
+          maxSafeSegmentCount: 3,
+          jointPositions: [0.33, 0.67],
+          resolvedBendAngleDeg: 5,
+        },
+      },
+    };
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'ok',
+      result: finalResult,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '.STL' }));
+    await settle();
+
+    expect(flexiResultToStlBlob).toHaveBeenCalledWith(finalResult);
+    expect(screen.getByRole('slider', { name: 'Segments' })).toHaveValue('3');
+    expect(screen.getByRole('slider', { name: 'Segments' })).toHaveAttribute(
+      'max',
+      '3',
+    );
+    expect(screen.getByRole('slider', { name: 'Flexibility' })).toHaveAttribute(
+      'aria-valuenow',
+      '5',
+    );
+    expect(screen.getAllByTestId(/flexi-joint-handle-/)).toHaveLength(2);
   });
 
   // The preview on screen is built at 'preview' quality (simplified body), so a
@@ -754,6 +981,57 @@ describe('FlexiToyDialog', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '.STL' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '.3MF' })).toBeDisabled();
+  });
+
+  it('recovers a too-small build once with the safest settings and keeps the style', async () => {
+    (computeFlexiToy as Mock)
+      .mockResolvedValueOnce({
+        status: 'error',
+        code: 'too-small',
+        message: 'not enough room',
+      })
+      .mockResolvedValueOnce({ status: 'ok', result: fakeResult });
+
+    renderDialog();
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+    expect((computeFlexiToy as Mock).mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        jointStyle: 'link',
+        segmentCount: 3,
+        targetLengthMm: 400,
+        bendAngleDeg: 5,
+        clearanceMm: 0.2,
+        linkThicknessScale: 0.6,
+        linkRoomScale: 0.5,
+      }),
+    );
+    expect(
+      (computeFlexiToy as Mock).mock.calls[1][1].jointPositions,
+    ).toBeUndefined();
+    expect(
+      screen.queryByText('This model is a little too small'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows too-small only after the safest retry also fails', async () => {
+    (computeFlexiToy as Mock).mockResolvedValue({
+      status: 'error',
+      code: 'too-small',
+      message: 'not enough room',
+    });
+
+    renderDialog();
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText('This model is a little too small'),
+    ).toBeInTheDocument();
+
+    await settle();
+    expect(computeFlexiToy).toHaveBeenCalledTimes(2);
   });
 
   it('shows a friendly error state when the core cannot build the toy', async () => {

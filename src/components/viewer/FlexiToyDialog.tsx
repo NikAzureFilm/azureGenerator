@@ -95,6 +95,26 @@ function disposeScene(scene: THREE.Scene | null | undefined): void {
   });
 }
 
+function sameJointPositions(a: number[], b: number[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((fraction, index) => Math.abs(fraction - b[index]) < 1e-9)
+  );
+}
+
+function isTooSmallRecoverySettings(settings: FlexiToySettings): boolean {
+  return (
+    settings.segmentCount === FLEXI_MIN_SEGMENTS &&
+    settings.targetLengthMm === FLEXI_MAX_LENGTH_MM &&
+    settings.bendAngleDeg === FLEXI_MIN_BEND_DEG &&
+    settings.clearanceMm === FLEXI_MIN_CLEARANCE_MM &&
+    !settings.jointPositions &&
+    (settings.jointStyle !== 'link' ||
+      (settings.linkThicknessScale === FLEXI_MIN_LINK_THICKNESS_SCALE &&
+        settings.linkRoomScale === FLEXI_MIN_LINK_ROOM_SCALE))
+  );
+}
+
 export function FlexiToyDialog({
   open,
   onOpenChange,
@@ -114,6 +134,11 @@ export function FlexiToyDialog({
   const [segmentCountCustom, setSegmentCountCustom] = useState(
     LINK_DEFAULTS.segmentCountCustom,
   );
+  // The slider follows the last certified fit. Keep the user's larger request
+  // separately so another fit-affecting change can reopen and retry it.
+  const requestedSegmentCountRef = useRef(LINK_DEFAULTS.segmentCountCustom);
+  const [maxSafeSegmentCount, setMaxSafeSegmentCount] =
+    useState(FLEXI_MAX_SEGMENTS);
   const [clearanceMm, setClearanceMm] = useState<number>(
     LINK_DEFAULTS.clearanceMm,
   );
@@ -123,6 +148,9 @@ export function FlexiToyDialog({
   );
   const [jointScale, setJointScale] = useState(LINK_DEFAULTS.jointScale);
   const [bendAngleDeg, setBendAngleDeg] = useState(LINK_DEFAULTS.bendAngleDeg);
+  // As with segment count, show the certified value without forgetting what
+  // the user asked for. A different fit can then retry the original bend.
+  const requestedBendAngleDegRef = useRef(LINK_DEFAULTS.bendAngleDeg);
   const [linkThicknessScale, setLinkThicknessScale] = useState(
     LINK_DEFAULTS.linkThicknessScale,
   );
@@ -159,6 +187,12 @@ export function FlexiToyDialog({
   const [scrubbing, setScrubbing] = useState(false);
 
   const [result, setResult] = useState<FlexiToyResult | null>(null);
+  // Associates the landed result with the settings that produced it. Two
+  // different settings can resolve to the same fit numbers, so the fit effect
+  // cannot use those numbers alone to detect a newly certified result.
+  const [resultSettingsKey, setResultSettingsKey] = useState<string | null>(
+    null,
+  );
   const [isComputing, setIsComputing] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
     code: FlexiToyErrorCode;
@@ -253,11 +287,70 @@ export function FlexiToyDialog({
   const flexibilityMaxDeg =
     jointStyle === 'link' ? FLEXI_MAX_LINK_BEND_DEG : FLEXI_MAX_BEND_DEG;
 
-  const selectJointStyle = (style: FlexiUiJointStyle): void => {
-    setJointStyle(style);
-    if (style !== 'link') {
-      setBendAngleDeg((value) => Math.min(value, FLEXI_MAX_BEND_DEG));
+  // Changing where/how many cuts there are invalidates any dragged stations
+  // (their count and spine placement no longer apply), so these clear them.
+  // The token bump tells the strip to drop a keyboard commit still waiting on
+  // its debounce — otherwise it would land afterwards and re-pin the stations
+  // we just cleared.
+  const clearPinnedPositions = useCallback(() => {
+    setJointPositions(null);
+    setStationEditToken((token) => token + 1);
+  }, []);
+
+  // A certified cap only applies to the settings that produced it. Restore the
+  // user's pre-fit count and the product-wide ceiling before another setting is
+  // evaluated. If the count changes, old dragged positions no longer satisfy
+  // jointPositions.length === segmentCount - 1 and must be cleared together.
+  const reopenSegmentFit = useCallback(() => {
+    setMaxSafeSegmentCount(FLEXI_MAX_SEGMENTS);
+    const requested = requestedSegmentCountRef.current;
+    if (segmentCountCustom !== requested) {
+      setSegmentCountCustom(requested);
+      clearPinnedPositions();
     }
+  }, [clearPinnedPositions, segmentCountCustom]);
+
+  const reopenBendFit = useCallback(() => {
+    const styleMax =
+      jointStyle === 'link' ? FLEXI_MAX_LINK_BEND_DEG : FLEXI_MAX_BEND_DEG;
+    const requested = clamp(
+      requestedBendAngleDegRef.current,
+      FLEXI_MIN_BEND_DEG,
+      styleMax,
+    );
+    setBendAngleDeg((current) => (current === requested ? current : requested));
+  }, [jointStyle]);
+
+  const recoverTooSmall = useCallback(() => {
+    requestedSegmentCountRef.current = FLEXI_MIN_SEGMENTS;
+    requestedBendAngleDegRef.current = FLEXI_MIN_BEND_DEG;
+    setMaxSafeSegmentCount(FLEXI_MAX_SEGMENTS);
+    setSegmentMode('custom');
+    setSegmentCountCustom(FLEXI_MIN_SEGMENTS);
+    setTargetLengthMm(FLEXI_MAX_LENGTH_MM);
+    setBendAngleDeg(FLEXI_MIN_BEND_DEG);
+    setClearanceMm(FLEXI_MIN_CLEARANCE_MM);
+    setLinkThicknessScale(FLEXI_MIN_LINK_THICKNESS_SCALE);
+    setLinkRoomScale(FLEXI_MIN_LINK_ROOM_SCALE);
+    setJointPositions(null);
+    setStationEditToken((token) => token + 1);
+    setResult(null);
+    setResultSettingsKey(null);
+    setErrorInfo(null);
+  }, []);
+
+  const selectJointStyle = (style: FlexiUiJointStyle): void => {
+    reopenSegmentFit();
+    const styleMax =
+      style === 'link' ? FLEXI_MAX_LINK_BEND_DEG : FLEXI_MAX_BEND_DEG;
+    const requested = clamp(
+      requestedBendAngleDegRef.current,
+      FLEXI_MIN_BEND_DEG,
+      styleMax,
+    );
+    requestedBendAngleDegRef.current = requested;
+    setBendAngleDeg(requested);
+    setJointStyle(style);
   };
 
   // Fresh session each time the dialog opens: every control goes back to the
@@ -271,11 +364,14 @@ export function FlexiToyDialog({
 
     setSegmentMode(LINK_DEFAULTS.segmentMode);
     setSegmentCountCustom(LINK_DEFAULTS.segmentCountCustom);
+    requestedSegmentCountRef.current = LINK_DEFAULTS.segmentCountCustom;
+    setMaxSafeSegmentCount(FLEXI_MAX_SEGMENTS);
     setClearanceMm(LINK_DEFAULTS.clearanceMm);
     setShowAdvancedFit(false);
     setTargetLengthMm(LINK_DEFAULTS.targetLengthMm);
     setJointScale(LINK_DEFAULTS.jointScale);
     setBendAngleDeg(LINK_DEFAULTS.bendAngleDeg);
+    requestedBendAngleDegRef.current = LINK_DEFAULTS.bendAngleDeg;
     setLinkThicknessScale(LINK_DEFAULTS.linkThicknessScale);
     setLinkRoomScale(LINK_DEFAULTS.linkRoomScale);
     setJointStyle(DEFAULT_JOINT_STYLE);
@@ -292,6 +388,7 @@ export function FlexiToyDialog({
       resultCacheRef.current.clear();
       finalCacheRef.current.clear();
       setResult(null);
+      setResultSettingsKey(null);
     }
 
     // Fire-and-forget warm-up: failures surface through the compute effect,
@@ -323,6 +420,7 @@ export function FlexiToyDialog({
       resultCacheRef.current.set(settingsKey, cached);
       computeTokenRef.current += 1;
       setResult(cached);
+      setResultSettingsKey(settingsKey);
       setIsComputing(false);
       setErrorInfo(null);
       return;
@@ -350,6 +448,18 @@ export function FlexiToyDialog({
           return;
         }
         if (outcome.status === 'error') {
+          if (
+            outcome.code === 'too-small' &&
+            !isTooSmallRecoverySettings(settings)
+          ) {
+            // There is one useful automatic fallback for this error: make the
+            // body as long as allowed and every fit control as conservative as
+            // allowed, while preserving the style the user chose. Because the
+            // next settings object already matches this predicate, a second
+            // failure lands normally instead of retrying forever.
+            recoverTooSmall();
+            return;
+          }
           setErrorInfo({ code: outcome.code, message: outcome.message });
           return;
         }
@@ -368,6 +478,7 @@ export function FlexiToyDialog({
           cache.delete(oldest);
         }
         setResult(outcome.result);
+        setResultSettingsKey(settingsKey);
       } catch (error) {
         if (computeTokenRef.current !== token) {
           return;
@@ -387,13 +498,107 @@ export function FlexiToyDialog({
     }, RECOMPUTE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [open, gltf, settingsKey, settings, scrubbing, ensureMeshInput]);
+  }, [
+    open,
+    gltf,
+    settingsKey,
+    settings,
+    scrubbing,
+    ensureMeshInput,
+    recoverTooSmall,
+  ]);
 
   // A landed result carries the planner's own station placement, so any live
   // drag offset has served its purpose.
   useEffect(() => {
     setDragState(null);
   }, [result]);
+
+  const fitResolvedSegmentCount =
+    result?.plan.fit?.resolvedSegmentCount ?? null;
+  const fitMaxSafeSegmentCount = result?.plan.fit?.maxSafeSegmentCount ?? null;
+  const fitJointPositionsKey =
+    result?.plan.fit?.jointPositions.join(',') ?? null;
+  const fitResolvedBendAngleDeg =
+    result?.plan.fit?.resolvedBendAngleDeg ?? null;
+
+  // Reflect the planner's certified result once. Dependencies are primitive and
+  // every setter returns its previous state when nothing changed, so the
+  // corrective compute caused by 20 -> 5 settles after that one follow-up.
+  useEffect(() => {
+    const hasResolvedSegmentFit = !(
+      fitResolvedSegmentCount === null ||
+      fitMaxSafeSegmentCount === null ||
+      fitJointPositionsKey === null
+    );
+
+    if (!hasResolvedSegmentFit) {
+      // A missing fit is a legacy payload. It cannot constrain the slider, so
+      // leave the normal product range open.
+      setMaxSafeSegmentCount((current) =>
+        current === FLEXI_MAX_SEGMENTS ? current : FLEXI_MAX_SEGMENTS,
+      );
+    } else {
+      // Zero is the planner's explicit "no conditional cap" value. The fit is
+      // still authoritative for count and relocated stations; only its slider
+      // ceiling stays at the product maximum.
+      const safeMax =
+        fitMaxSafeSegmentCount >= FLEXI_MIN_SEGMENTS
+          ? clamp(
+              Math.round(fitMaxSafeSegmentCount),
+              FLEXI_MIN_SEGMENTS,
+              FLEXI_MAX_SEGMENTS,
+            )
+          : FLEXI_MAX_SEGMENTS;
+      const resolved = clamp(
+        Math.round(fitResolvedSegmentCount),
+        FLEXI_MIN_SEGMENTS,
+        safeMax,
+      );
+      setMaxSafeSegmentCount((current) =>
+        current === safeMax ? current : safeMax,
+      );
+
+      if (segmentMode === 'custom') {
+        setSegmentCountCustom((current) =>
+          current === resolved ? current : resolved,
+        );
+        setJointPositions((current) => {
+          if (current === null) {
+            return current;
+          }
+          const resolvedPositions = fitJointPositionsKey
+            ? fitJointPositionsKey.split(',').map(Number)
+            : [];
+          if (resolvedPositions.length !== resolved - 1) {
+            return null;
+          }
+          return sameJointPositions(current, resolvedPositions)
+            ? current
+            : resolvedPositions;
+        });
+      }
+    }
+
+    if (fitResolvedBendAngleDeg !== null) {
+      const resolvedBend = clamp(
+        Math.round(fitResolvedBendAngleDeg),
+        FLEXI_MIN_BEND_DEG,
+        flexibilityMaxDeg,
+      );
+      setBendAngleDeg((current) =>
+        current === resolvedBend ? current : resolvedBend,
+      );
+    }
+  }, [
+    fitJointPositionsKey,
+    fitMaxSafeSegmentCount,
+    fitResolvedBendAngleDeg,
+    fitResolvedSegmentCount,
+    flexibilityMaxDeg,
+    resultSettingsKey,
+    segmentMode,
+  ]);
 
   const activePreset = useMemo<FlexiClearancePreset | null>(() => {
     const match = CLEARANCE_PRESET_ORDER.find(
@@ -403,34 +608,12 @@ export function FlexiToyDialog({
     return match ?? null;
   }, [clearanceMm]);
 
-  // Dedup warnings by their rendered message so repeated per-joint codes read
-  // as one friendly line.
-  const warningMessages = useMemo(() => {
-    const seen = new Set<string>();
-    const messages: string[] = [];
-    for (const warning of result?.warnings ?? []) {
-      if (!seen.has(warning.message)) {
-        seen.add(warning.message);
-        messages.push(warning.message);
-      }
-    }
-    return messages;
-  }, [result]);
-
-  const totalJoints = result ? result.jointCount + result.fusedJointCount : 0;
+  const totalJoints = result?.jointCount ?? 0;
   const highlightIndex = dragState ? dragState.index : hoverJointIndex;
 
-  // Changing where/how many cuts there are invalidates any dragged stations
-  // (their count and spine placement no longer apply), so these clear them.
-  // The token bump tells the strip to drop a keyboard commit still waiting on
-  // its debounce — otherwise it would land afterwards and re-pin the stations
-  // we just cleared.
-  const clearPinnedPositions = useCallback(() => {
-    setJointPositions(null);
-    setStationEditToken((token) => token + 1);
-  }, []);
-
   const changeLength = (value: number) => {
+    reopenSegmentFit();
+    reopenBendFit();
     setTargetLengthMm(value);
     clearPinnedPositions();
   };
@@ -446,11 +629,45 @@ export function FlexiToyDialog({
   };
 
   const changeAxis = (value: FlexiAxisOverride) => {
+    reopenSegmentFit();
+    reopenBendFit();
     setAxisOverride(value);
     clearPinnedPositions();
   };
 
+  const changeClearance = (value: number) => {
+    reopenSegmentFit();
+    reopenBendFit();
+    setClearanceMm(value);
+  };
+
+  const changeJointScale = (value: number) => {
+    reopenSegmentFit();
+    reopenBendFit();
+    setJointScale(value);
+  };
+
+  const changeLinkThickness = (value: number) => {
+    reopenSegmentFit();
+    reopenBendFit();
+    setLinkThicknessScale(value);
+  };
+
+  const changeLinkRoom = (value: number) => {
+    reopenSegmentFit();
+    reopenBendFit();
+    setLinkRoomScale(value);
+  };
+
+  const changeBendAngle = (value: number) => {
+    reopenSegmentFit();
+    requestedBendAngleDegRef.current = value;
+    setBendAngleDeg(value);
+  };
+
   const useAutoSegments = () => {
+    reopenBendFit();
+    setMaxSafeSegmentCount(FLEXI_MAX_SEGMENTS);
     setSegmentMode('auto');
     clearPinnedPositions();
   };
@@ -461,22 +678,25 @@ export function FlexiToyDialog({
     if (segmentMode === 'custom') {
       return;
     }
-    setSegmentCountCustom((count) =>
-      clamp(
-        // Seed from the pieces the PLANNER laid out, never from
-        // result.segmentCount — that is the built BODY count, which is smaller
-        // whenever a joint is fused, and using it would break the
-        // jointPositions.length === segmentCount − 1 contract.
-        result ? result.plan.joints.length + 1 : count,
-        FLEXI_MIN_SEGMENTS,
-        FLEXI_MAX_SEGMENTS,
-      ),
+    reopenBendFit();
+    const seededCount = clamp(
+      // Seed from the pieces the PLANNER laid out, never from
+      // result.segmentCount — that is the built BODY count, which is smaller
+      // whenever a joint is fused, and using it would break the
+      // jointPositions.length === segmentCount − 1 contract.
+      result ? result.plan.joints.length + 1 : segmentCountCustom,
+      FLEXI_MIN_SEGMENTS,
+      FLEXI_MAX_SEGMENTS,
     );
+    requestedSegmentCountRef.current = seededCount;
+    setSegmentCountCustom(seededCount);
     setSegmentMode('custom');
     clearPinnedPositions();
   };
 
   const changeSegmentCount = (value: number) => {
+    reopenBendFit();
+    requestedSegmentCountRef.current = value;
     setSegmentCountCustom(value);
     clearPinnedPositions();
   };
@@ -490,15 +710,28 @@ export function FlexiToyDialog({
   // runs on every commit, not just from 'auto': the dialog now opens in custom
   // mode, and leaving a stale count would break the length contract whenever
   // the planner placed a different number of stations.
-  const handleRingCommit = useCallback((fractions: number[]) => {
-    setSegmentCountCustom(
-      clamp(fractions.length + 1, FLEXI_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS),
-    );
-    setSegmentMode('custom');
-    setJointPositions(fractions);
-  }, []);
+  const handleRingCommit = useCallback(
+    (fractions: number[]) => {
+      reopenBendFit();
+      const count = clamp(
+        fractions.length + 1,
+        FLEXI_MIN_SEGMENTS,
+        FLEXI_MAX_SEGMENTS,
+      );
+      requestedSegmentCountRef.current = count;
+      setMaxSafeSegmentCount(FLEXI_MAX_SEGMENTS);
+      setSegmentCountCustom(count);
+      setSegmentMode('custom');
+      setJointPositions(fractions);
+    },
+    [reopenBendFit],
+  );
 
-  const handleStripReset = clearPinnedPositions;
+  const handleStripReset = useCallback(() => {
+    reopenSegmentFit();
+    reopenBendFit();
+    clearPinnedPositions();
+  }, [clearPinnedPositions, reopenBendFit, reopenSegmentFit]);
 
   // The toy on screen is a PREVIEW build (simplified body, coarser joint
   // solids). A file has to be the exact geometry, so a download re-runs the
@@ -584,6 +817,16 @@ export function FlexiToyDialog({
             'The full-quality build failed, so the preview-quality version was downloaded.',
         });
       }
+      if (final.status === 'ok') {
+        // Final-quality booleans can certify a slightly safer count, station,
+        // or bend than the preview. Land that exact result before handing it
+        // to the exporter; the normal fit effect then brings every visible
+        // control to the same certificate instead of leaving the screen and
+        // downloaded file on two different toy layouts.
+        setResult(final.result);
+        setResultSettingsKey(settingsKey);
+        setErrorInfo(null);
+      }
       const exported = final.status === 'ok' ? final.result : result;
 
       const blob =
@@ -657,10 +900,9 @@ export function FlexiToyDialog({
         </DialogHeader>
 
         {/* Below lg the body is ONE scrolling column: the preview block's
-            height is content-driven (preview + strip + stats + a variable
-            number of warning lines), so if it could not scroll away it would
-            squeeze the controls to nothing on a phone. From lg the two columns
-            split and only the right one scrolls. */}
+            content-driven height must be able to scroll away rather than
+            squeeze the controls on a phone. From lg the two columns split and
+            only the right one scrolls. */}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain lg:grid lg:grid-cols-5 lg:grid-rows-1 lg:overflow-hidden">
           {/* LEFT — preview + joints strip. Fixed on desktop; the controls
               column is the only thing that scrolls. */}
@@ -725,7 +967,7 @@ export function FlexiToyDialog({
                     <Button
                       size="sm"
                       className="mt-1"
-                      onClick={() => setJointStyle('strong')}
+                      onClick={() => selectJointStyle('strong')}
                     >
                       Switch to Strong
                     </Button>
@@ -757,26 +999,8 @@ export function FlexiToyDialog({
                 <span className="font-medium text-adam-text-primary">
                   {totalJoints}
                 </span>{' '}
-                joints
-                {result.fusedJointCount > 0
-                  ? ` (${result.fusedJointCount} fused)`
-                  : ''}{' '}
-                · {Math.round(result.lengthMm)} mm
+                joints · {Math.round(result.lengthMm)} mm
               </div>
-            ) : null}
-
-            {warningMessages.length > 0 && !errorInfo ? (
-              <ul className="max-h-24 shrink-0 space-y-1 overflow-y-auto">
-                {warningMessages.map((message) => (
-                  <li
-                    key={message}
-                    className="flex items-start gap-1.5 text-xs text-amber-400"
-                  >
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{message}</span>
-                  </li>
-                ))}
-              </ul>
             ) : null}
           </div>
 
@@ -839,17 +1063,40 @@ export function FlexiToyDialog({
                 ) : null}
               </div>
               {segmentMode === 'custom' ? (
-                <Slider
-                  aria-label="Segments"
-                  className="mt-2 h-11 sm:h-8"
-                  value={[segmentCountCustom]}
-                  min={FLEXI_MIN_SEGMENTS}
-                  max={FLEXI_MAX_SEGMENTS}
-                  step={1}
-                  defaultValue={[LINK_DEFAULTS.segmentCountCustom]}
-                  onValueChange={([value]) => changeSegmentCount(value)}
-                  onScrubChange={setScrubbing}
-                />
+                maxSafeSegmentCount === FLEXI_MIN_SEGMENTS ? (
+                  // Radix computes a percentage from (value-min)/(max-min), so
+                  // its track cannot represent a zero-width range. A disabled
+                  // native range preserves the truthful min=max accessibility
+                  // contract when auto-fit proves only the minimum is safe.
+                  <input
+                    aria-label="Segments"
+                    className="mt-2 h-11 w-full accent-sky-300 sm:h-8"
+                    type="range"
+                    value={FLEXI_MIN_SEGMENTS}
+                    min={FLEXI_MIN_SEGMENTS}
+                    max={FLEXI_MIN_SEGMENTS}
+                    step={1}
+                    disabled
+                    readOnly
+                  />
+                ) : (
+                  <Slider
+                    aria-label="Segments"
+                    className="mt-2 h-11 sm:h-8"
+                    value={[segmentCountCustom]}
+                    min={FLEXI_MIN_SEGMENTS}
+                    max={maxSafeSegmentCount}
+                    step={1}
+                    defaultValue={[
+                      Math.min(
+                        LINK_DEFAULTS.segmentCountCustom,
+                        maxSafeSegmentCount,
+                      ),
+                    ]}
+                    onValueChange={([value]) => changeSegmentCount(value)}
+                    onScrubChange={setScrubbing}
+                  />
+                )
               ) : (
                 <p className="mt-2 text-xs text-adam-text-secondary/80">
                   We pick the number of segments to fit the model.
@@ -878,7 +1125,7 @@ export function FlexiToyDialog({
                     key={preset}
                     active={activePreset === preset}
                     onClick={() =>
-                      setClearanceMm(FLEXI_CLEARANCE_PRESETS[preset])
+                      changeClearance(FLEXI_CLEARANCE_PRESETS[preset])
                     }
                   >
                     {CLEARANCE_PRESET_LABELS[preset]}
@@ -904,7 +1151,7 @@ export function FlexiToyDialog({
                     step={0.05}
                     defaultValue={[FLEXI_CLEARANCE_PRESETS.standard]}
                     onValueChange={([value]) =>
-                      setClearanceMm(Number(value.toFixed(2)))
+                      changeClearance(Number(value.toFixed(2)))
                     }
                     onScrubChange={setScrubbing}
                   />
@@ -959,7 +1206,7 @@ export function FlexiToyDialog({
                 step={0.05}
                 defaultValue={[LINK_DEFAULTS.jointScale]}
                 onValueChange={([value]) =>
-                  setJointScale(Number(value.toFixed(2)))
+                  changeJointScale(Number(value.toFixed(2)))
                 }
                 onScrubChange={setScrubbing}
               />
@@ -983,7 +1230,7 @@ export function FlexiToyDialog({
                   step={0.05}
                   defaultValue={[LINK_DEFAULTS.linkThicknessScale]}
                   onValueChange={([value]) =>
-                    setLinkThicknessScale(Number(value.toFixed(2)))
+                    changeLinkThickness(Number(value.toFixed(2)))
                   }
                   onScrubChange={setScrubbing}
                 />
@@ -1010,7 +1257,7 @@ export function FlexiToyDialog({
                   step={0.05}
                   defaultValue={[LINK_DEFAULTS.linkRoomScale]}
                   onValueChange={([value]) =>
-                    setLinkRoomScale(Number(value.toFixed(2)))
+                    changeLinkRoom(Number(value.toFixed(2)))
                   }
                   onScrubChange={setScrubbing}
                 />
@@ -1032,7 +1279,7 @@ export function FlexiToyDialog({
                 max={flexibilityMaxDeg}
                 step={1}
                 defaultValue={[LINK_DEFAULTS.bendAngleDeg]}
-                onValueChange={([value]) => setBendAngleDeg(Math.round(value))}
+                onValueChange={([value]) => changeBendAngle(Math.round(value))}
                 onScrubChange={setScrubbing}
               />
               {/* A switch, not a ternary, so a fourth style is a

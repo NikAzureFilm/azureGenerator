@@ -408,6 +408,11 @@ const BALL_CONNECTIVITY_MARGIN_MM = 0.2;
 // User-dragged cut stations are clamped into this open fraction range.
 const STATION_MIN_FRACTION = 0.02;
 const STATION_MAX_FRACTION = 0.98;
+// Auto-fit samples each station's ordered cell at this many intervals. The
+// original fraction is always probed too, so already-valid plans pay no search
+// cost and moved stations remain deterministic.
+const STATION_RELOCATION_SAMPLES = 32;
+const STATION_CELL_INSET_FRACTION = 1e-4;
 // A dragged station that moves by more than this (fraction) during sanitization
 // triggers the 'joint-positions-adjusted' warning.
 const STATION_ADJUST_EPSILON = 1e-3;
@@ -561,9 +566,15 @@ export function planFlexiToy(
     });
   }
 
-  // Stations are either pinned by the user (dragged cuts) or evenly spaced with
-  // the printable-pitch reduction loop.
-  const pinned = resolvePinnedStations(
+  const { initial: requestedSegmentCount, minSegments } = resolveSegmentCount(
+    settings.segmentCount,
+    spine.lengthMm,
+  );
+
+  // Pinned stations are a soft preference. The first fit attempt preserves
+  // them (after sanitising ordering); if they cannot realise the requested
+  // style, later attempts reduce the count and reseed evenly.
+  const resolvedPinned = resolvePinnedStations(
     settings,
     spine,
     input.positions,
@@ -573,15 +584,34 @@ export function planFlexiToy(
     jointStyle,
     linkTuning,
   );
+  const pinned =
+    resolvedPinned?.fractions.length === requestedSegmentCount - 1
+      ? resolvedPinned
+      : null;
 
   let placed: PlacedJoints;
+  let finalFractions: number[] = [];
+  let segmentCount = requestedSegmentCount;
   let reduced = false;
-  let positionsAdjusted = false;
+  let positionsAdjusted = resolvedPinned?.adjusted ?? false;
+  if (
+    !pinned &&
+    settings.jointPositions &&
+    settings.jointPositions.length > 0
+  ) {
+    // Present but malformed: treat the positions as a preference we cannot
+    // safely honour, then fit from an even seed.
+    positionsAdjusted = true;
+  }
 
-  if (pinned) {
-    positionsAdjusted = pinned.adjusted;
-    placed = placeAndSizeJoints(
-      pinned.fractions,
+  let safeFit = false;
+  for (;;) {
+    const seededFractions =
+      segmentCount === requestedSegmentCount && pinned
+        ? pinned.fractions
+        : evenFractions(segmentCount);
+    const fitted = fitStationsForCount(
+      seededFractions,
       spine,
       input.positions,
       clearance,
@@ -590,44 +620,25 @@ export function planFlexiToy(
       jointStyle,
       linkTuning,
     );
-  } else {
-    if (settings.jointPositions && settings.jointPositions.length > 0) {
-      // Present but malformed: fall back to even spacing and say so.
-      positionsAdjusted = true;
-    }
-    const { initial, minSegments } = resolveSegmentCount(
-      settings.segmentCount,
-      spine.lengthMm,
+    placed = fitted.placed;
+    finalFractions = fitted.fractions;
+    positionsAdjusted ||= fitted.adjusted;
+    safeFit = placementPreservesRequestedStyleAndSpacing(
+      placed,
+      finalFractions,
+      spine,
+      clearance,
+      jointStyle,
+      bendAngleDeg,
+      linkTuning,
     );
-    let segmentCount = initial;
-    // Reduce N while segments are shorter than the min printable pitch. Bounded:
-    // segmentCount only ever decreases, floored at minSegments.
-    for (;;) {
-      placed = placeAndSizeJoints(
-        evenFractions(segmentCount),
-        spine,
-        input.positions,
-        clearance,
-        jointScale,
-        bendAngleDeg,
-        jointStyle,
-        linkTuning,
-      );
-      const minSegmentLength = minSegmentLengthFor(
-        maxLiveRadius(placed.joints),
-        clearance,
-        jointStyle,
-        bendAngleDeg,
-        placed.maxStationExtentMm,
-        linkTuning,
-      );
-      const pitch = spine.lengthMm / segmentCount;
-      if (pitch >= minSegmentLength || segmentCount <= minSegments) {
-        break;
-      }
-      segmentCount -= 1;
-      reduced = true;
+    if (safeFit || segmentCount <= minSegments) {
+      break;
     }
+
+    segmentCount -= 1;
+    reduced = true;
+    if (pinned) positionsAdjusted = true;
   }
 
   let joints = placed.joints;
@@ -725,7 +736,170 @@ export function planFlexiToy(
     spine: spine.points.map((point) => [point[0], point[1], point[2]]),
     spineLengthMm: spine.lengthMm,
     warnings,
+    fit: {
+      requestedSegmentCount,
+      resolvedSegmentCount: joints.length + 1,
+      // Zero means "no discovered cap" to the UI. A safe request that fits at
+      // its original count must keep the product-wide maximum available; only
+      // an actual auto-reduction proves a lower ceiling for this configuration.
+      maxSafeSegmentCount: reduced ? joints.length + 1 : 0,
+      jointPositions: joints.map((joint) => joint.spineFraction),
+    },
   };
+}
+
+type FittedStations = {
+  fractions: number[];
+  placed: PlacedJoints;
+  adjusted: boolean;
+};
+
+/**
+ * Move only stations that are fused or would use a style fallback. Each search
+ * stays inside the station's ordered midpoint cell, so independently selected
+ * candidates cannot cross. Candidates are ordered by distance, so the first
+ * feasible one is the smallest deterministic movement.
+ */
+function fitStationsForCount(
+  seededFractions: number[],
+  spine: SpineData,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+  bendAngleDeg: number,
+  jointStyle: FlexiJointStyle,
+  linkTuning: LinkTuning,
+): FittedStations {
+  const original = seededFractions.slice();
+  const fractions = seededFractions.slice();
+  let moved = false;
+  let adjusted = false;
+  let placed = placeAndSizeJoints(
+    fractions,
+    spine,
+    positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
+    jointStyle,
+    linkTuning,
+  );
+
+  for (let index = 0; index < fractions.length; index += 1) {
+    const current = placed.joints[index];
+    if (!current.fused && current.supportsRequestedStyle === true) continue;
+
+    const leftMidpoint =
+      index === 0
+        ? STATION_MIN_FRACTION
+        : (original[index - 1] + original[index]) / 2;
+    const rightMidpoint =
+      index === original.length - 1
+        ? STATION_MAX_FRACTION
+        : (original[index] + original[index + 1]) / 2;
+    const left =
+      index === 0 ? leftMidpoint : leftMidpoint + STATION_CELL_INSET_FRACTION;
+    const right =
+      index === original.length - 1
+        ? rightMidpoint
+        : rightMidpoint - STATION_CELL_INSET_FRACTION;
+    const target = clamp(original[index], left, right);
+    const candidates = relocationCandidates(target, left, right);
+
+    for (const fraction of candidates) {
+      // The initial placement already proved the requested fraction infeasible.
+      if (Math.abs(fraction - original[index]) <= 1e-12) continue;
+      const probe = placeAndSizeJoints(
+        [fraction],
+        spine,
+        positions,
+        clearance,
+        jointScale,
+        bendAngleDeg,
+        jointStyle,
+        linkTuning,
+      ).joints[0];
+      if (probe.fused || probe.supportsRequestedStyle !== true) continue;
+
+      fractions[index] = fraction;
+      moved = true;
+      adjusted ||=
+        Math.abs(fraction - original[index]) > STATION_ADJUST_EPSILON;
+      break;
+    }
+  }
+
+  // The common case is already feasible. Reuse the first placement instead of
+  // repeating every expensive cross-section scan.
+  if (!moved) return { fractions, placed, adjusted: false };
+
+  placed = placeAndSizeJoints(
+    fractions,
+    spine,
+    positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
+    jointStyle,
+    linkTuning,
+  );
+  return {
+    fractions,
+    placed,
+    adjusted,
+  };
+}
+
+function relocationCandidates(
+  target: number,
+  left: number,
+  right: number,
+): number[] {
+  const values = [target];
+  const span = Math.max(0, right - left);
+  for (let step = 0; step <= STATION_RELOCATION_SAMPLES; step += 1) {
+    values.push(left + (span * step) / STATION_RELOCATION_SAMPLES);
+  }
+  return Array.from(new Set(values.map((value) => value.toFixed(12))))
+    .map(Number)
+    .sort((a, b) => {
+      const distance = Math.abs(a - target) - Math.abs(b - target);
+      return Math.abs(distance) > 1e-12 ? distance : a - b;
+    });
+}
+
+function placementPreservesRequestedStyleAndSpacing(
+  placed: PlacedJoints,
+  fractions: number[],
+  spine: SpineData,
+  clearance: number,
+  jointStyle: FlexiJointStyle,
+  bendAngleDeg: number,
+  linkTuning: LinkTuning,
+): boolean {
+  if (
+    placed.joints.some(
+      (joint) => joint.fused || joint.supportsRequestedStyle !== true,
+    )
+  ) {
+    return false;
+  }
+  const minSegmentLength = minSegmentLengthFor(
+    maxLiveRadius(placed.joints),
+    clearance,
+    jointStyle,
+    bendAngleDeg,
+    placed.maxStationExtentMm,
+    linkTuning,
+  );
+  // The overlap budget is between neighbouring joint solids. End pieces are
+  // protected by each station's own axial containment probe, so a deliberately
+  // end-biased dragged station must not force a count reduction.
+  const minGapMm =
+    placed.joints.length >= 2
+      ? minAdjacentStationGap(placed.joints)
+      : spine.lengthMm / Math.max(1, fractions.length + 1);
+  return minGapMm + 1e-9 >= minSegmentLength;
 }
 
 function maxLiveRadius(joints: FlexiJointPlan[]): number {
@@ -1423,6 +1597,7 @@ function sizeJoint(
     faceGapMm: 0,
     spineFraction,
     fused: true,
+    supportsRequestedStyle: false,
   });
 
   const profile = buildCrossSectionProfile(positions, center, axis, frame);
@@ -1439,12 +1614,10 @@ function sizeJoint(
   // Start at the requested size (grown to the min printable ball, capped by the
   // on-axis clearance + wall budget), then shrink until the socket cavity is
   // contained along its whole axial reach — this is what stops a tapering body
-  // from being pierced by the socket. For the shell style the shrink loop also
-  // asks the lap shelf (seam ledge above the cup wall) to fit: a step-smaller
-  // ball keeps the overlapping-scale look instead of the whole joint falling
-  // back to a rounded groove in the build. If even the smallest printable ball
-  // cannot host the shelf, the largest contained ball is kept (the build's
-  // per-joint rounded fallback still applies) rather than fusing the joint.
+  // from being pierced by the socket. The shrink loop also exhausts radii that
+  // genuinely support the requested style before accepting the largest safely
+  // contained rounded fallback. This lets a slightly smaller Shell, Strong, or
+  // Link joint keep its intended mechanism instead of falling back too early.
   const finish = (ballRadiusMm: number): FlexiJointPlan => {
     // Link feasibility is an INTERVAL, so the requested radius can be refused
     // from ABOVE (r > r_max(c) ≈ 51.4·c, reachable at jointScale 1.0 on any body
@@ -1507,6 +1680,7 @@ function sizeJoint(
       faceGapMm,
       spineFraction,
       fused: false,
+      supportsRequestedStyle: styleSupportedAtRadius(ballRadiusMm),
     };
   };
   const shellShelfFits = (ballRadiusMm: number): boolean => {
@@ -1550,6 +1724,70 @@ function sizeJoint(
           linkTuning,
         )
       : false;
+  // The planner's full cavity envelope is deliberately conservative. A Link
+  // can still be built safely when that envelope refuses a tapering station,
+  // because the real builder clips and validates the two closed loops against
+  // the measured skin. Mirror those local, neighbour-independent builder gates
+  // here so auto-fit does not remove a valid requested segment. Neighbour room
+  // remains the placement loop's spacing responsibility; the worker's exact
+  // certification catches the remaining boolean-only failures.
+  const linkJointFitsBuildBody = (ballRadiusMm: number): boolean => {
+    const geometry = solveLinkJointGeometry(
+      ballRadiusMm,
+      clearance,
+      bendAngleDeg,
+      linkTuning,
+    );
+    if (!geometry) return false;
+
+    const planeMin = crossSectionAt(profile, 0);
+    const planeMax = crossSectionOuterAt(profile, 0);
+    const band1 = LINK_KERF_ALLOWANCE_MM / 2 + 1;
+    const rhoClip =
+      Math.min(planeMin, crossSectionAt(profile, 0, [band1])) -
+      LINK_CLIP_MARGIN_MM;
+    if (rhoClip < geometry.bladeReachMm) return false;
+
+    const rho1 = Math.max(planeMax, crossSectionOuterAt(profile, 0, [band1]));
+    const first = solveLinkSeam(geometry, rho1, clearance, bendAngleDeg);
+    const band2 = Math.max(
+      band1,
+      linkKerfAtMm(first, first.outerRadiusMm) / 2 + 1,
+    );
+    const rhoMax = Math.max(
+      planeMax,
+      band2 > band1 ? crossSectionOuterAt(profile, 0, [band2]) : rho1,
+    );
+    const bandCapDeg =
+      rhoMax > 1e-9
+        ? (2 *
+            Math.atan(Math.max(0, 2 * (band2 - 1) - clearance) / (2 * rhoMax)) *
+            180) /
+          Math.PI
+        : bendAngleDeg;
+    const requestedTravelDeg = Math.min(bendAngleDeg, bandCapDeg);
+    const top = solveLinkSeam(
+      geometry,
+      rhoMax,
+      clearance,
+      requestedTravelDeg,
+    ).travelDeg;
+
+    return (
+      linkTravelSearch(top, (travelDeg) => {
+        const seam = solveLinkSeam(geometry, rhoMax, clearance, travelDeg);
+        if (
+          bendAngleDeg <= 25 &&
+          geometry.pivotOffsetMm + geometry.tubeRadiusMm - seam.legKerfMm / 2 <
+            LINK_ENGAGE_MIN_MM
+        ) {
+          return null;
+        }
+        const poly = linkHoopPolyline(geometry, seam, clearance);
+        return linkHoopOuterMm(poly) <= rhoClip ? true : null;
+      }) === true
+    );
+  };
   // Link's containment predicate has to be an INTERVAL in `r`, and picking the
   // criterion PER RADIUS does not give one. The link cavity is strictly more
   // demanding than the rounded cup (the legs run off-axis AND tail-ward, so they
@@ -1637,13 +1875,32 @@ function sizeJoint(
         return assertNever(jointStyle, 'sizeJoint containment');
     }
   };
+  const styleSupportedAtRadius = (ballRadiusMm: number): boolean => {
+    switch (jointStyle) {
+      case 'rounded':
+      case 'classic':
+        return true;
+      case 'shell':
+        return shellShelfFits(ballRadiusMm);
+      case 'strong':
+        return (
+          solveStrongJointGeometry(ballRadiusMm, clearance, bendAngleDeg) !==
+            null &&
+          strongCavityFits(profile, ballRadiusMm, clearance, bendAngleDeg)
+        );
+      case 'link':
+        return linkJointFitsBuildBody(ballRadiusMm);
+      default:
+        return assertNever(jointStyle, 'styleSupportedAtRadius');
+    }
+  };
   let ballRadiusMm = startRadiusMm;
   let containedFallback: number | null = null;
   while (ballRadiusMm >= FLEXI_MIN_BALL_RADIUS_MM) {
     const contained = cavityContained(ballRadiusMm);
     if (contained) {
       if (containedFallback === null) containedFallback = ballRadiusMm;
-      if (shellShelfFits(ballRadiusMm)) {
+      if (styleSupportedAtRadius(ballRadiusMm)) {
         return finish(ballRadiusMm);
       }
     }
@@ -1814,6 +2071,7 @@ function capJointBall(
     faceGapMm: 0,
     spineFraction: joint.spineFraction,
     fused: true,
+    supportsRequestedStyle: false,
   };
   if (cap < FLEXI_MIN_BALL_RADIUS_MM) {
     return fused;
@@ -1849,6 +2107,13 @@ function capJointBall(
     faceGapMm,
     spineFraction: joint.spineFraction,
     fused: false,
+    // The overlap guard has no cross-section profile with which to re-prove a
+    // Strong/Link mechanism after changing its radius. Those styles therefore
+    // remain conservatively unsupported in this last-resort path.
+    supportsRequestedStyle:
+      joint.supportsRequestedStyle === true &&
+      jointStyle !== 'strong' &&
+      jointStyle !== 'link',
   };
 }
 
