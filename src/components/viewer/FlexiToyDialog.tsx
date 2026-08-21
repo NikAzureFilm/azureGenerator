@@ -27,14 +27,12 @@ import {
   FLEXI_MAX_LINK_BEND_DEG,
   FLEXI_MAX_LINK_ROOM_SCALE,
   FLEXI_MAX_LINK_THICKNESS_SCALE,
-  FLEXI_MAX_SEGMENTS,
   FLEXI_MIN_BEND_DEG,
   FLEXI_MIN_CLEARANCE_MM,
   FLEXI_MIN_JOINT_SCALE,
   FLEXI_MIN_LENGTH_MM,
   FLEXI_MIN_LINK_ROOM_SCALE,
   FLEXI_MIN_LINK_THICKNESS_SCALE,
-  FLEXI_MIN_SEGMENTS,
   type FlexiAxisOverride,
   type FlexiClearancePreset,
   type FlexiMeshInput,
@@ -111,8 +109,8 @@ export function FlexiToyDialog({
   const [segmentMode, setSegmentMode] = useState<'auto' | 'custom'>(
     LINK_DEFAULTS.segmentMode,
   );
-  const [segmentCountCustom, setSegmentCountCustom] = useState(
-    LINK_DEFAULTS.segmentCountCustom,
+  const [jointCountCustom, setJointCountCustom] = useState(
+    LINK_DEFAULTS.jointCountCustom,
   );
   const [clearanceMm, setClearanceMm] = useState<number>(
     LINK_DEFAULTS.clearanceMm,
@@ -185,6 +183,12 @@ export function FlexiToyDialog({
   const finalCacheRef = useRef(new Map<string, FlexiToyResult>());
   const computeTokenRef = useRef(0);
 
+  // A landed plan carries the real capacity for this exact model and joint
+  // setup. Until the first result arrives, keep the user's default unchanged.
+  const selectedJointCount = result
+    ? clamp(jointCountCustom, 1, result.plan.maxJointCount)
+    : jointCountCustom;
+
   const ensureMeshInput = useCallback((g: GLTF): Promise<FlexiMeshInput> => {
     if (meshInputRef.current?.forGltf !== g) {
       processedSceneRef.current?.promise.then(disposeScene).catch(() => {});
@@ -209,7 +213,7 @@ export function FlexiToyDialog({
 
   const settings = useMemo<FlexiToySettings>(() => {
     const base: FlexiToySettings = {
-      segmentCount: segmentMode === 'auto' ? 'auto' : segmentCountCustom,
+      segmentCount: segmentMode === 'auto' ? 'auto' : selectedJointCount + 1,
       clearanceMm,
       targetLengthMm,
       jointScale,
@@ -232,7 +236,7 @@ export function FlexiToyDialog({
     return base;
   }, [
     segmentMode,
-    segmentCountCustom,
+    selectedJointCount,
     clearanceMm,
     targetLengthMm,
     jointScale,
@@ -270,7 +274,7 @@ export function FlexiToyDialog({
     }
 
     setSegmentMode(LINK_DEFAULTS.segmentMode);
-    setSegmentCountCustom(LINK_DEFAULTS.segmentCountCustom);
+    setJointCountCustom(LINK_DEFAULTS.jointCountCustom);
     setClearanceMm(LINK_DEFAULTS.clearanceMm);
     setShowAdvancedFit(false);
     setTargetLengthMm(LINK_DEFAULTS.targetLengthMm);
@@ -418,6 +422,10 @@ export function FlexiToyDialog({
   }, [result]);
 
   const totalJoints = result ? result.jointCount + result.fusedJointCount : 0;
+  const maxJointCount = Math.max(
+    1,
+    result?.plan.maxJointCount ?? selectedJointCount,
+  );
   const highlightIndex = dragState ? dragState.index : hoverJointIndex;
 
   // Changing where/how many cuts there are invalidates any dragged stations
@@ -429,6 +437,20 @@ export function FlexiToyDialog({
     setJointPositions(null);
     setStationEditToken((token) => token + 1);
   }, []);
+
+  // Length/style/fit changes can lower the model capacity. Keep the controlled
+  // value and any pinned station array inside the newly reported 1…n range.
+  useEffect(() => {
+    if (
+      segmentMode !== 'custom' ||
+      !result ||
+      jointCountCustom <= result.plan.maxJointCount
+    ) {
+      return;
+    }
+    setJointCountCustom(result.plan.maxJointCount);
+    clearPinnedPositions();
+  }, [segmentMode, result, jointCountCustom, clearPinnedPositions]);
 
   const changeLength = (value: number) => {
     setTargetLengthMm(value);
@@ -461,23 +483,23 @@ export function FlexiToyDialog({
     if (segmentMode === 'custom') {
       return;
     }
-    setSegmentCountCustom((count) =>
+    setJointCountCustom((count) =>
       clamp(
-        // Seed from the pieces the PLANNER laid out, never from
+        // Seed from the joints the PLANNER laid out, never from
         // result.segmentCount — that is the built BODY count, which is smaller
         // whenever a joint is fused, and using it would break the
         // jointPositions.length === segmentCount − 1 contract.
-        result ? result.plan.joints.length + 1 : count,
-        FLEXI_MIN_SEGMENTS,
-        FLEXI_MAX_SEGMENTS,
+        result ? result.plan.joints.length : count,
+        1,
+        maxJointCount,
       ),
     );
     setSegmentMode('custom');
     clearPinnedPositions();
   };
 
-  const changeSegmentCount = (value: number) => {
-    setSegmentCountCustom(value);
+  const changeJointCount = (value: number) => {
+    setJointCountCustom(value);
     clearPinnedPositions();
   };
 
@@ -490,13 +512,14 @@ export function FlexiToyDialog({
   // runs on every commit, not just from 'auto': the dialog now opens in custom
   // mode, and leaving a stale count would break the length contract whenever
   // the planner placed a different number of stations.
-  const handleRingCommit = useCallback((fractions: number[]) => {
-    setSegmentCountCustom(
-      clamp(fractions.length + 1, FLEXI_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS),
-    );
-    setSegmentMode('custom');
-    setJointPositions(fractions);
-  }, []);
+  const handleRingCommit = useCallback(
+    (fractions: number[]) => {
+      setJointCountCustom(clamp(fractions.length, 1, maxJointCount));
+      setSegmentMode('custom');
+      setJointPositions(fractions);
+    },
+    [maxJointCount],
+  );
 
   const handleStripReset = clearPinnedPositions;
 
@@ -814,10 +837,10 @@ export function FlexiToyDialog({
             </div>
 
             <div>
-              <ControlLabel label="Segments" />
+              <ControlLabel label="Joints" />
               <div
                 role="radiogroup"
-                aria-label="Segment count mode"
+                aria-label="Joint count mode"
                 className="flex flex-wrap items-center gap-2"
               >
                 <PillButton
@@ -834,25 +857,26 @@ export function FlexiToyDialog({
                 </PillButton>
                 {segmentMode === 'custom' ? (
                   <span className="ml-auto text-xs text-adam-text-secondary">
-                    {segmentCountCustom} segments
+                    {selectedJointCount}{' '}
+                    {selectedJointCount === 1 ? 'joint' : 'joints'}
                   </span>
                 ) : null}
               </div>
               {segmentMode === 'custom' ? (
                 <Slider
-                  aria-label="Segments"
+                  aria-label="Joints"
                   className="mt-2 h-11 sm:h-8"
-                  value={[segmentCountCustom]}
-                  min={FLEXI_MIN_SEGMENTS}
-                  max={FLEXI_MAX_SEGMENTS}
+                  value={[selectedJointCount]}
+                  min={1}
+                  max={maxJointCount}
                   step={1}
-                  defaultValue={[LINK_DEFAULTS.segmentCountCustom]}
-                  onValueChange={([value]) => changeSegmentCount(value)}
+                  defaultValue={[LINK_DEFAULTS.jointCountCustom]}
+                  onValueChange={([value]) => changeJointCount(value)}
                   onScrubChange={setScrubbing}
                 />
               ) : (
                 <p className="mt-2 text-xs text-adam-text-secondary/80">
-                  We pick the number of segments to fit the model.
+                  We pick how many joints fit the model.
                 </p>
               )}
             </div>

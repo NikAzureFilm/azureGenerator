@@ -81,7 +81,7 @@ export const AXIS_OPTIONS: Array<{ value: FlexiAxisOverride; label: string }> =
  */
 export type FlexiStyleDefaults = {
   segmentMode: 'auto' | 'custom';
-  segmentCountCustom: number;
+  jointCountCustom: number;
   clearanceMm: number;
   targetLengthMm: number;
   jointScale: number;
@@ -116,7 +116,7 @@ export type FlexiStyleDefaults = {
  */
 export const LINK_DEFAULTS: FlexiStyleDefaults = {
   segmentMode: 'custom',
-  segmentCountCustom: 5,
+  jointCountCustom: 4,
   clearanceMm: FLEXI_CLEARANCE_PRESETS.standard,
   targetLengthMm: FLEXI_MAX_LENGTH_MM,
   jointScale: 1,

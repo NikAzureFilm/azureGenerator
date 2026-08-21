@@ -561,6 +561,19 @@ export function planFlexiToy(
     });
   }
 
+  // The picker maximum comes from the same geometry and printable-pitch rules
+  // as the actual plan. It therefore changes with model length, shape, joint
+  // style, clearance, bend and joint size instead of exposing a fixed cap.
+  const maxSegmentCount = maxFittingSegmentCount(
+    spine,
+    input.positions,
+    clearance,
+    jointScale,
+    bendAngleDeg,
+    jointStyle,
+    linkTuning,
+  );
+
   // Stations are either pinned by the user (dragged cuts) or evenly spaced with
   // the printable-pitch reduction loop.
   const pinned = resolvePinnedStations(
@@ -595,10 +608,12 @@ export function planFlexiToy(
       // Present but malformed: fall back to even spacing and say so.
       positionsAdjusted = true;
     }
-    const { initial, minSegments } = resolveSegmentCount(
+    const { initial, minSegments, wasReduced } = resolveSegmentCount(
       settings.segmentCount,
       spine.lengthMm,
+      maxSegmentCount,
     );
+    reduced = wasReduced;
     let segmentCount = initial;
     // Reduce N while segments are shorter than the min printable pitch. Bounded:
     // segmentCount only ever decreases, floored at minSegments.
@@ -722,6 +737,7 @@ export function planFlexiToy(
 
   return {
     joints,
+    maxJointCount: maxSegmentCount - 1,
     spine: spine.points.map((point) => [point[0], point[1], point[2]]),
     spineLengthMm: spine.lengthMm,
     warnings,
@@ -1255,18 +1271,84 @@ function smoothPolyline(points: Vec3[]): Vec3[] {
 function resolveSegmentCount(
   requested: number | 'auto',
   spineLengthMm: number,
-): { initial: number; minSegments: number } {
+  maxSegmentCount: number,
+): { initial: number; minSegments: number; wasReduced: boolean } {
   if (requested === 'auto') {
     const raw = Math.round(spineLengthMm / AUTO_SEGMENT_PITCH_MM);
-    const initial = clamp(raw, AUTO_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS);
-    return { initial, minSegments: AUTO_MIN_SEGMENTS };
+    const minSegments = Math.min(AUTO_MIN_SEGMENTS, maxSegmentCount);
+    const initial = clamp(raw, minSegments, maxSegmentCount);
+    return { initial, minSegments, wasReduced: false };
   }
-  const initial = clamp(
-    Math.round(requested),
-    FLEXI_MIN_SEGMENTS,
-    FLEXI_MAX_SEGMENTS,
+  const rounded = Math.round(requested);
+  const initial = clamp(rounded, FLEXI_MIN_SEGMENTS, maxSegmentCount);
+  return {
+    initial,
+    minSegments: FLEXI_MIN_SEGMENTS,
+    wasReduced: rounded > initial,
+  };
+}
+
+/**
+ * Highest evenly-spaced segment count that satisfies the real printable pitch.
+ * Feasibility is monotone for this planner: adding segments shortens the pitch
+ * while every minimum-footprint term stays level or grows. Binary search keeps
+ * the capacity check cheap even on the longest supported model.
+ */
+function maxFittingSegmentCount(
+  spine: SpineData,
+  positions: Float32Array,
+  clearance: number,
+  jointScale: number,
+  bendAngleDeg: number,
+  jointStyle: FlexiJointStyle,
+  linkTuning: LinkTuning,
+): number {
+  const absoluteMinPitch = minSegmentLengthFor(
+    FLEXI_MIN_BALL_RADIUS_MM,
+    clearance,
+    jointStyle,
+    bendAngleDeg,
+    0,
+    linkTuning,
   );
-  return { initial, minSegments: FLEXI_MIN_SEGMENTS };
+  const physicalUpperBound = Math.floor(spine.lengthMm / absoluteMinPitch);
+  let low = FLEXI_MIN_SEGMENTS;
+  let high = clamp(physicalUpperBound, FLEXI_MIN_SEGMENTS, FLEXI_MAX_SEGMENTS);
+
+  const fits = (segmentCount: number): boolean => {
+    const placed = placeAndSizeJoints(
+      evenFractions(segmentCount),
+      spine,
+      positions,
+      clearance,
+      jointScale,
+      bendAngleDeg,
+      jointStyle,
+      linkTuning,
+    );
+    const requiredPitch = minSegmentLengthFor(
+      maxLiveRadius(placed.joints),
+      clearance,
+      jointStyle,
+      bendAngleDeg,
+      placed.maxStationExtentMm,
+      linkTuning,
+    );
+    return spine.lengthMm / segmentCount >= requiredPitch;
+  };
+
+  // One joint remains the useful floor even for a marginal shape; the normal
+  // per-joint sizing rule can still mark it fused and surface the existing
+  // warning when the cross-section itself is too thin.
+  while (low < high) {
+    const middle = Math.floor((low + high + 1) / 2);
+    if (fits(middle)) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return low;
 }
 
 type PlacedJoints = {

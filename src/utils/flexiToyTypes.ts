@@ -21,8 +21,13 @@ export type FlexiClearancePreset = keyof typeof FLEXI_CLEARANCE_PRESETS;
 
 export const FLEXI_MIN_CLEARANCE_MM = 0.2;
 export const FLEXI_MAX_CLEARANCE_MM = 0.8;
-export const FLEXI_MIN_SEGMENTS = 3;
-export const FLEXI_MAX_SEGMENTS = 20;
+/** Two pieces make the smallest useful toy: one cut, one working joint. */
+export const FLEXI_MIN_SEGMENTS = 2;
+/**
+ * Defensive search ceiling, not a user-facing limit. At the 400mm UI length
+ * limit the printable-pitch rules cap real models below this value.
+ */
+export const FLEXI_MAX_SEGMENTS = 128;
 export const FLEXI_MIN_LENGTH_MM = 80;
 export const FLEXI_MAX_LENGTH_MM = 400;
 export const FLEXI_DEFAULT_LENGTH_MM = 150;
@@ -166,7 +171,7 @@ export function assertNever(value: never, context: string): never {
 }
 
 export type FlexiToySettings = {
-  /** 'auto' → round(spineLength / 22) clamped to [4, FLEXI_MAX_SEGMENTS]. */
+  /** 'auto' → round(spineLength / 22), capped by what the model can fit. */
   segmentCount: number | 'auto';
   /** Radial ball↔socket clearance AND face gap, in mm. */
   clearanceMm: number;
@@ -337,6 +342,8 @@ export type FlexiJointPlan = {
 
 export type FlexiToyPlan = {
   joints: FlexiJointPlan[];
+  /** Largest printable number of evenly spaced joints for this model/settings. */
+  maxJointCount: number;
   /** Smoothed spine polyline (mm). */
   spine: Array<[number, number, number]>;
   spineLengthMm: number;

@@ -131,6 +131,7 @@ const fakeResult: FlexiToyResult = {
   lengthMm: 148,
   plan: {
     joints: [joint(0.25, false), joint(0.5, true), joint(0.75, false)],
+    maxJointCount: 7,
     spine: [
       [0, 0, 0],
       [10, 0, 0],
@@ -273,7 +274,7 @@ describe('FlexiToyDialog', () => {
     expect(screen.getByRole('radio', { name: /Shell/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Strong/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Link/ })).toBeInTheDocument();
-    expect(screen.getByText('Segments')).toBeInTheDocument();
+    expect(screen.getAllByText('Joints')).not.toHaveLength(0);
     expect(screen.getByText('Joint fit')).toBeInTheDocument();
     expect(screen.getByText('Toy length')).toBeInTheDocument();
     expect(screen.getByText('Joint size')).toBeInTheDocument();
@@ -286,6 +287,25 @@ describe('FlexiToyDialog', () => {
 
     expect(screen.getByRole('button', { name: '.STL' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '.3MF' })).toBeInTheDocument();
+  });
+
+  it('offers one through the model-fitted maximum number of joints', async () => {
+    renderDialog();
+    await settle();
+
+    const slider = screen.getByRole('slider', { name: 'Joints' });
+    expect(slider).toHaveAttribute('aria-valuemin', '1');
+    expect(slider).toHaveAttribute('aria-valuemax', '7');
+    expect(screen.getByText('4 joints')).toBeInTheDocument();
+
+    fireEvent.keyDown(slider, { key: 'Home' });
+    await settle();
+
+    expect(computeFlexiToy).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ segmentCount: 2 }),
+      'preview',
+    );
   });
 
   it('offers the Shell, Strong and Link joint styles', async () => {
