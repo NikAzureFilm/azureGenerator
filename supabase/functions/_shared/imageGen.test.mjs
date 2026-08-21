@@ -23,7 +23,19 @@ assert.match(
 );
 assert.match(
   imageGenSource,
-  /await logGeminiImage\(\{\s*\.\.\.usageCtx,\s*model: GEMINI_FLASH_IMAGE_MODEL\s*\}\);/,
+  /const GEMINI_IMAGE_ASPECT_RATIO = '16:9';/,
+  'Nano Banana image generation should use a widescreen aspect ratio',
+);
+assert.equal(
+  imageGenSource.match(
+    /imageConfig:\s*\{\s*aspectRatio: GEMINI_IMAGE_ASPECT_RATIO/g,
+  )?.length,
+  3,
+  'Nano Banana Pro, generation, and editing should all request 16:9 output',
+);
+assert.match(
+  imageGenSource,
+  /await logGeminiImage\(\{\s*\.\.\.usageCtx,\s*model\s*\}\);/,
   'Lite image generation should log provider-specific cost',
 );
 assert.match(

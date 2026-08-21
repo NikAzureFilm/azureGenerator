@@ -22,6 +22,7 @@ const debugLog = (...args: unknown[]) => {
 const GEMINI_FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 // Nano Banana 2 Lite — Google's lowest-cost image model.
 export const GEMINI_FLASH_LITE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
+const GEMINI_IMAGE_ASPECT_RATIO = '16:9';
 const OPENAI_IMAGE_ORCHESTRATOR_MODEL = 'gpt-5.5';
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
@@ -279,6 +280,9 @@ export const generateImageWithGeminiMultiTurn = async (
     model: 'gemini-3-pro-image-preview',
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
+      imageConfig: {
+        aspectRatio: GEMINI_IMAGE_ASPECT_RATIO,
+      },
       // Search grounding is built into this endpoint and does not need to be
       // explicitly enabled as a tool for image generation.
     },
@@ -433,6 +437,9 @@ export const generateImageWithGeminiFlash = async (
     contents: [{ text: enforcedPrompt }],
     config: {
       responseModalities: [Modality.TEXT, Modality.IMAGE],
+      imageConfig: {
+        aspectRatio: GEMINI_IMAGE_ASPECT_RATIO,
+      },
     },
   });
 
@@ -511,6 +518,9 @@ export const generateImageWithGeminiFlashEdit = async (
       contents: [{ text: enforcedPrompt }, ...imageParts],
       config: {
         responseModalities: [Modality.TEXT, Modality.IMAGE],
+        imageConfig: {
+          aspectRatio: GEMINI_IMAGE_ASPECT_RATIO,
+        },
       },
     });
 
