@@ -1430,7 +1430,7 @@ function sizeJoint(
   if (stationOut) {
     // Widest half-extent at this station (profile is already built) — used by
     // the caller for the gap-band spacing budget.
-    stationOut.maxExtentMm = reduceCrossSectionAt(profile, 0, maxOfArray);
+    stationOut.maxExtentMm = crossSectionOuterAt(profile, 0);
   }
   if (!(rho0 > 0)) {
     return fused();
@@ -1735,8 +1735,8 @@ export function crossSectionExtentsSampler(
         ? [Math.max(bandHalfWidthMm, SLAB_WIDEN_HALF_WIDTHS[0])]
         : undefined;
     return {
-      minMm: reduceCrossSectionAt(profile, 0, minOfArray, halfWidths),
-      maxMm: reduceCrossSectionAt(profile, 0, maxOfArray, halfWidths),
+      minMm: crossSectionAt(profile, 0, halfWidths),
+      maxMm: crossSectionOuterAt(profile, 0, halfWidths),
     };
   }) as FlexiSectionSampler;
   sampler.frame = {
@@ -3382,12 +3382,19 @@ function socketContainedAlongReach(
 }
 
 type CrossSectionProfile = {
-  // Axial bin index → per-direction max |projection|, per-sector max radial
-  // distance (0 ⇒ no vertex fell in that sector for this slice), and the point
-  // count.
+  // Axial bin index → per-direction reach on BOTH sides of the joint centre,
+  // per-sector max radial distance (0 ⇒ no vertex fell in that sector for
+  // this slice), and the point count. Keeping the positive and negative reaches
+  // separate is load-bearing: an off-centre spine must size against the NEARER
+  // skin, not the farther side's larger absolute projection.
   bins: Map<
     number,
-    { dirMax: Float64Array; secMax: Float64Array; count: number }
+    {
+      dirPosMax: Float64Array;
+      dirNegMax: Float64Array;
+      secMax: Float64Array;
+      count: number;
+    }
   >;
   cos: Float64Array;
   sin: Float64Array;
@@ -3415,7 +3422,12 @@ function buildCrossSectionProfile(
 
   const bins = new Map<
     number,
-    { dirMax: Float64Array; secMax: Float64Array; count: number }
+    {
+      dirPosMax: Float64Array;
+      dirNegMax: Float64Array;
+      secMax: Float64Array;
+      count: number;
+    }
   >();
   const vertexCount = Math.floor(positions.length / 3);
   const sectorScale = CROSS_SECTION_SECTORS / (2 * Math.PI);
@@ -3430,15 +3442,20 @@ function buildCrossSectionProfile(
     let bin = bins.get(binIndex);
     if (!bin) {
       bin = {
-        dirMax: new Float64Array(CROSS_SECTION_DIRECTIONS),
+        dirPosMax: new Float64Array(CROSS_SECTION_DIRECTIONS),
+        dirNegMax: new Float64Array(CROSS_SECTION_DIRECTIONS),
         secMax: new Float64Array(CROSS_SECTION_SECTORS),
         count: 0,
       };
       bins.set(binIndex, bin);
     }
     for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
-      const projection = Math.abs(x * cos[k] + y * sin[k]);
-      if (projection > bin.dirMax[k]) bin.dirMax[k] = projection;
+      const projection = x * cos[k] + y * sin[k];
+      if (projection >= 0) {
+        if (projection > bin.dirPosMax[k]) bin.dirPosMax[k] = projection;
+      } else if (-projection > bin.dirNegMax[k]) {
+        bin.dirNegMax[k] = -projection;
+      }
     }
     const radius = Math.hypot(x, y);
     if (radius > 1e-9) {
@@ -3455,48 +3472,65 @@ function buildCrossSectionProfile(
 // axial offset d. The slab widens (1→2→3mm) until it holds enough points so a
 // coarse mesh cannot leave a mid-body slab spuriously empty; empty even at the
 // widest ⇒ 0 (past the end of the body).
-function crossSectionAt(profile: CrossSectionProfile, d: number): number {
-  return reduceCrossSectionAt(profile, d, minOfArray);
+function crossSectionAt(
+  profile: CrossSectionProfile,
+  d: number,
+  halfWidths?: number[],
+): number {
+  const extents = crossSectionDirExtentsAt(profile, d, halfWidths);
+  return extents ? minOfArray(extents.inner) : 0;
 }
 
-// The per-direction max-projections of the cross-section slab at offset d,
-// widening the slab until it holds enough points (empty at the widest ⇒ null).
-function crossSectionDirMaxAt(
+// Per-direction reaches of the cross-section slab at offset d. `inner` is the
+// nearer of the positive and negative skin; `outer` is the farther. The slab
+// widens until it holds enough points (empty at the widest ⇒ null).
+function crossSectionDirExtentsAt(
   profile: CrossSectionProfile,
   d: number,
   halfWidths: number[] = SLAB_WIDEN_HALF_WIDTHS,
-): Float64Array | null {
+): { inner: Float64Array; outer: Float64Array } | null {
   const { bins } = profile;
-  let lastDirMax: Float64Array | null = null;
+  let lastExtents: { inner: Float64Array; outer: Float64Array } | null = null;
   let lastCount = 0;
   for (const halfWidth of halfWidths) {
     const lo = Math.round((d - halfWidth) / PROFILE_BIN_MM);
     const hi = Math.round((d + halfWidth) / PROFILE_BIN_MM);
-    const dirMax = new Float64Array(CROSS_SECTION_DIRECTIONS);
+    const dirPosMax = new Float64Array(CROSS_SECTION_DIRECTIONS);
+    const dirNegMax = new Float64Array(CROSS_SECTION_DIRECTIONS);
     let count = 0;
     for (let binIndex = lo; binIndex <= hi; binIndex += 1) {
       const bin = bins.get(binIndex);
       if (!bin) continue;
       count += bin.count;
       for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
-        if (bin.dirMax[k] > dirMax[k]) dirMax[k] = bin.dirMax[k];
+        if (bin.dirPosMax[k] > dirPosMax[k]) {
+          dirPosMax[k] = bin.dirPosMax[k];
+        }
+        if (bin.dirNegMax[k] > dirNegMax[k]) {
+          dirNegMax[k] = bin.dirNegMax[k];
+        }
       }
     }
-    lastDirMax = dirMax;
+    const inner = new Float64Array(CROSS_SECTION_DIRECTIONS);
+    const outer = new Float64Array(CROSS_SECTION_DIRECTIONS);
+    for (let k = 0; k < CROSS_SECTION_DIRECTIONS; k += 1) {
+      inner[k] = Math.min(dirPosMax[k], dirNegMax[k]);
+      outer[k] = Math.max(dirPosMax[k], dirNegMax[k]);
+    }
+    lastExtents = { inner, outer };
     lastCount = count;
-    if (count >= MIN_SLAB_POINTS) return dirMax;
+    if (count >= MIN_SLAB_POINTS) return lastExtents;
   }
-  return lastCount > 0 ? lastDirMax : null;
+  return lastCount > 0 ? lastExtents : null;
 }
 
-function reduceCrossSectionAt(
+function crossSectionOuterAt(
   profile: CrossSectionProfile,
   d: number,
-  reducer: (values: Float64Array) => number,
   halfWidths?: number[],
 ): number {
-  const dirMax = crossSectionDirMaxAt(profile, d, halfWidths);
-  return dirMax ? reducer(dirMax) : 0;
+  const extents = crossSectionDirExtentsAt(profile, d, halfWidths);
+  return extents ? maxOfArray(extents.outer) : 0;
 }
 
 function minOfArray(values: Float64Array): number {

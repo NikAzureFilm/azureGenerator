@@ -31,6 +31,7 @@ import {
   LINK_NEIGHBOUR_CLEAR_MM,
   LINK_CLIP_MARGIN_MM,
   LINK_PITCH_SWEEP_STEP_DEG,
+  crossSectionExtentsAt,
 } from './flexiToyPlan.ts';
 import {
   FLEXI_MIN_BALL_RADIUS_MM,
@@ -264,6 +265,35 @@ assert.ok(
   'socketMouthRadius matches sqrt((r+c)^2 - h^2)',
 );
 assert.equal(socketMouthRadius(2, 0.3, 10), 0, 'socketMouthRadius clamps at 0');
+
+// --- Off-centre fit: default joints size against the nearer skin ------------
+
+// A 20mm-diameter body whose surface is centred 4mm above the queried joint
+// centre. The joint still sits inside the body, but it has only 6mm of room on
+// the near side and 14mm on the far side. Using max |projection| loses that
+// distinction and returns roughly 10mm, which is how a default joint could
+// poke through an uneven model even though its cavity appeared "contained".
+const offCentreBody = makeSpindle({
+  length: 150,
+  maxRadius: 10,
+  taper: 0,
+});
+for (let i = 1; i < offCentreBody.positions.length; i += 3) {
+  offCentreBody.positions[i] += 4;
+}
+const offCentreExtents = crossSectionExtentsAt(
+  offCentreBody.positions,
+  [75, 0, 0],
+  [1, 0, 0],
+);
+assert.ok(
+  offCentreExtents.minMm > 5.5 && offCentreExtents.minMm < 6.5,
+  `joint fit follows the nearer skin (~6mm, got ${offCentreExtents.minMm})`,
+);
+assert.ok(
+  offCentreExtents.maxMm > 13.5 && offCentreExtents.maxMm < 14.5,
+  `outer cutter reach still sees the far skin (~14mm, got ${offCentreExtents.maxMm})`,
+);
 
 // --- Tapered capsule: spine, auto N, sizing invariants ---------------------
 
