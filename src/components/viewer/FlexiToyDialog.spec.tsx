@@ -161,9 +161,7 @@ function renderDialog() {
   );
 }
 
-// Advances the debounce + flushes the async mesh-input/compute microtasks.
-// Looped because the warm-up promise and the compute timer resolve across
-// separate ticks.
+// Flushes async mesh-input/compute work plus any UI animation timers.
 async function settle() {
   for (let i = 0; i < 3; i += 1) {
     await act(async () => {
@@ -474,11 +472,7 @@ describe('FlexiToyDialog', () => {
     expect(strongSettings).not.toHaveProperty('linkRoomScale');
   });
 
-  // Compute on release. A drag crosses dozens of values and each debounce pause
-  // inside it used to start a full build that the next pause threw away, so the
-  // dialog now waits for the pointer to lift — while still following the value
-  // live, which is what makes the wait invisible.
-  it('does not recompute while a slider is being scrubbed', async () => {
+  it('starts updating the preview while a slider is still being scrubbed', async () => {
     renderDialog();
     await settle();
     (computeFlexiToy as Mock).mockClear();
@@ -499,22 +493,46 @@ describe('FlexiToyDialog', () => {
 
       // The read-out follows the pointer (0.6…1.4× range, pressed at the end)…
       expect(screen.getByText('1.40×')).toBeInTheDocument();
-      // …but nothing is built while the pointer is still down.
-      expect(computeFlexiToy).not.toHaveBeenCalled();
-
-      fireEvent.pointerUp(track, { pointerId: 1, clientX: TRACK_WIDTH });
-      await settle();
-
+      // …and the matching preview starts without waiting for pointer-up or the
+      // old fixed 200 ms delay.
+      await act(async () => {
+        await Promise.resolve();
+      });
       expect(computeFlexiToy).toHaveBeenCalledTimes(1);
       expect((computeFlexiToy as Mock).mock.calls.at(-1)?.[1]).toEqual(
         expect.objectContaining({ jointScale: 1.4 }),
       );
+
+      fireEvent.pointerUp(track, { pointerId: 1, clientX: TRACK_WIDTH });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(computeFlexiToy).toHaveBeenCalledTimes(1);
     } finally {
       raf.mockRestore();
     }
   });
 
-  it('collapses rapid setting changes into a single compute after the debounce', async () => {
+  it('shows the newest cut intent immediately while certified geometry is pending', async () => {
+    renderDialog();
+    await settle();
+
+    (computeFlexiToy as Mock).mockClear();
+    (computeFlexiToy as Mock).mockImplementation(() => new Promise(() => {}));
+
+    const pieces = screen.getByRole('slider', { name: 'Segments' });
+    fireEvent.keyDown(pieces, { key: 'End' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(pieces).toHaveAttribute('aria-valuenow', '20');
+    expect(document.querySelector('[name="flexi-live-intent"]')).not.toBeNull();
+    expect(document.querySelectorAll('[name^="flexi-ring-"]')).toHaveLength(19);
+    expect(computeFlexiToy).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses same-tick setting changes into one zero-delay compute', async () => {
     renderDialog();
     await settle();
 

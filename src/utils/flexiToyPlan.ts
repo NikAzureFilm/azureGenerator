@@ -453,6 +453,34 @@ type SpineData = {
   fellBackToStraight: boolean;
 };
 
+type PreparedSpine = { axis: Vec3; spine: SpineData };
+
+// Axis/PCA and the 64-point spine are properties of one positions array plus
+// the user's axis choice. They do not change with any joint setting, so avoid
+// walking the whole mesh again for every slider frame.
+const preparedSpineCache = new WeakMap<
+  Float32Array,
+  Map<FlexiAxisOverride, PreparedSpine>
+>();
+
+function getPreparedSpine(
+  positions: Float32Array,
+  override: FlexiAxisOverride,
+): PreparedSpine {
+  let byAxis = preparedSpineCache.get(positions);
+  if (!byAxis) {
+    byAxis = new Map();
+    preparedSpineCache.set(positions, byAxis);
+  }
+  const cached = byAxis.get(override);
+  if (cached) return cached;
+
+  const axis = computeAxis(positions, override);
+  const prepared = { axis, spine: buildSpine(positions, axis) };
+  byAxis.set(override, prepared);
+  return prepared;
+}
+
 // --- Public API -----------------------------------------------------------
 
 /**
@@ -464,8 +492,7 @@ export function computeFlexiScale(
   input: FlexiMeshInput,
   settings: FlexiToySettings,
 ): number {
-  const axis = computeAxis(input.positions, settings.axisOverride);
-  const spine = buildSpine(input.positions, axis);
+  const { spine } = getPreparedSpine(input.positions, settings.axisOverride);
   if (!(spine.lengthMm > 1e-6) || !(settings.targetLengthMm > 0)) {
     return 1;
   }
@@ -556,8 +583,7 @@ export function planFlexiToy(
   const jointStyle = settings.jointStyle ?? FLEXI_DEFAULT_JOINT_STYLE;
   const linkTuning = resolveLinkTuning(settings);
 
-  const axis = computeAxis(input.positions, settings.axisOverride);
-  const spine = buildSpine(input.positions, axis);
+  const { spine } = getPreparedSpine(input.positions, settings.axisOverride);
   if (spine.fellBackToStraight) {
     warnings.push({
       code: 'spine-fallback-straight',
@@ -1600,7 +1626,7 @@ function sizeJoint(
     supportsRequestedStyle: false,
   });
 
-  const profile = buildCrossSectionProfile(positions, center, axis, frame);
+  const profile = getCrossSectionProfile(positions, center, axis, frame);
   const rho0 = crossSectionAt(profile, 0);
   if (stationOut) {
     // Widest half-extent at this station (profile is already built) — used by
@@ -1980,7 +2006,7 @@ export function crossSectionExtentsSampler(
   axis: [number, number, number],
 ): FlexiSectionSampler {
   const frame = buildAxisFrame(axis as Vec3);
-  const profile = buildCrossSectionProfile(
+  const profile = getCrossSectionProfile(
     positions,
     center as Vec3,
     axis as Vec3,
@@ -3664,6 +3690,58 @@ type CrossSectionProfile = {
   cos: Float64Array;
   sin: Float64Array;
 };
+
+// A profile is a full pass over every model vertex and is read repeatedly by
+// both planning and the style builders. Slider changes alter the joint rules,
+// not the source surface at a given station, so keep a small per-position-array
+// LRU and share the exact measurement across those calls. The outer WeakMap
+// releases an entire scale as soon as the worker evicts its scaled input.
+const CROSS_SECTION_PROFILE_CACHE_LIMIT = 24;
+const crossSectionProfileCache = new WeakMap<
+  Float32Array,
+  Map<string, CrossSectionProfile>
+>();
+
+function crossSectionProfileKey(center: Vec3, tangent: Vec3): string {
+  // Six decimals is much finer than the planner's physical tolerances while
+  // making numerically identical stations share a key across plan/build calls.
+  return `${center[0].toFixed(6)}|${center[1].toFixed(6)}|${center[2].toFixed(
+    6,
+  )}|${tangent[0].toFixed(6)}|${tangent[1].toFixed(6)}|${tangent[2].toFixed(
+    6,
+  )}`;
+}
+
+function getCrossSectionProfile(
+  positions: Float32Array,
+  center: Vec3,
+  tangent: Vec3,
+  frame: SpineFrame,
+): CrossSectionProfile {
+  let profiles = crossSectionProfileCache.get(positions);
+  if (!profiles) {
+    profiles = new Map();
+    crossSectionProfileCache.set(positions, profiles);
+  }
+
+  const key = crossSectionProfileKey(center, tangent);
+  const cached = profiles.get(key);
+  if (cached) {
+    // Refresh recency (Map iteration order is the LRU order).
+    profiles.delete(key);
+    profiles.set(key, cached);
+    return cached;
+  }
+
+  const profile = buildCrossSectionProfile(positions, center, tangent, frame);
+  profiles.set(key, profile);
+  while (profiles.size > CROSS_SECTION_PROFILE_CACHE_LIMIT) {
+    const oldest = profiles.keys().next().value;
+    if (oldest === undefined) break;
+    profiles.delete(oldest);
+  }
+  return profile;
+}
 
 // Bin every vertex by its axial offset from the joint, recording the maximum
 // |projection| onto each of a fan of cross-section directions (a support

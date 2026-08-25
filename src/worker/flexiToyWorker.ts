@@ -62,9 +62,13 @@ const SCALE_CACHE_LIMIT = 3;
  * Below this triangle count the full body is already cheap enough to build
  * against, and simplifying it would cost more than it saves.
  */
-const PREVIEW_SIMPLIFY_MIN_TRIANGLES = 20000;
-/** Preview simplification tolerance (mm) — invisible at preview zoom. */
-const PREVIEW_TOLERANCE_MM = 0.05;
+const PREVIEW_SIMPLIFY_MIN_TRIANGLES = 8000;
+/**
+ * Screen-only simplification tolerance. This is half the tightest supported
+ * clearance and downloads always use the exact body, so the live preview gets
+ * fewer boolean triangles without weakening printable geometry.
+ */
+const PREVIEW_TOLERANCE_MM = 0.1;
 
 /**
  * One initial build plus at most five recovery builds. The midpoint schedule in
@@ -381,8 +385,8 @@ async function runCompute(
         // the tolerance but throws most of its vertices away: measured on an
         // already-coarse body, planning on the twin collapsed five live joints
         // to one. Planning on the dense mesh keeps the preview's plan
-        // identical to the download's; the twin's surface sits within 0.05mm
-        // of where those measurements put it, far inside every clearance.
+        // identical to the download's; the twin's surface sits within 0.1mm
+        // of where those measurements put it, inside every supported clearance.
         const body =
           quality === 'preview' && entry.preview ? entry.preview : entry.full;
         const meshInput = entry.scaledInput;

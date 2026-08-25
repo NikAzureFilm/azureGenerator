@@ -27,7 +27,13 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 
-import type { FlexiToyPlan, FlexiToyResult } from '@/utils/flexiToyTypes';
+import type {
+  FlexiAxisOverride,
+  FlexiJointPlan,
+  FlexiToyPlan,
+  FlexiToyResult,
+  FlexiToySettings,
+} from '@/utils/flexiToyTypes';
 import {
   RING_AMBER,
   RING_AMBER_HOVER,
@@ -272,14 +278,86 @@ function FlexiCutRings({
   highlightIndex,
   dragState,
   clippingPlanes,
+  settings,
+  previewingIntent,
 }: {
   plan: FlexiToyPlan;
   positions: Float32Array;
   highlightIndex: number | null;
   dragState: FlexiDragState;
   clippingPlanes: THREE.Plane[];
+  settings: FlexiToySettings;
+  previewingIntent: boolean;
 }) {
   const { fractionToPoint } = useSpineArc(plan.spine);
+
+  // Boolean geometry cannot land in one frame, so show the user's newest cut
+  // intent on top of the last certified body while the worker catches up.
+  const displayJoints = useMemo<FlexiJointPlan[]>(() => {
+    if (!previewingIntent) return plan.joints;
+
+    const requestedSegments =
+      typeof settings.segmentCount === 'number'
+        ? settings.segmentCount
+        : plan.joints.length + 1;
+    const requestedJointCount = Math.max(0, requestedSegments - 1);
+    const explicit = settings.jointPositions;
+    const fractions =
+      explicit?.length === requestedJointCount
+        ? explicit
+        : requestedJointCount === plan.joints.length
+          ? plan.joints.map((joint) => joint.spineFraction)
+          : Array.from(
+              { length: requestedJointCount },
+              (_, index) => (index + 1) / requestedSegments,
+            );
+
+    const overrideAxis = (
+      override: FlexiAxisOverride,
+    ): [number, number, number] | null => {
+      switch (override) {
+        case 'x':
+          return [1, 0, 0];
+        case 'y':
+          return [0, 1, 0];
+        case 'z':
+          return [0, 0, 1];
+        case 'auto':
+          return null;
+      }
+    };
+    const explicitAxis = overrideAxis(settings.axisOverride);
+
+    return fractions.map((fraction) => {
+      const source = plan.joints.reduce<FlexiJointPlan | null>(
+        (nearest, joint) =>
+          nearest === null ||
+          Math.abs(joint.spineFraction - fraction) <
+            Math.abs(nearest.spineFraction - fraction)
+            ? joint
+            : nearest,
+        null,
+      );
+      const center = fractionToPoint(fraction);
+      return {
+        center: [center.x, center.y, center.z],
+        axis: explicitAxis ?? source?.axis ?? [1, 0, 0],
+        ballRadiusMm: source?.ballRadiusMm ?? 4,
+        socketDepthMm: source?.socketDepthMm ?? 0,
+        faceGapMm: source?.faceGapMm ?? 0,
+        spineFraction: fraction,
+        fused: false,
+        supportsRequestedStyle: true,
+      };
+    });
+  }, [
+    fractionToPoint,
+    plan.joints,
+    previewingIntent,
+    settings.axisOverride,
+    settings.jointPositions,
+    settings.segmentCount,
+  ]);
 
   // Body silhouette radius at each cut station (max perpendicular distance of
   // nearby vertices from the joint centre) so the ring hugs the body outline.
@@ -288,7 +366,7 @@ function FlexiCutRings({
     const step = Math.max(1, Math.floor(vertexCount / RING_RADIUS_SAMPLE_CAP));
     const slabHalf = 3;
     const v = new THREE.Vector3();
-    return plan.joints.map((joint) => {
+    return displayJoints.map((joint) => {
       const c = new THREE.Vector3(
         joint.center[0],
         joint.center[1],
@@ -313,13 +391,13 @@ function FlexiCutRings({
         maxPerp > 0 ? maxPerp : Math.max(joint.ballRadiusMm * 1.8, 4);
       return base * 1.12 + 0.8;
     });
-  }, [plan.joints, positions]);
+  }, [displayJoints, positions]);
 
   const zAxis = useMemo(() => new THREE.Vector3(0, 0, 1), []);
 
   return (
-    <group>
-      {plan.joints.map((joint, index) => {
+    <group name={previewingIntent ? 'flexi-live-intent' : 'flexi-cut-rings'}>
+      {displayJoints.map((joint, index) => {
         const isDragged = dragState?.index === index;
         const center = isDragged
           ? fractionToPoint(dragState.fraction)
@@ -339,16 +417,38 @@ function FlexiCutRings({
           zAxis,
           axis,
         );
-        const radius = ringRadii[index] ?? 6;
-        const tube = clamp(radius * 0.05, 0.5, 1.6);
+        const roomScale =
+          settings.jointStyle === 'link' ? (settings.linkRoomScale ?? 1) : 1;
+        const thicknessScale =
+          settings.jointStyle === 'link'
+            ? (settings.linkThicknessScale ?? 1)
+            : 1;
+        const jointScaleFactor =
+          0.85 + (clamp(settings.jointScale, 0.6, 1.4) - 0.6) * 0.375;
+        const clearanceFactor =
+          0.85 + (clamp(settings.clearanceMm, 0.2, 0.8) - 0.2) * 0.5;
+        const radius =
+          (ringRadii[index] ?? 6) *
+          (previewingIntent ? roomScale * jointScaleFactor : 1);
+        const tube =
+          clamp(radius * 0.05, 0.5, 1.6) *
+          (previewingIntent ? thicknessScale * clearanceFactor : 1);
         const highlighted = isDragged || highlightIndex === index;
+        const intentColor =
+          settings.jointStyle === 'link'
+            ? '#22C55E'
+            : settings.jointStyle === 'strong'
+              ? '#A78BFA'
+              : RING_BLUE;
         const color = joint.fused
           ? highlighted
             ? RING_AMBER_HOVER
             : RING_AMBER
           : highlighted
             ? RING_BLUE_HOVER
-            : RING_BLUE;
+            : previewingIntent
+              ? intentColor
+              : RING_BLUE;
 
         return (
           <mesh
@@ -361,7 +461,14 @@ function FlexiCutRings({
             <meshStandardMaterial
               color={color}
               emissive={color}
-              emissiveIntensity={highlighted ? 0.6 : 0.18}
+              emissiveIntensity={
+                highlighted
+                  ? 0.6
+                  : 0.18 +
+                    (previewingIntent
+                      ? clamp(settings.bendAngleDeg / 90, 0, 1) * 0.22
+                      : 0)
+              }
               roughness={0.35}
               metalness={0.1}
               clippingPlanes={clippingPlanes}
@@ -380,6 +487,8 @@ function FlexiScene({
   dragState,
   layerFraction,
   heightMm,
+  settings,
+  previewingIntent,
 }: {
   result: FlexiToyResult;
   showOriginalColors: boolean;
@@ -387,6 +496,8 @@ function FlexiScene({
   dragState: FlexiDragState;
   layerFraction: number;
   heightMm: number;
+  settings: FlexiToySettings;
+  previewingIntent: boolean;
 }) {
   const invalidate = useThree((state) => state.invalidate);
 
@@ -428,11 +539,26 @@ function FlexiScene({
     invalidate();
   }, [geometry, result, showOriginalColors, invalidate]);
 
-  // Highlight and live drag are visual-only changes, so they need an explicit
-  // frame request under `frameloop="demand"`.
+  // Highlight, live drag and optimistic controls are visual-only changes, so
+  // they need an explicit frame request under `frameloop="demand"`.
   useEffect(() => {
     invalidate();
-  }, [invalidate, highlightIndex, dragState]);
+  }, [
+    invalidate,
+    highlightIndex,
+    dragState,
+    previewingIntent,
+    settings.axisOverride,
+    settings.bendAngleDeg,
+    settings.clearanceMm,
+    settings.jointPositions,
+    settings.jointScale,
+    settings.jointStyle,
+    settings.linkRoomScale,
+    settings.linkThicknessScale,
+    settings.segmentCount,
+    settings.targetLengthMm,
+  ]);
 
   // Layer view. ONE world-space plane, allocated once and mutated in place:
   // `n·p + d ≥ 0` is kept, so with n = −Y and d = worldY(h) everything above
@@ -479,6 +605,8 @@ function FlexiScene({
         highlightIndex={highlightIndex}
         dragState={dragState}
         clippingPlanes={clippingPlanes}
+        settings={settings}
+        previewingIntent={previewingIntent}
       />
     </group>
   );
@@ -494,11 +622,16 @@ export type FlexiPreviewCanvasProps = {
   /** Print height of `result` in mm (`flexiPrintHeightMm`), computed once by
    *  the dialog so the slider read-out and the clip plane share one pass. */
   heightMm: number;
+  /** Current controls for the immediate joint-intent overlay. */
+  settings: FlexiToySettings;
+  /** True while exact worker geometry for `settings` is still pending. */
+  previewingIntent: boolean;
 };
 
 /**
- * Memoised so the dialog's control state (slider drags fire ~60 renders/sec)
- * never reconciles the r3f tree.
+ * Memoised so unrelated dialog state never reconciles the r3f tree. Current
+ * controls intentionally do: only the lightweight ring overlay changes, while
+ * the expensive BufferGeometry remains memoised by `result`.
  */
 export const FlexiPreviewCanvas = memo(function FlexiPreviewCanvas({
   result,
@@ -507,6 +640,8 @@ export const FlexiPreviewCanvas = memo(function FlexiPreviewCanvas({
   dragState,
   layerFraction,
   heightMm,
+  settings,
+  previewingIntent,
 }: FlexiPreviewCanvasProps) {
   return (
     <Canvas
@@ -527,6 +662,8 @@ export const FlexiPreviewCanvas = memo(function FlexiPreviewCanvas({
           dragState={dragState}
           layerFraction={layerFraction}
           heightMm={heightMm}
+          settings={settings}
+          previewingIntent={previewingIntent}
         />
       ) : null}
       <OrbitControls

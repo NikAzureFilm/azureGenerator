@@ -70,11 +70,6 @@ import {
   type FlexiUiJointStyle,
 } from './flexiToy/flexiToyUi';
 
-// Short, because the scrub gate below does the heavy lifting now: while a
-// slider is held no compute is queued at all, so this only has to collapse
-// discrete changes (preset clicks, keyboard steps, a released drag).
-const RECOMPUTE_DEBOUNCE_MS = 200;
-
 // Each cached result holds full-toy typed arrays, so keep only the most
 // recently used handful (insertion-order LRU over the Map).
 const FLEXI_RESULT_CACHE_LIMIT = 12;
@@ -181,10 +176,6 @@ export function FlexiToyDialog({
   // matching 3D ring while a handle is being moved.
   const [hoverJointIndex, setHoverJointIndex] = useState<number | null>(null);
   const [dragState, setDragState] = useState<FlexiDragState>(null);
-
-  // True while a pointer is holding one of the settings sliders. The values and
-  // read-outs still follow the drag live; only the compute waits for release.
-  const [scrubbing, setScrubbing] = useState(false);
 
   const [result, setResult] = useState<FlexiToyResult | null>(null);
   // Associates the landed result with the settings that produced it. Two
@@ -396,20 +387,13 @@ export function FlexiToyDialog({
     ensureMeshInput(gltf).catch(() => {});
   }, [open, gltf, ensureMeshInput]);
 
-  // Debounced recompute. Rapid control changes collapse to a single compute
-  // after the debounce; a compute token discards any stale result that lands
-  // after a newer request, and a per-settings cache skips repeated work.
+  // Recompute immediately after a setting commits. Awaiting the already-warmed
+  // mesh promise gives React one microtask to collapse same-tick state bursts,
+  // while the client/worker's latest-wins protocol cancels genuinely older
+  // builds. There is intentionally no timer or pointer-up gate: the preview
+  // pipeline starts during the interaction instead of after it.
   useEffect(() => {
     if (!open || !gltf) {
-      return;
-    }
-
-    // Compute on release. A drag crosses dozens of values, and every debounce
-    // pause inside it used to start a full build that the next pause threw
-    // away; waiting for the pointer to lift means one build per gesture. The
-    // release itself re-runs this effect (`scrubbing` is a dep), so nothing is
-    // lost by doing nothing here.
-    if (scrubbing) {
       return;
     }
 
@@ -430,9 +414,15 @@ export function FlexiToyDialog({
     setIsComputing(true);
     setErrorInfo(null);
 
-    const timeout = window.setTimeout(async () => {
+    void (async () => {
       try {
         const input = await ensureMeshInput(gltf);
+        // A newer state landed while the shared mesh promise was yielding.
+        // Only start the newest build; this is zero-delay coalescing rather
+        // than a time-based debounce.
+        if (computeTokenRef.current !== token) {
+          return;
+        }
         // Preview quality: the simplified body and coarser joint solids are
         // several times cheaper and indistinguishable at preview size. The
         // downloads re-run this at 'final'.
@@ -495,18 +485,8 @@ export function FlexiToyDialog({
           setIsComputing(false);
         }
       }
-    }, RECOMPUTE_DEBOUNCE_MS);
-
-    return () => window.clearTimeout(timeout);
-  }, [
-    open,
-    gltf,
-    settingsKey,
-    settings,
-    scrubbing,
-    ensureMeshInput,
-    recoverTooSmall,
-  ]);
+    })();
+  }, [open, gltf, settingsKey, settings, ensureMeshInput, recoverTooSmall]);
 
   // A landed result carries the planner's own station placement, so any live
   // drag offset has served its purpose.
@@ -702,7 +682,7 @@ export function FlexiToyDialog({
   };
 
   // On strip release: pin the count (so the fractions array has a fixed length)
-  // and store the dragged stations; the debounce then recomputes with them.
+  // and store the dragged stations; the preview recomputes immediately.
   // Pin from the committed array itself — the contract requires
   // jointPositions.length === segmentCount − 1, and stations = planned pieces −
   // 1 = fractions.length. (result.segmentCount is the BODY count, which is
@@ -917,6 +897,8 @@ export function FlexiToyDialog({
                 dragState={dragState}
                 layerFraction={layerFraction}
                 heightMm={printHeightMm}
+                settings={settings}
+                previewingIntent={resultSettingsKey !== settingsKey}
               />
 
               {hasPreviewResult ? (
@@ -1094,7 +1076,6 @@ export function FlexiToyDialog({
                       ),
                     ]}
                     onValueChange={([value]) => changeSegmentCount(value)}
-                    onScrubChange={setScrubbing}
                   />
                 )
               ) : (
@@ -1153,7 +1134,6 @@ export function FlexiToyDialog({
                     onValueChange={([value]) =>
                       changeClearance(Number(value.toFixed(2)))
                     }
-                    onScrubChange={setScrubbing}
                   />
                 </div>
               ) : (
@@ -1188,7 +1168,6 @@ export function FlexiToyDialog({
                 step={5}
                 defaultValue={[LINK_DEFAULTS.targetLengthMm]}
                 onValueChange={([value]) => changeLength(value)}
-                onScrubChange={setScrubbing}
               />
             </div>
 
@@ -1208,7 +1187,6 @@ export function FlexiToyDialog({
                 onValueChange={([value]) =>
                   changeJointScale(Number(value.toFixed(2)))
                 }
-                onScrubChange={setScrubbing}
               />
               <p className="mt-1 text-xs text-adam-text-secondary/80">
                 Chunkier or slimmer joints.
@@ -1232,7 +1210,6 @@ export function FlexiToyDialog({
                   onValueChange={([value]) =>
                     changeLinkThickness(Number(value.toFixed(2)))
                   }
-                  onScrubChange={setScrubbing}
                 />
                 <p className="mt-1 text-xs text-adam-text-secondary/80">
                   Thicker or thinner chain loops. Thicker loops are sturdier but
@@ -1259,7 +1236,6 @@ export function FlexiToyDialog({
                   onValueChange={([value]) =>
                     changeLinkRoom(Number(value.toFixed(2)))
                   }
-                  onScrubChange={setScrubbing}
                 />
                 <p className="mt-1 text-xs text-adam-text-secondary/80">
                   How much space the links have to move: less keeps the loops
@@ -1280,7 +1256,6 @@ export function FlexiToyDialog({
                 step={1}
                 defaultValue={[LINK_DEFAULTS.bendAngleDeg]}
                 onValueChange={([value]) => changeBendAngle(Math.round(value))}
-                onScrubChange={setScrubbing}
               />
               {/* A switch, not a ternary, so a fourth style is a
                   compile-visible edit rather than a silent fall-through. */}
